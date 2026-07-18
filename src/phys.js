@@ -471,12 +471,24 @@ export class RapierVehicle extends VehicleBody {
   }
 
   /** F key — set upright where it lies, at rest (explicit player tool) */
-  recover(entity) {
+  recover(entity, world) {
     if (!this.rb) return;
     const t = this.rb.translation();
     const q = this.rb.rotation();
     const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
-    this.rb.setTranslation({ x: t.x, y: t.y + 1.2, z: t.z }, true);
+    // place at exact rest ride height — the old +1.2m hop dropped the car
+    // two feet and slammed the suspension (Erik: "totally destroying the wheels")
+    let groundY = -Infinity;
+    if (world) {
+      for (const e of world.entities)
+        for (const c of e.components)
+          if (typeof c.heightAt === "function" && typeof c.slopeAt === "function") {
+            const h = c.heightAt(t.x, t.z);
+            if (h !== -Infinity && h > groundY) groundY = h;
+          }
+    }
+    if (groundY === -Infinity) groundY = t.y - this._restRide;
+    this.rb.setTranslation({ x: t.x, y: groundY + this._restRide + 0.05, z: t.z }, true);
     this.rb.setRotation(quatY(yaw), true);
     this.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
