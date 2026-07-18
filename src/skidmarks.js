@@ -68,7 +68,7 @@ export class SkidMarks {
     for (let s = 0; s < this.maxSegments; s++) {
       if (this._ages[s] <= 0) continue;
       this._ages[s] -= dt;
-      const a = Math.max(this._ages[s] / this.life, 0) * 0.55;
+      const a = Math.max(this._ages[s] / this.life, 0) * 0.85;
       for (let w = 0; w < 2; w++) {
         const v = (s * 2 + w) * 4;
         for (let k = 0; k < 4; k++) this._col[(v + k) * 4 + 3] = a;
@@ -130,8 +130,9 @@ export class SkidMarks {
       this._pos.set(corners, v * 3);
       for (let k = 0; k < 4; k++) {
         const o = (v + k) * 4;
-        this._col[o] = 0.06; this._col[o + 1] = 0.06; this._col[o + 2] = 0.07;
-        this._col[o + 3] = 0.55;
+        // near-black in LINEAR space so it displays black after sRGB encode
+        this._col[o] = 0.008; this._col[o + 1] = 0.008; this._col[o + 2] = 0.009;
+        this._col[o + 3] = 0.85;
       }
     }
     this.mesh.geometry.attributes.position.needsUpdate = true;
