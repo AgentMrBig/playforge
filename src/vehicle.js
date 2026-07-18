@@ -83,8 +83,40 @@ export class VehicleBody {
     this._prevSpeed = 0;
     // sprung-mass state: heave (m), roll & pitch (rad), each with a velocity
     this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
+    // upset/tumble state: full 3D orientation + angular velocity (NFS2 flips)
+    this.upset = false;
+    this._quat = new THREE.Quaternion();
+    this._angVel = new THREE.Vector3();     // world-space rad/s
+    this._rightingT = 0;                    // time spent resting off-wheels
+    this._half = new THREE.Vector3(0.95, 0.62, 2.2); // body half-extents (center +0.62 up)
     this._box = new THREE.Box3();
     this._other = new THREE.Box3();
+  }
+
+  /**
+   * External impulse (N·s) at a world point — Ember's car-vs-car collisions
+   * plug in here. Strong or high hits knock the car into the tumble state.
+   */
+  applyImpulse(impulse, point, entity) {
+    this.velocity.addScaledVector(impulse, 1 / this.mass);
+    const com = entity.position.clone(); com.y += this._half.y;
+    const r = point.clone().sub(com);
+    const dw = r.clone().cross(impulse).multiplyScalar(1 / this.inertia);
+    if (this.upset) { this._angVel.add(dw); return; }
+    // enough spin or a lifting hit → leave the wheels
+    if (dw.length() > 0.9 || impulse.y / this.mass > 3.5 || Math.abs(dw.x) + Math.abs(dw.z) > 0.6)
+      this._enterUpset(entity, dw);
+    else this.yawRate += dw.y;
+  }
+
+  _enterUpset(entity, seedAngVel = null) {
+    this.upset = true;
+    this._quat.setFromEuler(new THREE.Euler(
+      this._susp.pitch, entity.rotation.y, this._susp.roll, "YXZ"));
+    this._angVel.set(0, this.yawRate, 0);
+    if (seedAngVel) this._angVel.add(seedAngVel);
+    this._rightingT = 0;
+    this.sliding = true;                     // marks + audio read this
   }
 
   get kmh() { return Math.abs(this.speed * 3.6); }
@@ -101,6 +133,7 @@ export class VehicleBody {
   }
 
   fixedUpdate(dt, { world, entity }) {
+    if (this.upset) { this._tumble(dt, world, entity); return; }
     const yaw = entity.rotation.y;
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
@@ -156,7 +189,11 @@ export class VehicleBody {
       const ayR = -this._tire(this.slipRear) * half * rearLatBudget;
       this.sliding = Math.abs(this.slipRear) > this.slipPeak * 1.05 || this.wheelspin;
 
-      const resist = Math.sign(vx) * (this.drag * vx * vx + this.rolling);
+      // cornering drag: tires scrub energy when slipping — turning while
+      // coasting must SLOW the car (the Coriolis term alone was pumping
+      // energy in and cars sped up when you steered; Erik caught it)
+      const scrub = (Math.abs(this.slipFront) + Math.abs(this.slipRear)) * muG * 0.22;
+      const resist = Math.sign(vx) * (this.drag * vx * vx + this.rolling + scrub);
 
       // ---- integrate the rigid body (this IS the simulation) -------------
       vx += (driveAccel - resist + vy * this.yawRate) * dt;
@@ -166,6 +203,15 @@ export class VehicleBody {
       const yawAccel = (a * ayF - b * ayR) * this.mass / this.inertia;
       this.yawRate = THREE.MathUtils.clamp(this.yawRate + yawAccel * dt, -3.5, 3.5);
       entity.rotation.y = yaw + this.yawRate * dt;
+      // trip-over: sliding sideways HARD at speed digs the tires in and
+      // flips the car (dirt-trip) — the NFS2 "hit the wall wrong" moment
+      if (Math.abs(vy) > 11 && speedAbs > 14 && this.onGround) {
+        const roll = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
+          .multiplyScalar(Math.sign(vy) * (2.6 + Math.abs(vy) * 0.06));
+        this._enterUpset(entity, roll);
+        this.velocity.y = Math.max(this.velocity.y, 3.5);
+        return;
+      }
     } else {
       // ================ PARKING-SPEED KINEMATIC BLEND =====================
       this.slipFront = this.slipRear = 0;
@@ -244,6 +290,84 @@ export class VehicleBody {
         if (key[0] === "f") w.rotation.y = this.steer * 0.9;
       }
     }
+  }
+
+  // ---- TUMBLE: free rigid body with corner ground contacts (NFS2 flips).
+  // The car leaves its wheels, rotates in full 3D, bounces corner-over-corner
+  // with elastic restitution, then settles — auto-righting if it rests on
+  // roof/side (arcade forgiveness). Entity quaternion is driven directly.
+  _tumble(dt, world, entity) {
+    const g = this.gravity;
+    this.velocity.y -= g * dt;
+    entity.position.addScaledVector(this.velocity, dt);
+
+    // integrate orientation from angular velocity
+    const w = this._angVel;
+    const dq = new THREE.Quaternion(w.x * dt * 0.5, w.y * dt * 0.5, w.z * dt * 0.5, 1).normalize();
+    this._quat.premultiply(dq).normalize();
+
+    // 8 body corners vs ground: spring-damper contact + friction → torque
+    const com = entity.position.clone(); com.y += this._half.y;
+    const F = new THREE.Vector3(), T = new THREE.Vector3();
+    let contacts = 0, deepest = 0;
+    const corner = new THREE.Vector3(), r = new THREE.Vector3(), pv = new THREE.Vector3();
+    for (let i = 0; i < 8; i++) {
+      corner.set(
+        (i & 1 ? 1 : -1) * this._half.x,
+        (i & 2 ? 1 : -1) * this._half.y,
+        (i & 4 ? 1 : -1) * this._half.z,
+      ).applyQuaternion(this._quat);
+      r.copy(corner);
+      corner.add(com);
+      const ground = groundYAt(world, corner.x, corner.z);
+      const pen = ground - corner.y;
+      if (pen <= 0) continue;
+      contacts++;
+      deepest = Math.max(deepest, pen);
+      pv.copy(this._angVel).cross(r).add(this.velocity);   // point velocity
+      // normal force: stiff spring + damping, elastic-ish (NFS2 bounce)
+      let fn = pen * 90 - pv.y * 6;
+      if (fn < 0) continue;
+      fn = Math.min(fn, 60);
+      F.y += fn;
+      // friction opposes the point's horizontal slide
+      const fh = Math.hypot(pv.x, pv.z);
+      if (fh > 0.1) { F.x -= (pv.x / fh) * fn * 0.55; F.z -= (pv.z / fh) * fn * 0.55; }
+      T.add(r.clone().cross(new THREE.Vector3(-(pv.x / Math.max(fh, 0.1)) * fn * 0.55, fn, -(pv.z / Math.max(fh, 0.1)) * fn * 0.55)));
+    }
+    this.velocity.addScaledVector(F, dt);
+    this._angVel.addScaledVector(T, dt * this.mass / this.inertia * 0.08);
+    this._angVel.multiplyScalar(Math.exp(-dt * (contacts ? 1.6 : 0.25)));  // scrub spin
+    this.velocity.x *= Math.exp(-dt * (contacts ? 0.9 : 0.05));
+    this.velocity.z *= Math.exp(-dt * (contacts ? 0.9 : 0.05));
+    if (deepest > 0.02 && this.velocity.y < 0) this.velocity.y *= -0.35;   // elastic bounce
+    if (deepest > 0.3) entity.position.y += (deepest - 0.3);               // hard depen
+
+    // ---- settle / auto-right ------------------------------------------------
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this._quat);
+    const calm = this._angVel.length() < 0.7 && this.velocity.length() < 3 && contacts > 0;
+    if (calm && up.y > 0.85) {                       // upright: back to driving
+      this.upset = false;
+      const e = new THREE.Euler().setFromQuaternion(this._quat, "YXZ");
+      entity.rotation.set(0, e.y, 0);
+      this.yawRate = this._angVel.y;
+      const fwd = new THREE.Vector3(Math.sin(e.y), 0, Math.cos(e.y));
+      this.speed = this.velocity.dot(fwd);
+      this.sliding = false;
+      this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
+      return;
+    }
+    if (calm && up.y <= 0.85) {                      // resting on side/roof
+      this._rightingT += dt;
+      if (this._rightingT > 1.3) {                   // NFS2 forgiveness: flip it back
+        const axis = new THREE.Vector3(up.z, 0, -up.x).normalize();
+        if (axis.lengthSq() > 0.01) this._angVel.addScaledVector(axis, up.y < 0 ? 4.2 : 3.0);
+        this.velocity.y = Math.max(this.velocity.y, 3.2);
+        this._rightingT = 0;
+      }
+    } else this._rightingT = 0;
+
+    entity.object3d.quaternion.copy(this._quat);
   }
 
   // Real 4-corner suspension: plant each wheel on its own ground contact
