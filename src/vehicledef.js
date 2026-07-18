@@ -1,0 +1,272 @@
+import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+
+/**
+ * Vehicle framework — turns a part-named car model (FBX/GLB) into a fully
+ * rigged, drivable vehicle: steering + spinning wheels, openable doors / hood
+ * / trunk, a steering wheel that turns, and switchable lights.
+ *
+ *   const rig = await loadVehicle("/models/sedanpack/Assets/Car.fbx",
+ *                                 { targetLength: 4.6 });
+ *   world.spawn("car").mesh(rig.visual)
+ *     .add(new VehicleBody({ chassis: rig.chassis, wheels: rig.wheels,
+ *                            wheelRadius: rig.wheelRadius, ...tuning }))
+ *     .add(new VehicleRig(rig));   // steering wheel + openables + lights
+ *
+ * Part detection is by keyword on the node names (case-insensitive), the
+ * convention this pack uses and most car assets follow:
+ *   *hood* *trunk* *steering* *door*(fl/fr/bl/br) *wheel*(fl/fr) *wheels_b*
+ *   *light* (emergency bar).  Everything else stays as static body detail.
+ *
+ * The rig object:
+ *   { visual, chassis, wheels:{fl,fr,rl,rr}, wheelRadius,
+ *     doors:{fl,fr,bl,br}, hood, trunk, steering, lights:{brake,reverse,...},
+ *     openParts:[...]  // everything animatable, for VehicleRig }
+ */
+
+const LOADERS = {
+  fbx: () => new FBXLoader(),
+  glb: () => new GLTFLoader(),
+  gltf: () => new GLTFLoader(),
+};
+
+function classify(name) {
+  const n = name.toLowerCase();
+  if (n.includes("door"))
+    return { role: "door", sub: n.includes("fl") ? "fl" : n.includes("fr") ? "fr"
+                              : n.includes("bl") ? "bl" : n.includes("br") ? "br" : null };
+  if (n.includes("steering")) return { role: "steering" };
+  if (n.includes("wheel")) {
+    if (n.includes("fl")) return { role: "wheel", sub: "fl" };
+    if (n.includes("fr")) return { role: "wheel", sub: "fr" };
+    return { role: "wheel", sub: "rear" };           // Wheels_B (single rear mesh)
+  }
+  if (n.includes("hood") || n.includes("bonnet")) return { role: "hood" };
+  if (n.includes("trunk") || n.includes("boot")) return { role: "trunk" };
+  if (n.includes("light") && (n.includes("bar") || n.includes("police") || n.includes("siren")))
+    return { role: "lightbar" };
+  if (n.includes("base") || n.includes("body")) return { role: "body" };
+  return { role: "detail" };
+}
+
+/** reparent `mesh` under a fresh pivot Group at `worldHinge`, preserving pose */
+function repivot(mesh, worldHinge, order = "XYZ") {
+  const parent = mesh.parent;
+  parent.updateWorldMatrix(true, false);
+  const pivot = new THREE.Group();
+  pivot.rotation.order = order;
+  pivot.position.copy(parent.worldToLocal(worldHinge.clone()));
+  parent.add(pivot);
+  pivot.attach(mesh);                                // keeps mesh world transform
+  return pivot;
+}
+
+export async function loadVehicle(url, {
+  targetLength = 4.6,
+  glassOpacity = 0.55,
+  shadows = true,
+  textureDir = null,        // rebind material maps from here (fixes broken FBX refs)
+  textureMap = null,        // {materialKeyword: filename} override
+} = {}) {
+  const ext = url.split(".").pop().toLowerCase();
+  const loaderFn = LOADERS[ext];
+  if (!loaderFn) throw new Error("loadVehicle: unsupported " + ext);
+  const loaded = await loaderFn().loadAsync(url);
+  const root = loaded.scene ?? loaded;               // GLTF wraps in .scene
+
+  // ---- rebind textures: FBX often references the wrong folder/filename ----
+  if (textureDir) {
+    const texLoader = new THREE.TextureLoader().setPath(textureDir.replace(/\/?$/, "/"));
+    const cache = new Map();
+    const get = (file) => {
+      if (!cache.has(file)) {
+        const t = texLoader.load(file);
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.flipY = false;                              // FBX UVs are already bottom-left
+        cache.set(file, t);
+      }
+      return cache.get(file);
+    };
+    const resolve = (matName) => {
+      const n = matName.toLowerCase();
+      if (textureMap) for (const [k, f] of Object.entries(textureMap)) if (n.includes(k)) return f;
+      if (n.includes("glass")) return null;           // handled by tint below
+      if (n.includes("police")) return "Car_Police.png";
+      if (n.includes("taxi")) return "Car_Taxi.png";
+      if (n.includes("number")) return "Car_Number.png";
+      if (n.includes("detail")) return "Car_details.png";
+      if (n.includes("base") || n.includes("color") || n.includes("body")) return "Car_color.png";
+      return null;
+    };
+    const done = new Set();
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+        if (!m || done.has(m)) return;
+        done.add(m);
+        const file = resolve(m.name || "");
+        if (file) { m.map = get(file); m.color.setHex(0xffffff); m.needsUpdate = true; }
+      });
+    });
+  }
+
+  // ---- catalog meshes by role (surgery happens in raw model space) --------
+  const parts = { wheels: {}, doors: {}, hood: null, trunk: null, steering: null,
+                  body: null, lightbar: null };
+  const lights = {};
+  const box = new THREE.Box3();
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+
+  for (const mesh of meshes) {
+    const { role, sub } = classify(mesh.name);
+    box.setFromObject(mesh);
+    const c = box.getCenter(new THREE.Vector3());
+    const mn = box.min.clone(), mx = box.max.clone();
+
+    // collect switchable light materials from any mesh that carries them
+    (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((m) => {
+      if (!m) return;
+      const mn2 = (m.name || "").toLowerCase();
+      if (mn2.includes("stop")) lights.brake = m;
+      else if (mn2.includes("backlight")) lights.reverse = m;
+      else if (mn2.includes("turnlight_l")) lights.turnL = m;
+      else if (mn2.includes("turnlight_r")) lights.turnR = m;
+      else if (mn2.includes("lightforward")) lights.head = m;
+      if (m.name === "Glass" || mn2.includes("glass")) {
+        m.transparent = true; m.opacity = glassOpacity;
+        m.color.setHex(0x20303a); m.shininess = 90;
+      }
+      if (shadows && m.emissive) m.emissiveIntensity = m.emissiveIntensity ?? 1;
+    });
+
+    if (role === "wheel") {
+      const pivot = repivot(mesh, c, "YXZ");
+      if (sub === "rear") { parts.wheels.rl = pivot; parts.wheels.rr = pivot; }
+      else parts.wheels[sub] = pivot;
+      parts._wheelR = (mx.y - mn.y) / 2;              // model-space radius
+    } else if (role === "door" && sub) {
+      // hinge at the door's FRONT edge (+Z), vertical axis
+      const hinge = new THREE.Vector3(c.x, c.y, mx.z);
+      const pivot = repivot(mesh, hinge, "YXZ");
+      const left = c.x > 0;                            // +X is left in this model
+      parts.doors[sub] = { pivot, axis: "y", open: (left ? -1 : 1) * 1.15 };
+    } else if (role === "hood") {
+      const hinge = new THREE.Vector3(c.x, mx.y, mn.z); // rear edge, top
+      parts.hood = { pivot: repivot(mesh, hinge, "XYZ"), axis: "x", open: -1.0 };
+    } else if (role === "trunk") {
+      const hinge = new THREE.Vector3(c.x, mx.y, mx.z); // front edge, top
+      parts.trunk = { pivot: repivot(mesh, hinge, "XYZ"), axis: "x", open: 0.95 };
+    } else if (role === "steering") {
+      parts.steering = repivot(mesh, c, "ZYX");
+    } else if (role === "body" && !parts.body) {
+      parts.body = mesh;
+    } else if (role === "lightbar") {
+      parts.lightbar = mesh;
+    }
+    if (shadows) mesh.castShadow = true;
+  }
+
+  // ---- normalize: center X/Z, seat on ground, scale to length -------------
+  box.setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = targetLength / Math.max(size.x, size.z);
+  root.scale.setScalar(scale);
+  box.setFromObject(root);
+  const c2 = box.getCenter(new THREE.Vector3());
+  root.position.x -= c2.x;
+  root.position.z -= c2.z;
+  root.position.y -= box.min.y;
+
+  const visual = new THREE.Group();
+  visual.add(root);
+
+  const openParts = [];
+  for (const [k, d] of Object.entries(parts.doors)) openParts.push({ name: "door_" + k, ...d });
+  if (parts.hood) openParts.push({ name: "hood", ...parts.hood });
+  if (parts.trunk) openParts.push({ name: "trunk", ...parts.trunk });
+  for (const p of openParts) { p.t = 0; p.target = 0; p.pivot.rotation[p.axis] = 0; }
+
+  return {
+    visual, chassis: root,
+    wheels: Object.keys(parts.wheels).length ? parts.wheels : null,
+    wheelRadius: (parts._wheelR ?? 0.32) * scale,
+    doors: parts.doors, hood: parts.hood, trunk: parts.trunk,
+    steering: parts.steering, lightbar: parts.lightbar, lights,
+    openParts,
+  };
+}
+
+const smooth = (t) => t * t * (3 - 2 * t);
+
+/**
+ * VehicleRig — drives the cosmetic rig off a sibling VehicleBody:
+ * steering-wheel rotation, brake/reverse light emissives, and open/close
+ * animation of doors/hood/trunk. Call rig.toggle("door_fl" | "hood" | ...)
+ * or openAll()/closeAll() from your controls.
+ */
+export class VehicleRig {
+  constructor(rig, { steeringRatio = 6, sirenHz = 0 } = {}) {
+    this.rig = rig;
+    this.steeringRatio = steeringRatio;
+    this.sirenHz = sirenHz;                            // >0 flashes lightbar
+    this._t = 0;
+    this._brakeBase = rig.lights.brake ? rig.lights.brake.emissive?.clone() : null;
+  }
+  init() {
+    // remember rest emissive so we can pulse without drift
+    for (const key of ["brake", "reverse"]) {
+      const m = this.rig.lights[key];
+      if (m) { m.emissive = m.emissive ?? new THREE.Color(0); m._rest = m.emissive.clone(); }
+    }
+  }
+  toggle(name) {
+    const p = this.rig.openParts.find((o) => o.name === name);
+    if (p) p.target = p.target > 0.5 ? 0 : 1;
+  }
+  openAll() { for (const p of this.rig.openParts) p.target = 1; }
+  closeAll() { for (const p of this.rig.openParts) p.target = 0; }
+
+  update(dt, { entity }) {
+    this._t += dt;
+    const body = entity.components.find((c) => c.steer !== undefined && c.throttle !== undefined);
+    // steering wheel follows the front wheels
+    if (this.rig.steering && body)
+      this.rig.steering.rotation.z = -body.steer * this.steeringRatio;
+    // open/close animation
+    for (const p of this.rig.openParts) {
+      if (p.t !== p.target) {
+        p.t += Math.sign(p.target - p.t) * dt * 3.2;
+        p.t = THREE.MathUtils.clamp(p.t, 0, 1);
+      }
+      p.pivot.rotation[p.axis] = p.open * smooth(p.t);
+    }
+    // lights
+    if (body) {
+      const braking = body.throttle < -0.05 && body.speed > 0.5;
+      const reversing = body.speed < -0.3;
+      if (this.rig.lights.brake)
+        this.rig.lights.brake.emissive.setScalar(braking ? 0.9 : 0.12);
+      if (this.rig.lights.reverse)
+        this.rig.lights.reverse.emissive.setScalar(reversing ? 0.8 : 0);
+    }
+    // police siren flash: pulse the lightbar's red/blue emissive materials
+    if (this.sirenHz > 0 && this.rig.lightbar && !this._sirenMats) {
+      this._sirenMats = { red: [], blue: [] };
+      this.rig.lightbar.traverse((o) => {
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+          if (!m?.name) return;
+          const n = m.name.toLowerCase();
+          if (n.includes("red")) { m.emissive = m.emissive ?? new THREE.Color(0); this._sirenMats.red.push(m); }
+          else if (n.includes("blue")) { m.emissive = m.emissive ?? new THREE.Color(0); this._sirenMats.blue.push(m); }
+        });
+      });
+    }
+    if (this._sirenMats) {
+      const phase = Math.floor(this._t * this.sirenHz) % 2;
+      for (const m of this._sirenMats.red) m.emissive.setRGB(phase ? 0.9 : 0.05, 0, 0);
+      for (const m of this._sirenMats.blue) m.emissive.setRGB(0, 0, phase ? 0.05 : 0.9);
+    }
+  }
+}

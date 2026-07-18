@@ -159,13 +159,13 @@ for (let i = 0; i < GARAGE.length; i++) {
 }
 
 // ---- user-supplied model: the RX-7 (FBX) rolls into the garage async -------
-loadCarModel("/models/LPRX7.fbx", { targetLength: 4.3 }).then(({ visual, chassis, wheels }) => {
+loadCarModel("/models/LPRX7.fbx", { targetLength: 4.3 }).then(({ visual, chassis, wheels, wheelRadius }) => {
   const e = world.spawn("drivable")
     .mesh(visual)
     .at(city.spawn[0] + 6 + GARAGE.length * 6, 0, city.spawn[2] + 4)
     .add(new VehicleBody({
       chassis, wheels: wheels ?? undefined,
-      enginePower: 13, topSpeed: 46, maxLatAccel: 10.5, wheelRadius: 0.31,
+      enginePower: 13, topSpeed: 46, maxLatAccel: 10.5, wheelRadius: wheelRadius ?? 0.31,
     }))
     .add(new EngineSound(audio, { hp: 280, cylinders: 4 })) // rotary screamer-ish
     .add(new SkidMarks({ rearOffset: 1.25, track: 0.72 }));

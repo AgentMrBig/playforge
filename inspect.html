@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>FBX inspector</title></head>
+<body style="font:12px monospace;background:#111;color:#ccc;padding:10px">
+<pre id="out">loading…</pre>
+<script type="module">
+import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+
+const url = new URLSearchParams(location.search).get("m") || "/models/sedanpack/Assets/Car.fbx";
+const out = document.getElementById("out");
+const loader = new FBXLoader();
+loader.load(url, (root) => {
+  const lines = [];
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  lines.push(`FILE: ${url}`);
+  lines.push(`ROOT size (x,y,z): ${size.x.toFixed(1)}, ${size.y.toFixed(1)}, ${size.z.toFixed(1)}`);
+  lines.push(`--- hierarchy ---`);
+  const walk = (o, d) => {
+    const pad = "  ".repeat(d);
+    let tag = o.type;
+    if (o.isMesh) {
+      const b = new THREE.Box3().setFromObject(o);
+      const s = b.getSize(new THREE.Vector3());
+      const c = b.getCenter(new THREE.Vector3());
+      const mats = Array.isArray(o.material) ? o.material.map(m=>m.name||"?").join(",") : (o.material?.name||"?");
+      tag = `MESH v=${o.geometry.attributes.position.count} size=[${s.x.toFixed(0)},${s.y.toFixed(0)},${s.z.toFixed(0)}] c=[${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(0)}] mat=${mats}`;
+    }
+    lines.push(`${pad}${o.name||"(unnamed)"} · ${tag}`);
+    o.children.forEach((ch) => walk(ch, d + 1));
+  };
+  walk(root, 0);
+  // material report: names + whether they carry texture maps / colors
+  const seen = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+      if (!m || seen.has(m.name)) return;
+      seen.set(m.name, { map: !!m.map, color: m.color?.getHexString(), transparent: m.transparent, type: m.type });
+    });
+  });
+  lines.push(`--- materials ---`);
+  for (const [n, info] of seen) lines.push(`${n}: map=${info.map} color=#${info.color} ${info.transparent?"transp ":""}${info.type}`);
+  const summary = { url, size: size.toArray(), text: lines.join("\n") };
+  window.__inspect = summary;
+  out.textContent = lines.join("\n");
+}, undefined, (e) => { out.textContent = "ERR: " + e.message; window.__inspect = { error: e.message }; });
+</script>
+</body></html>
