@@ -85,7 +85,7 @@ export class SkidMarks {
     const burnout = Math.abs(body.throttle) > this.burnoutThrottle && spd < this.burnoutSpeed;
     const braking = body.throttle < -0.5 && body.speed > 8;
     const slipping = body.onGround &&
-      (lat > this.slipLat || (body.handbrake && spd > 2) || burnout || braking);
+      (body.sliding || lat > this.slipLat || (body.handbrake && spd > 2) || burnout || braking);
 
     if (!slipping) { this._prev = null; return; }
 

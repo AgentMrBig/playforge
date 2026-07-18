@@ -39,6 +39,8 @@ export class VehicleBody {
     grip = 7.5,                  // lateral decay rate (1/s)
     driftGrip = 1.1,             // ...with handbrake
     maxLatAccel = 8,             // m/s² tire grip: caps yaw rate at speed
+    slideGrip = 1.4,             // lateral decay while traction is BROKEN
+    tractionRecovery = 0.8,      // re-grip when demand falls below this × limit
     drag = 0.0045,               // quadratic
     rolling = 0.35,              // linear rolling resistance
     gravity = 24,
@@ -48,9 +50,11 @@ export class VehicleBody {
   } = {}) {
     Object.assign(this, {
       mass, enginePower, brakePower, topSpeed, reverseSpeed, wheelbase,
-      steerMax, steerSpeed, grip, driftGrip, maxLatAccel, drag, rolling, gravity,
+      steerMax, steerSpeed, grip, driftGrip, maxLatAccel, slideGrip,
+      tractionRecovery, drag, rolling, gravity,
       chassis, wheels, wheelRadius,
     });
+    this.sliding = false;        // friction circle exceeded: traction broken
     this.throttle = 0;
     this.steerInput = 0;
     this.handbrake = false;
@@ -92,28 +96,51 @@ export class VehicleBody {
       if (speed > 0.5) accel = t * this.brakePower;       // braking
       else accel = t * this.enginePower * 0.55 * Math.max(0, 1 - Math.abs(speed) / this.reverseSpeed);
     }
+    // ---- FRICTION CIRCLE: tires have one grip budget for everything -------
+    // demand = what cornering + engine/brake are asking of the tires.
+    // Exceed the budget → traction BREAKS: grip collapses, the rear steps
+    // out, power scrubs into wheelspin. Back off below recovery → re-grip.
+    const rawYawRate = Math.abs(speed) > 0.15
+      ? (speed / this.wheelbase) * Math.tan(this.steer) : 0;
+    const latDemand = Math.abs(rawYawRate * speed);
+    const engineDemand = t > 0.01 && Math.abs(speed) < this.topSpeed * 0.5
+      ? Math.abs(t) * this.enginePower * 0.55 : Math.abs(accel) * 0.4;
+    const demand = Math.hypot(latDemand, engineDemand);
+    const limit = this.maxLatAccel;
+    if (!this.sliding && (demand > limit * 1.08 || this.handbrake && Math.abs(speed) > 4))
+      this.sliding = true;
+    else if (this.sliding && demand < limit * this.tractionRecovery && !this.handbrake)
+      this.sliding = false;
+    // launch burnout: torque monsters light up the rears from a standstill
+    const burnout = t > 0.9 && Math.abs(speed) < 6 && this.enginePower * 0.55 > limit * 0.6;
+    if (burnout) this.sliding = true;
+
+    if (this.sliding) accel *= 0.6;                       // wheelspin scrubs power
     accel -= Math.sign(speed) * (this.drag * speed * speed + this.rolling);
     if (this.handbrake && Math.abs(speed) > 0.2)
       accel -= Math.sign(speed) * this.brakePower * 0.55;
     speed += accel * dt;
     if (Math.abs(speed) < 0.08 && Math.abs(t) < 0.01) speed = 0; // settle
 
-    // ---- lateral grip (this is the drift model) --------------------------
-    const g = this.handbrake ? this.driftGrip : this.grip;
+    // ---- lateral grip: collapses while sliding ----------------------------
+    const g = this.sliding ? this.slideGrip
+            : this.handbrake ? this.driftGrip : this.grip;
     lat *= Math.exp(-g * dt);
 
     // ---- bicycle-model yaw, capped by tire grip ---------------------------
     if (Math.abs(speed) > 0.15) {
-      let yawRate = (speed / this.wheelbase) * Math.tan(this.steer);
-      // lateral acceleration = yawRate · speed; real tires cap it. This is
-      // what makes high-speed turns sweep wide instead of pivoting.
-      const latCap = (this.handbrake ? this.maxLatAccel * 1.6 : this.maxLatAccel) / Math.max(Math.abs(speed), 1);
-      yawRate = THREE.MathUtils.clamp(yawRate, -latCap, latCap);
+      // sliding loosens the cap: the car rotates past what grip allows —
+      // that IS the oversteer moment. Momentum keeps the old heading (lat
+      // grows below), so the car travels outward while the nose comes round.
+      const capMul = this.sliding ? 1.9 : this.handbrake ? 1.6 : 1.0;
+      const latCap = (this.maxLatAccel * capMul) / Math.max(Math.abs(speed), 1);
+      const yawRate = THREE.MathUtils.clamp(rawYawRate, -latCap, latCap);
       // + sign: the body yaws WITH its front wheels (the sign bug that made
       // the car steer mirror-image of its own wheels lived here)
       entity.rotation.y = yaw + yawRate * dt;
-      // rotating the frame leaves momentum behind: lat gains -Δθ·speed
-      lat += -yawRate * dt * speed * 0.35;
+      // rotating the frame leaves momentum behind: lat gains -Δθ·speed —
+      // fully while sliding, partially when gripped (tires absorb the rest)
+      lat += -yawRate * dt * speed * (this.sliding ? 0.85 : 0.35);
     }
 
     // rebuild world velocity (keep vertical component for gravity)

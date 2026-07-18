@@ -238,7 +238,7 @@ const carBits = muscle(0xc23b3b);
 const car = world.spawn("drivable")
   .mesh(carBits.visual)
   .at(player.position.x + 4, heightAt(player.position.x + 4, player.position.z), player.position.z)
-  .add(new VehicleBody({ chassis: carBits.chassis, wheels: carBits.wheels, enginePower: 12, topSpeed: 42 }))
+  .add(new VehicleBody({ chassis: carBits.chassis, wheels: carBits.wheels, enginePower: 12, topSpeed: 42, maxLatAccel: 10 }))
   .add(new PlayerVehicleControls({ enabled: () => drivingCar === car }))
   .add(new EngineSound(audio, { hp: 450 }))
   .add(new SkidMarks({ rearOffset: 1.45, track: 0.8 }));

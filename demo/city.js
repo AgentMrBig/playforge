@@ -130,11 +130,12 @@ for (let i = 0; i < 34; i++) {
 
 // ---- drivable cars: four hp tiers, each with its own simulated engine ------
 let drivingCar = null; // entity while behind the wheel
+// maxLatAccel = tire grade: how hard you can corner before traction breaks
 const GARAGE = [
-  { name: "Sedan",     hp: 120,   enginePower: 8,  topSpeed: 32, model: "sedan",    color: 0xd8d8d8 },
-  { name: "Muscle",    hp: 450,   enginePower: 12, topSpeed: 42, model: "muscle",   color: 0xc23b3b },
-  { name: "Supercar",  hp: 800,   enginePower: 16, topSpeed: 52, model: "sports",   color: 0xd8a13b },
-  { name: "TOP FUEL",  hp: 11000, enginePower: 34, topSpeed: 90, model: "dragster", color: 0x2f2f34, wheelbase: 4.6, grip: 9 },
+  { name: "Sedan",     hp: 120,   enginePower: 8,  topSpeed: 32, model: "sedan",    color: 0xd8d8d8, maxLatAccel: 8.5 },
+  { name: "Muscle",    hp: 450,   enginePower: 12, topSpeed: 42, model: "muscle",   color: 0xc23b3b, maxLatAccel: 10 },
+  { name: "Supercar",  hp: 800,   enginePower: 16, topSpeed: 52, model: "sports",   color: 0xd8a13b, maxLatAccel: 12.5 },
+  { name: "TOP FUEL",  hp: 11000, enginePower: 34, topSpeed: 90, model: "dragster", color: 0x2f2f34, wheelbase: 4.6, grip: 9, maxLatAccel: 9 },
 ];
 for (let i = 0; i < GARAGE.length; i++) {
   const spec = GARAGE[i];
@@ -145,6 +146,7 @@ for (let i = 0; i < GARAGE.length; i++) {
     .add(new VehicleBody({
       chassis, wheels, enginePower: spec.enginePower, topSpeed: spec.topSpeed,
       wheelbase: spec.wheelbase ?? 2.9, grip: spec.grip ?? 7.5,
+      maxLatAccel: spec.maxLatAccel ?? 8,
       wheelRadius: spec.model === "dragster" ? 0.55 : 0.34,
     }))
     .add(new PlayerVehicleControls({ enabled: () => drivingCar === e }))
