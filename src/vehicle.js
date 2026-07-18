@@ -49,16 +49,20 @@ export class VehicleBody {
     wheels = null,               // { fl, fr, rl, rr } meshes: spin + steer
     wheelRadius = 0.32,
     suspension = null,           // rig.suspension from loadVehicle → real shocks
-    suspFreq = 1.5,              // Hz — body bounce frequency
-    suspDamp = 0.35,             // damping ratio (<1 = underdamped, visible bob)
-    rollGain = 0.011,            // rad per m/s² of lateral accel
-    pitchGain = 0.012,           // rad per m/s² of longitudinal accel
+    suspFreq = 2.3,              // Hz — body bounce frequency (stiff street setup)
+    suspDamp = 0.55,             // damping ratio (settles fast, slight bob)
+    rollGain = 0.0065,           // rad per m/s² of lateral accel
+    pitchGain = 0.0075,          // rad per m/s² of longitudinal accel
+    swayBar = 0.5,               // anti-roll stiffness 0..1: cuts roll target + speeds roll settle
+    maxTravel = 0.055,           // m of body heave — wheels never eat the fenders
+    maxRoll = 0.055, maxPitch = 0.07, // rad hard limits (suspension bottoms out)
   } = {}) {
     Object.assign(this, {
       mass, enginePower, brakePower, topSpeed, reverseSpeed, wheelbase,
       steerMax, steerSpeed, maxLatAccel, slipPeak, slideFriction,
       drag, rolling, gravity, chassis, wheels, wheelRadius,
       suspension, suspFreq, suspDamp, rollGain, pitchGain,
+      swayBar, maxTravel, maxRoll, maxPitch,
     });
     this.inertia = mass * 1.9;   // yaw inertia (Izz) — spins carry momentum
     this.throttle = 0;
@@ -266,20 +270,28 @@ export class VehicleBody {
     const frontY = (gy.fl + gy.fr) * 0.5, rearY = (gy.rl + gy.rr) * 0.5;
     const terrRoll = Math.atan2(leftY - rightY, S.track);
     const terrPitch = Math.atan2(frontY - rearY, S.wheelbase);
-    const rollTarget = THREE.MathUtils.clamp(-latAcc * this.rollGain, -0.16, 0.16) + terrRoll;
-    const pitchTarget = THREE.MathUtils.clamp(-longAccel * this.pitchGain, -0.11, 0.14) + terrPitch;
+    // sway bar: cuts how far load transfer can roll the body AND stiffens
+    // the roll axis specifically (higher freq + damping on roll)
+    const rollTarget = THREE.MathUtils.clamp(-latAcc * this.rollGain * (1 - this.swayBar * 0.6), -this.maxRoll, this.maxRoll) + terrRoll;
+    const pitchTarget = THREE.MathUtils.clamp(-longAccel * this.pitchGain, -this.maxPitch, this.maxPitch) + terrPitch;
     const heaveTarget = (leftY + rightY) * 0.5 - carY;  // body follows terrain avg
     // ---- integrate spring-dampers (mass on spring → oscillate + settle) --
     const w = 2 * Math.PI * this.suspFreq, z = this.suspDamp;
+    const wRoll = w * (1 + this.swayBar * 0.6), zRoll = Math.min(1, z * (1 + this.swayBar * 0.5));
     const sp = this._susp;
-    const step = (x, v, target) => {
-      const a = -w * w * (x - target) - 2 * z * w * v;
+    const step = (x, v, target, ww = w, zz = z) => {
+      const a = -ww * ww * (x - target) - 2 * zz * ww * v;
       v += a * dt; x += v * dt;
       return [x, v];
     };
     [sp.heave, sp.heaveV] = step(sp.heave, sp.heaveV, heaveTarget);
-    [sp.roll, sp.rollV] = step(sp.roll, sp.rollV, rollTarget);
+    [sp.roll, sp.rollV] = step(sp.roll, sp.rollV, rollTarget, wRoll, zRoll);
     [sp.pitch, sp.pitchV] = step(sp.pitch, sp.pitchV, pitchTarget);
+    // ---- hard travel limits: suspension bottoms out, fenders never eat
+    // the wheels (dip is clamped relative to the terrain-following pose) ----
+    sp.heave = THREE.MathUtils.clamp(sp.heave, heaveTarget - this.maxTravel, heaveTarget + this.maxTravel);
+    sp.roll = THREE.MathUtils.clamp(sp.roll, terrRoll - this.maxRoll, terrRoll + this.maxRoll);
+    sp.pitch = THREE.MathUtils.clamp(sp.pitch, terrPitch - this.maxPitch, terrPitch + this.maxPitch);
     // ---- apply to the body (wheels are on the separate level node) --------
     const b = S.bodyRoot;
     b.position.y = S.baseBodyY + sp.heave;
