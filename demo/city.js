@@ -1,7 +1,8 @@
 // PLAYFORGE CITY — GTA-style procedural city: seeded generator, AI traffic,
 // on-foot player. R = new city, ?seed=N pins one.
 import {
-  Engine, World, ThirdPersonRig, Audio, Body, Collider, THREE,
+  Engine, World, ThirdPersonRig, Audio, Body, Collider,
+  VehicleBody, PlayerVehicleControls, THREE,
 } from "../src/index.js";
 import { generateCity, rng } from "./citygen.js";
 
@@ -90,21 +91,28 @@ class CarAI {
 
 function makeCar(color) {
   const g = new THREE.Group();
+  const chassis = new THREE.Group();          // leans with weight transfer
   const bodyM = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 3.2), bodyM);
   body.position.y = 0.55; body.castShadow = true;
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.45, 1.6),
     new THREE.MeshStandardMaterial({ color: 0x202830, roughness: 0.2 }));
   cabin.position.set(0, 1.0, -0.1);
+  chassis.add(body, cabin);
   const wheelM = new THREE.MeshStandardMaterial({ color: 0x14161a });
-  for (const [wx, wz] of [[-0.7, 1.05], [0.7, 1.05], [-0.7, -1.05], [0.7, -1.05]]) {
+  const wheels = {};
+  for (const [key, wx, wz] of [["fl", -0.7, 1.05], ["fr", 0.7, 1.05], ["rl", -0.7, -1.05], ["rr", 0.7, -1.05]]) {
+    const pivot = new THREE.Group();          // steer yaw lives on the pivot
     const w = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.25, 10), wheelM);
     w.rotation.z = Math.PI / 2;
-    w.position.set(wx, 0.32, wz);
-    g.add(w);
+    pivot.add(w);
+    pivot.position.set(wx, 0.32, wz);
+    pivot.rotation.order = "YXZ";             // steer first, then spin
+    g.add(pivot);
+    wheels[key] = pivot;
   }
-  g.add(body, cabin);
-  return g;
+  g.add(chassis);
+  return { visual: g, chassis, wheels };
 }
 
 const carR = rng(seed ^ 0xBEEF);
@@ -112,16 +120,54 @@ for (let i = 0; i < 34; i++) {
   const line = city.lines[Math.floor(carR() * city.lines.length)];
   const along = -city.half + carR() * city.half * 2;
   const ai = new CarAI(carR);
-  const e = world.spawn("car")
-    .mesh(makeCar(CAR_COLORS[i % CAR_COLORS.length]))
+  world.spawn("car")
+    .mesh(makeCar(CAR_COLORS[i % CAR_COLORS.length]).visual)
     .at(ai.axis === "x" ? along : line, 0, ai.axis === "x" ? line : along)
     .add(ai);
 }
+
+// ---- drivable cars (VehicleBody physics) near spawn ------------------------
+let drivingCar = null; // entity while behind the wheel
+const parked = [];
+for (let i = 0; i < 4; i++) {
+  const { visual, chassis, wheels } = makeCar(CAR_COLORS[(i + 2) % CAR_COLORS.length]);
+  const e = world.spawn("drivable")
+    .mesh(visual)
+    .at(city.spawn[0] + 6 + i * 5, 0, city.spawn[2] + 4)
+    .add(new VehicleBody({ chassis, wheels }))
+    .add(new PlayerVehicleControls({ enabled: () => drivingCar === e }));
+  e.rotation.y = Math.PI / 2;
+  parked.push(e);
+}
+
+// engine hum: pitch follows speed while driving
+let engineOsc = null;
+function engineSound(on) {
+  if (on && !engineOsc && audio.ctx) {
+    const o = audio.ctx.createOscillator(), g = audio.ctx.createGain();
+    o.type = "sawtooth"; o.frequency.value = 55; g.gain.value = 0.05;
+    o.connect(g).connect(audio.ctx.destination); o.start();
+    engineOsc = { o, g };
+  } else if (!on && engineOsc) { engineOsc.o.stop(); engineOsc = null; }
+}
+world.spawn("enginePitch").add({
+  update() {
+    if (engineOsc && drivingCar) {
+      const b = drivingCar.get(VehicleBody);
+      engineOsc.o.frequency.value = 55 + b.kmh * 2.4;
+      engineOsc.g.gain.value = 0.035 + Math.min(b.kmh / 400, 0.05);
+    }
+    const hudSpeed = document.getElementById("speed");
+    if (hudSpeed) hudSpeed.textContent = drivingCar
+      ? Math.round(drivingCar.get(VehicleBody).kmh) + " km/h" : "";
+  },
+});
 
 // ---- player on foot --------------------------------------------------------
 class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
     const body = entity.get(Body);
+    if (drivingCar) { body.velocity.x = 0; body.velocity.z = 0; return; }
     const cam = world.camera;
     const f = new THREE.Vector3(); cam.getWorldDirection(f); f.y = 0; f.normalize();
     const r = new THREE.Vector3().crossVectors(f, new THREE.Vector3(0, 1, 0));
@@ -164,9 +210,36 @@ const rig = new ThirdPersonRig(player, {
 });
 world.spawn("camera").add(rig);
 
-// R = new city
+// R = new city · E = enter/exit the nearest car
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR") location.search = "?seed=" + Math.floor(Math.random() * 100000);
+  if (e.code === "KeyE") {
+    if (drivingCar) {                       // step out
+      const car = drivingCar;
+      drivingCar = null;
+      engineSound(false);
+      const yaw = car.rotation.y;
+      player.at(car.position.x + Math.cos(yaw) * 2.4, car.position.y + 0.3,
+                car.position.z - Math.sin(yaw) * 2.4);
+      player.object3d.visible = true;
+      rig.target = player;
+      rig.distance = 6.5;
+    } else {                                // hop in, if one's close
+      let best = null, bestD = 3.8;
+      for (const c of world.findAll("drivable")) {
+        const d = c.position.distanceTo(player.position);
+        if (d < bestD) { best = c; bestD = d; }
+      }
+      if (best) {
+        drivingCar = best;
+        player.object3d.visible = false;
+        audio.play("click");
+        engineSound(true);
+        rig.target = best;
+        rig.distance = 9.5;
+      }
+    }
+  }
 });
 
 engine.start();
