@@ -37,11 +37,12 @@ export async function loadCharacter(url, {
         const ax = a.url.split(".").pop().toLowerCase();
         const anim = await LOADERS[ax]().loadAsync(a.url);
         const clips = (anim.animations && anim.animations.length ? anim.animations : (anim.scene ?? anim).animations) || [];
-        if (!clips.length) continue;
-        const clip = clips[0];
-        clip.name = a.name;
-        for (const tr of clip.tracks) tr.name = tr.name.replace(/mixamorig:?/i, "");
-        embeddedClips = embeddedClips.concat(clip);
+        // a file may hold ONE clip (individual export) or MANY (motion pack)
+        clips.forEach((clip, i) => {
+          if (a.name) clip.name = clips.length > 1 ? `${a.name}_${i}` : a.name;
+          for (const tr of clip.tracks) tr.name = tr.name.replace(/mixamorig:?/i, "");
+          embeddedClips = embeddedClips.concat(clip);
+        });
       } catch (e) { console.warn("anim", a.name, "failed:", e.message); }
     }
   }
