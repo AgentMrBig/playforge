@@ -339,8 +339,12 @@ const player = world.spawn("player")
   .at(RUN.x0 + 4, RUN.h + 1.5, RUN.z + RUN.w / 2 + 4)
   .add(new CharacterBody({ radius: 0.32, height: 1.7 }))   // real capsule vs EVERYTHING
   .add(new PlayerMove());
-loadCharacter("models/character/humanoid_male.fbx", {
-  textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+// the OFFICIAL character (Erik): an Assetsville citizen, with the Mixamo
+// animation pack retargeted onto the pack's UE skeleton at load
+loadCharacter("models/fabpack/SK_citizen_male_28.fbx", {
+  textureDir: "models/fabpack", texture: "T_colorPalette2048.PNG", flipY: false,
+  targetHeight: 1.8,
+  retargetFrom: "models/character/humanoid_male.fbx",
   animations: [
     { name: "idle", url: "models/character/anims/idle.fbx" },
     { name: "walk", url: "models/character/anims/walking.fbx" },

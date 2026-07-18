@@ -471,8 +471,9 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
     if (!buckets[key]) continue;
     const c = centers[key], cl = clusters[key];
     const pivot = new THREE.Group();
-    pivot.position.copy(c);
-    wheelRoot.add(pivot);
+    pivot.rotation.order = "YXZ";        // steer (yaw) FIRST, then spin about
+    pivot.position.copy(c);              // the yawed axle — default XYZ made
+    wheelRoot.add(pivot);                // steered wheels wobble on two axes
     buildMeshes(buckets[key], pivot, c);
     wheels[key] = pivot;
     corners[key] = { ox: c.x, oz: c.z, restLy: c.y };

@@ -1,0 +1,9 @@
+Begin Object Class=/Script/Engine.Skeleton Name="SkeletonCharacter" ExportPath="/Script/Engine.Skeleton'/Game/AssetsvilleTown/Meshes/Characters/SkeletonCharacter.SkeletonCharacter'"
+   Begin Object Class=/Script/Engine.AnimCurveMetaData Name="AnimCurveMetaData_0" ExportPath="/Script/Engine.AnimCurveMetaData'/Game/AssetsvilleTown/Meshes/Characters/SkeletonCharacter.SkeletonCharacter:AnimCurveMetaData_0'"
+   End Object
+   Begin Object Name="AnimCurveMetaData_0" ExportPath="/Script/Engine.AnimCurveMetaData'/Game/AssetsvilleTown/Meshes/Characters/SkeletonCharacter.SkeletonCharacter:AnimCurveMetaData_0'"
+   End Object
+   BoneTree(23)=()
+   PreviewSkeletalMesh="/Game/AssetsvilleTown/Meshes/Characters/SK_citizen_female_01.SK_citizen_female_01"
+   AssetUserData(0)="/Script/Engine.AnimCurveMetaData'AnimCurveMetaData_0'"
+End Object

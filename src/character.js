@@ -22,6 +22,8 @@ const LOADERS = { fbx: () => new FBXLoader(), glb: () => new GLTFLoader(), gltf:
 export async function loadCharacter(url, {
   targetHeight = 1.8, texture = null, textureDir = "", shadows = true, flipY = true,
   animations = null,   // [{name, url}] external Mixamo FBX clips (one anim each)
+  retargetFrom = null, // Mixamo-skeleton FBX url — retarget the clips onto THIS
+                       // skeleton (UE characters) via per-bone bind-pose deltas
 } = {}) {
   const ext = url.split(".").pop().toLowerCase();
   const loaded = await LOADERS[ext]().loadAsync(url);
@@ -136,6 +138,18 @@ export async function loadCharacter(url, {
   const bones = {};
   root.traverse((o) => { if (o.isBone && !bones[o.name]) bones[o.name] = o; });
 
+  // ---- retarget: Mixamo clips onto a UE skeleton ---------------------------
+  // The bind ORIENTATIONS differ between the skeletons (name-mapping alone
+  // pretzels the limbs), so each clip is baked: pose the Mixamo reference,
+  // take every bone's world-space rotation DELTA from its bind, apply that
+  // delta to the UE bone's bind world orientation, convert back to UE local.
+  // One bake serves every character on the shared pack skeleton.
+  if (isUE && retargetFrom && embeddedClips.length) {
+    const ref = await loadRetargetRef(retargetFrom);
+    root.updateWorldMatrix(true, true);          // final bind pose world quats
+    embeddedClips = retargetClips(embeddedClips, ref, bones);
+  }
+
   // ---- clips: embedded, else procedural -----------------------------------
   const clips = {};
   if (embeddedClips.length) {
@@ -146,6 +160,79 @@ export async function loadCharacter(url, {
   const animator = new Animator(root, clips);
 
   return { visual, animator, bones, height: targetHeight, hadEmbedded: embeddedClips.length > 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Mixamo → UE retarget machinery
+const REF_CACHE = new Map();
+async function loadRetargetRef(url) {
+  if (!REF_CACHE.has(url)) {
+    const loaded = await LOADERS[url.split(".").pop().toLowerCase()]().loadAsync(url);
+    const r = loaded.scene ?? loaded;
+    r.traverse((o) => {                          // reference is invisible math only
+      if (o.isMesh || o.isSkinnedMesh) o.visible = false;
+    });
+    r.updateWorldMatrix(true, true);
+    REF_CACHE.set(url, r);
+  }
+  return REF_CACHE.get(url);
+}
+
+function boneDepth(b) { let d = 0, n = b; while (n.parent) { d++; n = n.parent; } return d; }
+
+function retargetClips(clips, mixRoot, ueBones, fps = 30) {
+  const Q = () => new THREE.Quaternion();
+  mixRoot.updateWorldMatrix(true, true);
+  const mixBones = {};
+  mixRoot.traverse((o) => { if (o.isBone && !mixBones[o.name]) mixBones[o.name] = o; });
+  const mixBindWInv = {};
+  for (const [n, b] of Object.entries(mixBones)) mixBindWInv[n] = b.getWorldQuaternion(Q()).invert();
+  const ueBindW = {}, ueParentName = {}, ueStaticParentW = {};
+  for (const [n, b] of Object.entries(ueBones)) {
+    ueBindW[n] = b.getWorldQuaternion(Q());
+    const p = b.parent;
+    // parent counts as animated only if IT is retargeted too — the citizen's
+    // Hips hang under a "root" BONE with no Mixamo counterpart, which stays
+    // at bind (treating it as animated crashed the bake)
+    if (p?.isBone && ueBones[p.name] && mixBones[p.name]) ueParentName[n] = p.name;
+    else ueStaticParentW[n] = p ? p.getWorldQuaternion(Q()) : new THREE.Quaternion();
+  }
+  const shared = Object.keys(ueBones)
+    .filter((n) => mixBones[n])
+    .sort((a, b) => boneDepth(ueBones[a]) - boneDepth(ueBones[b]));
+
+  const mixer = new THREE.AnimationMixer(mixRoot);
+  const out = [];
+  const tw = Q(), delta = Q(), mw = Q(), inv = Q();
+  for (const clip of clips) {
+    const action = mixer.clipAction(clip);
+    action.reset().play();
+    const frames = Math.max(2, Math.ceil(clip.duration * fps) + 1);
+    const times = new Float32Array(frames);
+    const values = {};
+    for (const n of shared) values[n] = new Float32Array(frames * 4);
+    for (let f = 0; f < frames; f++) {
+      const t = Math.min(clip.duration, f / fps);
+      mixer.setTime(t);
+      mixRoot.updateWorldMatrix(true, true);
+      times[f] = t;
+      const targetW = {};
+      for (const n of shared) {
+        mixBones[n].getWorldQuaternion(mw);
+        delta.copy(mw).multiply(mixBindWInv[n]);           // rotation-from-bind, world space
+        tw.copy(delta).multiply(ueBindW[n]);               // applied to the UE bind
+        targetW[n] = tw.clone();
+        const pw = ueParentName[n] ? targetW[ueParentName[n]] : ueStaticParentW[n];
+        const local = inv.copy(pw).invert().multiply(tw);
+        values[n].set([local.x, local.y, local.z, local.w], f * 4);
+      }
+    }
+    action.stop();
+    mixer.uncacheClip(clip);
+    out.push(new THREE.AnimationClip(clip.name, clip.duration,
+      shared.map((n) => new THREE.QuaternionKeyframeTrack(n + ".quaternion", times, values[n]))));
+  }
+  return out;
 }
 
 function classifyClip(name) {
