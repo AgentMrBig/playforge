@@ -555,13 +555,14 @@ const FLEET = [
   { name: "Taxi",    file: "models/sedanpack/Assets/Taxi.fbx",   dz: 5,  hp: 260, ep: 12, top: 48, siren: 0 },
   // Erik's Assetsville exports — skeletal UE rigs, de-skinned at load
   { name: "AVPolice", file: "models/fabpack/Ph_veh_PoliceCarSedan_01.fbx", dz: 10, hp: 380, ep: 14, top: 58, siren: 0,
-    opts: { targetLength: 5.0, textureDir: "models/fabpack", textureFlipY: true,
+    opts: { targetLength: 5.0, textureDir: "models/fabpack", textureFlipY: false,
       textureMap: { palette: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } } },
-  { name: "Hearse", file: "models/fabpack/SK_veh_Hearse.fbx", dz: 15, hp: 300, ep: 13, top: 52, siren: 0,
-    opts: { targetLength: 5.6, textureDir: "models/fabpack", textureFlipY: true,
+  // UE material-instance paint doesn't survive FBX export — re-applied here
+  { name: "Hearse", file: "models/fabpack/SK_veh_Hearse.fbx", dz: 15, hp: 300, ep: 13, top: 52, siren: 0, paint: 0x23262c,
+    opts: { targetLength: 5.6, textureDir: "models/fabpack", textureFlipY: false,
       textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
-  { name: "CargoTruck", file: "models/fabpack/SK_veh_CargoTruckOld.fbx", dz: 20, hp: 260, ep: 10, top: 40, siren: 0, mass: 2600,
-    opts: { targetLength: 7.0, textureDir: "models/fabpack", textureFlipY: true,
+  { name: "CargoTruck", file: "models/fabpack/SK_veh_CargoTruckOld.fbx", dz: 20, hp: 260, ep: 10, top: 40, siren: 0, mass: 2600, paint: 0x55804a,
+    opts: { targetLength: 7.0, textureDir: "models/fabpack", textureFlipY: false,
       textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
 ];
 const cars = [];

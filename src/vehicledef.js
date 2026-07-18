@@ -265,7 +265,6 @@ export async function loadVehicle(url, {
     setPaint(hex) { for (const m of paintMats) m.color.setHex(hex); },
   };
 }
-
 /**
  * Skeletal vehicle rig (UE/Fab exports): one rigidly-skinned mesh whose
  * vertices each belong 100% to one bone (carBody / wheelFL/FR/RL/RR).
@@ -290,7 +289,7 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
     skin.skeleton.bones.forEach((b, i) => {
       for (const [key, wb] of Object.entries(boneWheels)) if (b === wb) boneKeyByIndex.set(skin.uuid + ":" + i, key);
     });
-  const buckets = {};                     // key → matIndex → {pos:[], uv:[]}
+  const buckets = {};                     // key → matIndex → {pos:[], uv:[], col:[]}
   const clusters = {};                    // wheel key → {sum, n, min, max}
   const bb = { min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) };
   const matList = [];                     // final material array
@@ -299,6 +298,7 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
   for (const skin of skins) {
     const geo = skin.geometry;
     const pos = geo.attributes.position, uv = geo.attributes.uv;
+    const col = geo.attributes.color;     // Assetsville paints via VERTEX COLORS
     const si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
     const mats = Array.isArray(skin.material) ? skin.material : [skin.material];
     for (const m of mats) if (!matIndexOf.has(m)) { matIndexOf.set(m, matList.length); matList.push(m); }
@@ -330,11 +330,14 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
       const key = keyForVert(ia);
       const mi = matForFace(f);
       const bkt = (buckets[key] ?? (buckets[key] = {}));
-      const slot = (bkt[mi] ?? (bkt[mi] = { pos: [], uv: [] }));
+      const slot = (bkt[mi] ?? (bkt[mi] = { pos: [], uv: [], col: [] }));
       for (const i of [ia, ib, ic]) {
         baked(i, v);
         slot.pos.push(v.x, v.y, v.z);
         if (uv) slot.uv.push(uv.getX(i), uv.getY(i));
+        // NOTE: the source 'color' attribute is all zeros (UE vertex-paint
+        // default) — copying it + FBXLoader's vertexColors=true multiplied
+        // every car to BLACK. Drop it entirely.
         bb.min.min(v); bb.max.max(v);
         if (key !== "body") {
           const cl = clusters[key] ?? (clusters[key] = { sum: new THREE.Vector3(), n: 0, min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) });
@@ -418,7 +421,16 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
   for (const m of matList) {
     const n = (m.name || "").toLowerCase();
     if (n.includes("glass")) { m.transparent = true; m.opacity = glassOpacity; m.color.setHex(0x20303a); }
-    else if (!n.includes("palette")) paintMats.add(m);
+    // UE material-INSTANCE parameters (each car's paint job) do not survive
+    // FBX export — the palette texture carries liveries/details, and per-car
+    // paint gets re-applied via setPaint. Every material is tintable here
+    // (each loadVehicle call owns its own material instances).
+    else paintMats.add(m);
+    // FBXLoader saw the (all-zero) color attribute and enabled vertexColors —
+    // which multiplied everything to black. The attribute is dropped; make
+    // sure the flag is off too.
+    m.vertexColors = false;
+    m.needsUpdate = true;
   }
   const hullPts = [];                                  // visual-space body verts for the physics hull
   const buildMeshes = (bkt, parent, offset, collectHull) => {

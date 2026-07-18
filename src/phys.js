@@ -52,10 +52,20 @@ export class Physics {
     for (const h of this._post) h(dt);
     if (this._contactCbs.length) {
       this.events.drainContactForceEvents((ev) => {
+        // IMPACTS only, not sustained contact: a car resting on its side
+        // presses the ground hard every step — that's not a crash, and it
+        // was looping crash audio + sparks nonstop (Erik). Gate on the
+        // bodies' relative speed at the moment of the event.
+        const c1 = this.world.getCollider(ev.collider1());
+        const c2 = this.world.getCollider(ev.collider2());
+        const v1 = c1?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
+        const v2 = c2?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
+        const rel = Math.hypot(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
+        if (rel < 2.2) return;
         const a = this._handleEnt.get(ev.collider1()) ?? null;
         const b = this._handleEnt.get(ev.collider2()) ?? null;
         const force = ev.totalForceMagnitude();
-        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, ev });
+        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, relSpeed: rel, ev });
       });
     }
   }
