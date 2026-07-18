@@ -21,11 +21,30 @@ const LOADERS = { fbx: () => new FBXLoader(), glb: () => new GLTFLoader(), gltf:
 
 export async function loadCharacter(url, {
   targetHeight = 1.8, texture = null, textureDir = "", shadows = true, flipY = true,
+  animations = null,   // [{name, url}] external Mixamo FBX clips (one anim each)
 } = {}) {
   const ext = url.split(".").pop().toLowerCase();
   const loaded = await LOADERS[ext]().loadAsync(url);
   const root = loaded.scene ?? loaded;
-  const embeddedClips = (loaded.animations && loaded.animations.length ? loaded.animations : root.animations) || [];
+  let embeddedClips = (loaded.animations && loaded.animations.length ? loaded.animations : root.animations) || [];
+
+  // ---- external animation clips (Mixamo exports one FBX per animation) -----
+  // Bind by bone name: strip Mixamo's "mixamorig:" prefix so tracks target
+  // this skeleton's plain bone names (Hips, Spine, LeftArm, …).
+  if (animations) {
+    for (const a of animations) {
+      try {
+        const ax = a.url.split(".").pop().toLowerCase();
+        const anim = await LOADERS[ax]().loadAsync(a.url);
+        const clips = (anim.animations && anim.animations.length ? anim.animations : (anim.scene ?? anim).animations) || [];
+        if (!clips.length) continue;
+        const clip = clips[0];
+        clip.name = a.name;
+        for (const tr of clip.tracks) tr.name = tr.name.replace(/mixamorig:?/i, "");
+        embeddedClips = embeddedClips.concat(clip);
+      } catch (e) { console.warn("anim", a.name, "failed:", e.message); }
+    }
+  }
 
   // ---- texture rebind (FBX refs often miss) + material cleanup ------------
   let tex = null;
@@ -87,42 +106,46 @@ function classifyClip(name) {
 // legs/arms swing in the walk/run cycle. Rotation axes/signs are calibrated
 // for the Mixamo bone frames (Y down the bone).
 const D = (deg) => THREE.MathUtils.degToRad(deg);
-function q(x, y, z) { return new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z)); }
 
-function track(bone, times, eulers) {
-  const vals = [];
-  for (const [x, y, z] of eulers) { const qq = q(x, y, z); vals.push(qq.x, qq.y, qq.z, qq.w); }
-  return new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, times, vals);
-}
-
-// arms-down rest, about the bone's LOCAL X (calibrated on this rig: a positive
-// X rotation on both upper arms swings them from T-pose down to the sides —
-// Z arced them forward). Arm forward/back swing is also about X.
-const ARM_DOWN = D(82);
 
 function buildHumanoidClips(bones) {
   const has = (n) => !!bones[n];
   const clips = {};
+  // Bind-relative track: euler values are DELTAS applied on top of each bone's
+  // rest pose (rest * delta). Setting absolute quaternions wiped the Mixamo
+  // bind pose and splayed the limbs — this composes instead.
+  const rest = {};
+  const track = (bone, times, eulers) => {
+    if (!rest[bone]) rest[bone] = bones[bone].quaternion.clone();
+    const r = rest[bone], tmp = new THREE.Quaternion(), e = new THREE.Euler();
+    const vals = [];
+    for (const [x, y, z] of eulers) {
+      tmp.setFromEuler(e.set(x, y, z));
+      const out = r.clone().multiply(tmp);
+      vals.push(out.x, out.y, out.z, out.w);
+    }
+    return new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, times, vals);
+  };
 
-  // IDLE: arms down + gentle breathing (3s loop)
+  // IDLE: arms lowered from T-pose + gentle breathing (3s loop)
   {
     const t = [0, 1.5, 3];
     const tracks = [];
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[ARM_DOWN, 0, 0], [ARM_DOWN + D(2), 0, 0], [ARM_DOWN, 0, 0]]));
-    if (has("RightArm")) tracks.push(track("RightArm", t, [[ARM_DOWN, 0, 0], [ARM_DOWN + D(2), 0, 0], [ARM_DOWN, 0, 0]]));
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, [ARM_L, ARM_L, ARM_L]));
+    if (has("RightArm")) tracks.push(track("RightArm", t, [ARM_R, ARM_R, ARM_R]));
     if (has("Spine")) tracks.push(track("Spine", t, [[0, 0, 0], [D(1.5), 0, 0], [0, 0, 0]]));
     clips.idle = new THREE.AnimationClip("idle", 3, tracks);
   }
   clips.walk = locomotion("walk", 0.9, D(26), D(22), D(16));
   clips.run = locomotion("run", 0.6, D(42), D(40), D(28), D(10));
-  // JUMP: legs tuck, arms swing up (less X = arms rise) (0.4s, clamps)
+  // JUMP: legs tuck forward, arms raise (0.4s, clamps)
   {
     const t = [0, 0.4];
     const tracks = [];
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[ARM_DOWN, 0, 0], [D(20), 0, 0]]));
-    if (has("RightArm")) tracks.push(track("RightArm", t, [[ARM_DOWN, 0, 0], [D(20), 0, 0]]));
-    if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, [[0, 0, 0], [D(35), 0, 0]]));
-    if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, [[0, 0, 0], [D(35), 0, 0]]));
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, [ARM_L, addX(ARM_L, D(40))]));
+    if (has("RightArm")) tracks.push(track("RightArm", t, [ARM_R, addX(ARM_R, D(40))]));
+    if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, [[0, 0, 0], [D(38), 0, 0]]));
+    if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, [[0, 0, 0], [D(38), 0, 0]]));
     clips.jump = new THREE.AnimationClip("jump", 0.4, tracks);
   }
   return clips;
@@ -130,19 +153,25 @@ function buildHumanoidClips(bones) {
   function locomotion(name, dur, legAmp, kneeAmp, armAmp, lean = 0) {
     const t = [0, dur * 0.25, dur * 0.5, dur * 0.75, dur];
     const sw = (a) => [[a, 0, 0], [0, 0, 0], [-a, 0, 0], [0, 0, 0], [a, 0, 0]];
-    const armsw = (a) => [[ARM_DOWN + a, 0, 0], [ARM_DOWN, 0, 0], [ARM_DOWN - a, 0, 0], [ARM_DOWN, 0, 0], [ARM_DOWN + a, 0, 0]];
+    // arm swing = the arms-down delta plus a forward/back X wobble around it
+    const armsw = (base, a) => [addX(base, a), base, addX(base, -a), base, addX(base, a)];
     const tracks = [];
     if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, sw(legAmp)));
     if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, sw(-legAmp)));
     if (has("LeftLeg")) tracks.push(track("LeftLeg", t, [[0, 0, 0], [kneeAmp, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]));
     if (has("RightLeg")) tracks.push(track("RightLeg", t, [[0, 0, 0], [0, 0, 0], [0, 0, 0], [kneeAmp, 0, 0], [0, 0, 0]]));
-    // arms counter-swing to the legs (about X, around the arms-down rest)
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, armsw(-armAmp)));
-    if (has("RightArm")) tracks.push(track("RightArm", t, armsw(armAmp)));
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, armsw(ARM_L, -armAmp)));
+    if (has("RightArm")) tracks.push(track("RightArm", t, armsw(ARM_R, armAmp)));
     if (lean && has("Spine")) tracks.push(track("Spine", t, [[lean, 0, 0], [lean, 0, 0], [lean, 0, 0], [lean, 0, 0], [lean, 0, 0]]));
     return new THREE.AnimationClip(name, dur, tracks);
   }
 }
+// arms-down DELTA from the T-pose bind, about the bone LOCAL X (calibrated
+// live: rest*Xdelta hangs BOTH arms symmetrically; Z lowered one and raised
+// the other). addX layers the forward/back walk swing on the same axis.
+const ARM_L = [D(80), 0, 0];
+const ARM_R = [D(80), 0, 0];
+const addX = (e, dx) => [e[0] + dx, e[1], e[2]];
 
 /**
  * CharacterController — WASD/stick locomotion for a loadCharacter rig with a
