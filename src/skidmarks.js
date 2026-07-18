@@ -76,16 +76,23 @@ export class SkidMarks {
     }
     this.mesh.geometry.attributes.color.needsUpdate = true;
 
-    // ---- are we slipping? -------------------------------------------------
+    // ---- are we slipping? Physically: rear slip angle past the tire peak,
+    // wheelspin, or locked wheels — NOT "turning at all" -------------------
     const yaw = entity.rotation.y;
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
-    const lat = Math.abs(body.velocity.dot(right));
     const spd = Math.abs(body.speed);
-    const burnout = Math.abs(body.throttle) > this.burnoutThrottle && spd < this.burnoutSpeed;
-    const braking = body.throttle < -0.5 && body.speed > 8;
-    const slipping = body.onGround &&
-      (body.sliding || lat > this.slipLat || (body.handbrake && spd > 2) || burnout || braking);
+    let slipping;
+    if (body.slipRear !== undefined) {         // force-based body: use real slip
+      slipping = body.onGround &&
+        (body.sliding || (body.handbrake && spd > 3) ||
+         (body.throttle < -0.6 && spd > 12));  // near-lockup braking
+    } else {                                    // legacy fallback
+      const lat = Math.abs(body.velocity.dot(right));
+      slipping = body.onGround &&
+        (lat > this.slipLat || (body.handbrake && spd > 2) ||
+         (Math.abs(body.throttle) > this.burnoutThrottle && spd < this.burnoutSpeed));
+    }
 
     if (!slipping) { this._prev = null; return; }
 

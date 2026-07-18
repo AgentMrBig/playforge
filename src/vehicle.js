@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { Collider } from "./physics.js";
 
 /**
- * VehicleBody — reusable arcade-with-weight car physics (bicycle model).
+ * VehicleBody — force-based car physics (dynamic bicycle model + tire curve).
  *
  *   const car = world.spawn("car")
  *     .mesh(carVisual)
@@ -14,33 +14,34 @@ import { Collider } from "./physics.js";
  *   body.steerInput -1..1
  *   body.handbrake  bool
  *
- * The feel, and where it comes from:
- *  - HEAVY: engine force fades toward topSpeed (long pull), drag is quadratic,
- *    brakes are strong but not instant, and the chassis visually squats on
- *    throttle, dives on brakes, rolls into corners (weight transfer).
- *  - SMOOTH TURNING: steering is rate-limited toward its target and the max
- *    angle shrinks with speed (no twitch at 120), yaw comes from the bicycle
- *    model so the turn radius is physical: yawRate = v/wheelbase · tan(steer).
- *  - GRIP: sideways velocity decays separately from forward speed. Under
- *    normal grip the car tracks its nose; handbrake drops grip → slides.
+ * NOTHING here is scripted — behavior emerges from the force balance:
+ *  - the car is a rigid body with yaw INERTIA (a slide carries momentum;
+ *    a spin is rotation the front tires failed to catch)
+ *  - each axle's tires make lateral force from their SLIP ANGLE through a
+ *    Pacejka-style curve that peaks near `slipPeak` and lets go past it —
+ *    breakaway is the tire curve's falling tail, not a flag
+ *  - engine torque spends the rear tires' friction budget (friction
+ *    ellipse), so power-on oversteer and launch fishtails just happen
+ *  - handbrake locks the rears: their lateral grip collapses → rotation
+ * Below ~2.5 m/s it blends to a kinematic model (slip angles are undefined
+ * at rest — this is how every sim handles parking speeds).
  *
- * Works on flat ground, AABB Colliders (buildings), and Heightfield terrain.
+ * Exposed live state: speed/kmh, slipFront/slipRear (rad), wheelspin,
+ * sliding (rear past peak — use it for skid marks / smoke / audio).
  */
 export class VehicleBody {
   constructor({
-    mass = 1200,                 // only affects collision shove, but read by games
-    enginePower = 10,            // m/s² at standstill
+    mass = 1200,                 // kg — now a REAL mass: forces divide by it
+    enginePower = 10,            // peak accel m/s² at standstill (F = m·this)
     brakePower = 15,
-    topSpeed = 38,               // m/s (drag equilibrium lands near ~100 km/h)
+    topSpeed = 38,               // m/s engine-force fade reference
     reverseSpeed = 9,
     wheelbase = 2.9,
     steerMax = 0.62,             // rad at standstill
     steerSpeed = 1.9,            // rad/s toward target
-    grip = 7.5,                  // lateral decay rate (1/s)
-    driftGrip = 1.1,             // ...with handbrake
-    maxLatAccel = 8,             // m/s² tire grip: caps yaw rate at speed
-    slideGrip = 1.4,             // lateral decay while traction is BROKEN
-    tractionRecovery = 0.8,      // re-grip when demand falls below this × limit
+    maxLatAccel = 8,             // m/s² peak tire grip (μ·g); tire grade
+    slipPeak = 0.14,             // rad (~8°): tire curve peak — breakaway point
+    slideFriction = 0.72,        // fraction of peak force left past breakaway
     drag = 0.0045,               // quadratic
     rolling = 0.35,              // linear rolling resistance
     gravity = 24,
@@ -50,11 +51,10 @@ export class VehicleBody {
   } = {}) {
     Object.assign(this, {
       mass, enginePower, brakePower, topSpeed, reverseSpeed, wheelbase,
-      steerMax, steerSpeed, grip, driftGrip, maxLatAccel, slideGrip,
-      tractionRecovery, drag, rolling, gravity,
-      chassis, wheels, wheelRadius,
+      steerMax, steerSpeed, maxLatAccel, slipPeak, slideFriction,
+      drag, rolling, gravity, chassis, wheels, wheelRadius,
     });
-    this.sliding = false;        // friction circle exceeded: traction broken
+    this.inertia = mass * 1.9;   // yaw inertia (Izz) — spins carry momentum
     this.throttle = 0;
     this.steerInput = 0;
     this.handbrake = false;
@@ -62,6 +62,11 @@ export class VehicleBody {
     this.velocity = new THREE.Vector3(); // world-space (Body-compatible field)
     this.steer = 0;                      // actual smoothed steer angle
     this.speed = 0;                      // signed forward speed (m/s)
+    this.yawRate = 0;                    // rad/s angular velocity (state!)
+    this.slipFront = 0;                  // live slip angles (rad)
+    this.slipRear = 0;
+    this.wheelspin = false;
+    this.sliding = false;                // rear axle past the tire-curve peak
     this.onGround = true;
     this._lean = { roll: 0, pitch: 0 };
     this._wheelSpin = 0;
@@ -71,86 +76,107 @@ export class VehicleBody {
 
   get kmh() { return Math.abs(this.speed * 3.6); }
 
+  // Pacejka-lite: rises to 1.0 at slipPeak, falls to slideFriction beyond.
+  // The falling tail IS the unpredictability — past the peak, steering
+  // harder gives you LESS force.
+  _tire(slip) {
+    const s = slip / this.slipPeak;
+    const a = Math.abs(s);
+    if (a <= 1) return Math.sign(s) * Math.sin((Math.PI / 2) * a);
+    const fade = 1 - Math.min((a - 1) * 0.35, 1 - this.slideFriction);
+    return Math.sign(s) * fade;
+  }
+
   fixedUpdate(dt, { world, entity }) {
     const yaw = entity.rotation.y;
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
 
     // decompose velocity into the car's frame
-    let speed = this.velocity.dot(fwd);
-    let lat = this.velocity.dot(right);
+    // car-frame velocity: vx forward, vy lateral (right +)
+    let vx = this.velocity.dot(fwd);
+    let vy = this.velocity.dot(right);
 
     // ---- steering: rate-limited, speed-sensitive ------------------------
-    const speedFactor = 1 / (1 + Math.abs(speed) * 0.045);
+    const speedFactor = 1 / (1 + Math.abs(vx) * 0.038);
     const target = this.steerInput * this.steerMax * speedFactor;
     const dSteer = THREE.MathUtils.clamp(target - this.steer, -this.steerSpeed * dt, this.steerSpeed * dt);
     this.steer += dSteer;
 
-    // ---- longitudinal forces --------------------------------------------
+    // ---- longitudinal drive/brake (rear axle drives) ----------------------
     const t = THREE.MathUtils.clamp(this.throttle, -1, 1);
-    let accel = 0;
+    let driveAccel = 0;
     if (t > 0.01) {
-      if (speed >= 0) accel = t * this.enginePower * Math.max(0, 1 - speed / this.topSpeed);
-      else accel = this.brakePower;                       // braking out of reverse
+      if (vx >= -0.5) driveAccel = t * this.enginePower * Math.max(0, 1 - vx / this.topSpeed);
+      else driveAccel = this.brakePower;                  // braking out of reverse
     } else if (t < -0.01) {
-      if (speed > 0.5) accel = t * this.brakePower;       // braking
-      else accel = t * this.enginePower * 0.55 * Math.max(0, 1 - Math.abs(speed) / this.reverseSpeed);
+      if (vx > 0.5) driveAccel = t * this.brakePower;     // braking
+      else driveAccel = t * this.enginePower * 0.55 * Math.max(0, 1 - Math.abs(vx) / this.reverseSpeed);
     }
-    // ---- FRICTION CIRCLE: tires have one grip budget for everything -------
-    // demand = what cornering + engine/brake are asking of the tires.
-    // Exceed the budget → traction BREAKS: grip collapses, the rear steps
-    // out, power scrubs into wheelspin. Back off below recovery → re-grip.
-    const rawYawRate = Math.abs(speed) > 0.15
-      ? (speed / this.wheelbase) * Math.tan(this.steer) : 0;
-    const latDemand = Math.abs(rawYawRate * speed);
-    const engineDemand = t > 0.01 && Math.abs(speed) < this.topSpeed * 0.5
-      ? Math.abs(t) * this.enginePower * 0.55 : Math.abs(accel) * 0.4;
-    const demand = Math.hypot(latDemand, engineDemand);
-    const limit = this.maxLatAccel;
-    if (!this.sliding && (demand > limit * 1.08 || this.handbrake && Math.abs(speed) > 4))
-      this.sliding = true;
-    else if (this.sliding && demand < limit * this.tractionRecovery && !this.handbrake)
-      this.sliding = false;
-    // launch burnout: torque monsters light up the rears from a standstill
-    const burnout = t > 0.9 && Math.abs(speed) < 6 && this.enginePower * 0.55 > limit * 0.6;
-    if (burnout) this.sliding = true;
 
-    if (this.sliding) accel *= 0.6;                       // wheelspin scrubs power
-    accel -= Math.sign(speed) * (this.drag * speed * speed + this.rolling);
-    if (this.handbrake && Math.abs(speed) > 0.2)
-      accel -= Math.sign(speed) * this.brakePower * 0.55;
-    speed += accel * dt;
-    if (Math.abs(speed) < 0.08 && Math.abs(t) < 0.01) speed = 0; // settle
+    const speedAbs = Math.abs(vx);
+    const a = this.wheelbase / 2, b = this.wheelbase / 2; // CG centered
+    const muG = this.maxLatAccel;                          // peak grip accel
 
-    // ---- lateral grip: collapses while sliding ----------------------------
-    const g = this.sliding ? this.slideGrip
-            : this.handbrake ? this.driftGrip : this.grip;
-    lat *= Math.exp(-g * dt);
+    if (speedAbs > 2.5) {
+      // ================ DYNAMIC MODEL: forces, not formulas ===============
+      // slip angles: where each axle's rubber TRAVELS vs where it POINTS
+      const sgn = Math.sign(vx || 1);
+      this.slipFront = Math.atan2(vy + a * this.yawRate, speedAbs) - this.steer * sgn;
+      this.slipRear = Math.atan2(vy - b * this.yawRate, speedAbs);
 
-    // ---- bicycle-model yaw, capped by tire grip ---------------------------
-    if (Math.abs(speed) > 0.15) {
-      // sliding loosens the cap: the car rotates past what grip allows —
-      // that IS the oversteer moment. Momentum keeps the old heading (lat
-      // grows below), so the car travels outward while the nose comes round.
-      const capMul = this.sliding ? 1.9 : this.handbrake ? 1.6 : 1.0;
-      const latCap = (this.maxLatAccel * capMul) / Math.max(Math.abs(speed), 1);
-      const yawRate = THREE.MathUtils.clamp(rawYawRate, -latCap, latCap);
-      // + sign: the body yaws WITH its front wheels (the sign bug that made
-      // the car steer mirror-image of its own wheels lived here)
-      entity.rotation.y = yaw + yawRate * dt;
-      // rotating the frame leaves momentum behind: lat gains -Δθ·speed —
-      // fully while sliding, partially when gripped (tires absorb the rest)
-      lat += -yawRate * dt * speed * (this.sliding ? 0.85 : 0.35);
+      // rear tires split one friction budget between drive and cornering
+      // (friction ellipse): full throttle leaves little lateral grip
+      const driveFrac = THREE.MathUtils.clamp(Math.abs(driveAccel) / muG, 0, 1);
+      let rearLatBudget = Math.sqrt(Math.max(0.06, 1 - driveFrac * driveFrac));
+      this.wheelspin = t > 0.5 && Math.abs(driveAccel) > muG * 0.95;
+      if (this.wheelspin) { driveAccel *= 0.55; rearLatBudget = 0.35; }
+      if (this.handbrake) {                     // locked rears: grip collapses
+        rearLatBudget = 0.3;
+        driveAccel -= Math.sign(vx) * this.brakePower * 0.55;
+      }
+
+      // per-axle lateral accel through the tire curve (each axle carries
+      // half the car, so each contributes half the total grip)
+      const half = muG * 0.5;
+      const ayF = -this._tire(this.slipFront) * half;
+      const ayR = -this._tire(this.slipRear) * half * rearLatBudget;
+      this.sliding = Math.abs(this.slipRear) > this.slipPeak * 1.05 || this.wheelspin;
+
+      const resist = Math.sign(vx) * (this.drag * vx * vx + this.rolling);
+
+      // ---- integrate the rigid body (this IS the simulation) -------------
+      vx += (driveAccel - resist + vy * this.yawRate) * dt;
+      vy += (ayF + ayR - vx * this.yawRate) * dt;
+      // yaw torque: front vs rear force imbalance about the CG. Whether the
+      // car understeers, oversteers, or spins is DECIDED HERE by physics.
+      const yawAccel = (a * ayF - b * ayR) * this.mass / this.inertia;
+      this.yawRate = THREE.MathUtils.clamp(this.yawRate + yawAccel * dt, -3.5, 3.5);
+      entity.rotation.y = yaw + this.yawRate * dt;
+    } else {
+      // ================ PARKING-SPEED KINEMATIC BLEND =====================
+      this.slipFront = this.slipRear = 0;
+      this.wheelspin = t > 0.9 && this.enginePower * 0.55 > muG * 0.6;
+      this.sliding = this.wheelspin;
+      if (this.wheelspin) driveAccel *= 0.55;
+      const resist = Math.sign(vx) * (this.drag * vx * vx + this.rolling * Math.min(1, speedAbs));
+      if (this.handbrake) driveAccel -= Math.sign(vx) * this.brakePower * 0.55;
+      vx += (driveAccel - resist) * dt;
+      if (Math.abs(vx) < 0.08 && Math.abs(t) < 0.01) vx = 0;
+      vy *= Math.exp(-8 * dt);
+      const kinYaw = (vx / this.wheelbase) * Math.tan(this.steer);
+      this.yawRate += (kinYaw - this.yawRate) * (1 - Math.exp(-dt * 10));
+      entity.rotation.y = yaw + this.yawRate * dt;
     }
 
     // rebuild world velocity (keep vertical component for gravity)
-    const vy = this.velocity.y - this.gravity * dt;
+    const wy = this.velocity.y - this.gravity * dt;
     const nyaw = entity.rotation.y;
     const nfwd = new THREE.Vector3(Math.sin(nyaw), 0, Math.cos(nyaw));
     const nright = new THREE.Vector3(nfwd.z, 0, -nfwd.x);
-    this.velocity.copy(nfwd.multiplyScalar(speed)).addScaledVector(nright, lat);
-    this.velocity.y = vy;
-    this.speed = speed;
+    this.velocity.copy(nfwd.multiplyScalar(vx)).addScaledVector(nright, vy);
+    this.velocity.y = wy;
+    this.speed = vx;
 
     // ---- integrate + ground ----------------------------------------------
     entity.position.addScaledVector(this.velocity, dt);
@@ -174,8 +200,9 @@ export class VehicleBody {
 
     // ---- visual weight transfer ------------------------------------------
     if (this.chassis) {
-      const wantRoll = THREE.MathUtils.clamp(-lat * 0.045 - this.steer * Math.abs(speed) * 0.006, -0.14, 0.14);
-      const wantPitch = THREE.MathUtils.clamp(-accel * 0.011, -0.09, 0.12);
+      const latG = this.yawRate * vx;  // centripetal accel = the real lean force
+      const wantRoll = THREE.MathUtils.clamp(-latG * 0.011 - vy * 0.02, -0.15, 0.15);
+      const wantPitch = THREE.MathUtils.clamp(-driveAccel * 0.011, -0.09, 0.12);
       const k = 1 - Math.exp(-dt * 7);
       this._lean.roll += (wantRoll - this._lean.roll) * k;
       this._lean.pitch += (wantPitch - this._lean.pitch) * k;
@@ -183,7 +210,8 @@ export class VehicleBody {
       this.chassis.rotation.x = this._lean.pitch;
     }
     if (this.wheels) {
-      this._wheelSpin += (speed / this.wheelRadius) * dt;
+      const spinRate = this.wheelspin ? this.topSpeed * 1.4 : vx;
+      this._wheelSpin += (spinRate / this.wheelRadius) * dt;
       for (const key of ["fl", "fr", "rl", "rr"]) {
         const w = this.wheels[key];
         if (!w) continue;
