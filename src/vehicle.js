@@ -48,11 +48,17 @@ export class VehicleBody {
     chassis = null,              // visual node to lean (weight transfer)
     wheels = null,               // { fl, fr, rl, rr } meshes: spin + steer
     wheelRadius = 0.32,
+    suspension = null,           // rig.suspension from loadVehicle → real shocks
+    suspFreq = 1.5,              // Hz — body bounce frequency
+    suspDamp = 0.35,             // damping ratio (<1 = underdamped, visible bob)
+    rollGain = 0.011,            // rad per m/s² of lateral accel
+    pitchGain = 0.012,           // rad per m/s² of longitudinal accel
   } = {}) {
     Object.assign(this, {
       mass, enginePower, brakePower, topSpeed, reverseSpeed, wheelbase,
       steerMax, steerSpeed, maxLatAccel, slipPeak, slideFriction,
       drag, rolling, gravity, chassis, wheels, wheelRadius,
+      suspension, suspFreq, suspDamp, rollGain, pitchGain,
     });
     this.inertia = mass * 1.9;   // yaw inertia (Izz) — spins carry momentum
     this.throttle = 0;
@@ -70,6 +76,9 @@ export class VehicleBody {
     this.onGround = true;
     this._lean = { roll: 0, pitch: 0 };
     this._wheelSpin = 0;
+    this._prevSpeed = 0;
+    // sprung-mass state: heave (m), roll & pitch (rad), each with a velocity
+    this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
     this._box = new THREE.Box3();
     this._other = new THREE.Box3();
   }
@@ -198,9 +207,13 @@ export class VehicleBody {
     // ---- collide with AABB Colliders (buildings, props) -------------------
     this._collide(world, entity);
 
-    // ---- visual weight transfer ------------------------------------------
-    if (this.chassis) {
-      const latG = this.yawRate * vx;  // centripetal accel = the real lean force
+    // ---- suspension (real) or simple lean (fallback) ---------------------
+    const longAccel = (vx - this._prevSpeed) / Math.max(dt, 1e-4);
+    this._prevSpeed = vx;
+    if (this.suspension) {
+      this._suspend(dt, world, entity, vx, driveAccel, longAccel);
+    } else if (this.chassis) {
+      const latG = this.yawRate * vx;
       const wantRoll = THREE.MathUtils.clamp(-latG * 0.011 - vy * 0.02, -0.15, 0.15);
       const wantPitch = THREE.MathUtils.clamp(-driveAccel * 0.011, -0.09, 0.12);
       const k = 1 - Math.exp(-dt * 7);
@@ -209,6 +222,7 @@ export class VehicleBody {
       this.chassis.rotation.z = this._lean.roll;
       this.chassis.rotation.x = this._lean.pitch;
     }
+    // wheels spin + steer (both models)
     if (this.wheels) {
       const spinRate = this.wheelspin ? this.topSpeed * 1.4 : vx;
       this._wheelSpin += (spinRate / this.wheelRadius) * dt;
@@ -219,6 +233,51 @@ export class VehicleBody {
         if (key[0] === "f") w.rotation.y = this.steer * 0.9;
       }
     }
+  }
+
+  // Real 4-corner suspension: plant each wheel on its own ground contact
+  // (never clipping), then ride the body on underdamped spring-dampers so it
+  // rolls/pitches from load transfer and bobs over bumps — actual shocks.
+  _suspend(dt, world, entity, vx, driveAccel, longAccel) {
+    const S = this.suspension;
+    const carY = entity.position.y, yaw = entity.rotation.y;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    const gy = {};
+    for (const key of ["fl", "fr", "rl", "rr"]) {
+      const c = S.corners[key];
+      if (!c) continue;
+      const wx = entity.position.x + rx * c.ox + fx * c.oz;
+      const wz = entity.position.z + rz * c.ox + fz * c.oz;
+      const g = groundYAt(world, wx, wz);
+      gy[key] = g;
+      // plant the wheel: pivot world-Y = ground + radius → local y in scaled node
+      S.wheels[key].position.y = (g + S.wheelRadius - carY) / S.scale;
+    }
+    // ---- targets from load transfer + road contour -----------------------
+    const latAcc = this.yawRate * vx;                 // centripetal (m/s²)
+    const leftY = (gy.fl + gy.rl) * 0.5, rightY = (gy.fr + gy.rr) * 0.5;
+    const frontY = (gy.fl + gy.fr) * 0.5, rearY = (gy.rl + gy.rr) * 0.5;
+    const terrRoll = Math.atan2(leftY - rightY, S.track);
+    const terrPitch = Math.atan2(frontY - rearY, S.wheelbase);
+    const rollTarget = THREE.MathUtils.clamp(-latAcc * this.rollGain, -0.16, 0.16) + terrRoll;
+    const pitchTarget = THREE.MathUtils.clamp(-longAccel * this.pitchGain, -0.11, 0.14) + terrPitch;
+    const heaveTarget = (leftY + rightY) * 0.5 - carY;  // body follows terrain avg
+    // ---- integrate spring-dampers (mass on spring → oscillate + settle) --
+    const w = 2 * Math.PI * this.suspFreq, z = this.suspDamp;
+    const sp = this._susp;
+    const step = (x, v, target) => {
+      const a = -w * w * (x - target) - 2 * z * w * v;
+      v += a * dt; x += v * dt;
+      return [x, v];
+    };
+    [sp.heave, sp.heaveV] = step(sp.heave, sp.heaveV, heaveTarget);
+    [sp.roll, sp.rollV] = step(sp.roll, sp.rollV, rollTarget);
+    [sp.pitch, sp.pitchV] = step(sp.pitch, sp.pitchV, pitchTarget);
+    // ---- apply to the body (wheels are on the separate level node) --------
+    const b = S.bodyRoot;
+    b.position.y = S.baseBodyY + sp.heave;
+    b.rotation.z = sp.roll;
+    b.rotation.x = sp.pitch;
   }
 
   _collide(world, entity) {
@@ -260,6 +319,18 @@ export class VehicleBody {
       }
     }
   }
+}
+
+/** sample terrain height at a world point (any Heightfield/StreamedTerrain) */
+function groundYAt(world, x, z) {
+  let best = -Infinity;
+  for (const e of world.entities)
+    for (const c of e.components)
+      if (typeof c.heightAt === "function" && typeof c.slopeAt === "function") {
+        const h = c.heightAt(x, z);
+        if (h !== -Infinity && h > best) best = h;
+      }
+  return best === -Infinity ? 0 : best;
 }
 
 /** WASD / arrows / touch driving — attach alongside VehicleBody */

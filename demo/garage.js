@@ -56,6 +56,7 @@ for (const spec of FLEET) {
       .at(spec.x, 0, -4)
       .add(new VehicleBody({
         chassis: rig.chassis, wheels: rig.wheels ?? undefined, wheelRadius: rig.wheelRadius,
+        suspension: rig.suspension,
         enginePower: spec.ep, topSpeed: spec.top, maxLatAccel: spec.grip,
       }))
       .add(new VehicleRig(rig, { sirenHz: spec.siren }))

@@ -190,6 +190,37 @@ export async function loadVehicle(url, {
   const visual = new THREE.Group();
   visual.add(root);
 
+  // ---- suspension rig: move the wheels onto a level node (siblings of the
+  //      body) so the body can roll/pitch/heave on springs while the wheels
+  //      stay planted on the ground and never clip through it ---------------
+  let suspension = null;
+  const wheelKeys = Object.keys(parts.wheels);
+  if (wheelKeys.length) {
+    const S = root.scale.x;
+    const wheelRoot = new THREE.Group();
+    wheelRoot.scale.copy(root.scale);          // same scale; identity pos/rot so
+    // the wheels sit in plain visual space (attach preserves their world pose)
+    visual.add(wheelRoot);
+    visual.updateMatrixWorld(true);              // so getWorldPosition is valid
+    const corners = {};
+    const moved = new Set();
+    const wp = new THREE.Vector3();
+    for (const key of wheelKeys) {
+      const pivot = parts.wheels[key];
+      pivot.getWorldPosition(wp);                // visual-space meters (car at origin)
+      const ox = wp.x, oz = wp.z;
+      if (!moved.has(pivot)) { wheelRoot.attach(pivot); moved.add(pivot); }
+      corners[key] = { ox, oz, restLy: pivot.position.y };
+    }
+    suspension = {
+      bodyRoot: root, wheelRoot, scale: S,
+      wheelRadius: (parts._wheelR ?? 0.32) * scale,
+      baseBodyY: root.position.y, corners, wheels: parts.wheels,
+      track: Math.abs((corners.fl?.ox ?? 0.7) - (corners.fr?.ox ?? -0.7)) || 1.4,
+      wheelbase: Math.abs((corners.fl?.oz ?? 1.4) - (corners.rl?.oz ?? -1.4)) || 2.6,
+    };
+  }
+
   const openParts = [];
   for (const [k, d] of Object.entries(parts.doors)) openParts.push({ name: "door_" + k, ...d });
   if (parts.hood) openParts.push({ name: "hood", ...parts.hood });
@@ -198,8 +229,9 @@ export async function loadVehicle(url, {
 
   return {
     visual, chassis: root,
-    wheels: Object.keys(parts.wheels).length ? parts.wheels : null,
+    wheels: wheelKeys.length ? parts.wheels : null,
     wheelRadius: (parts._wheelR ?? 0.32) * scale,
+    suspension,
     doors: parts.doors, hood: parts.hood, trunk: parts.trunk,
     steering: parts.steering, lightbar: parts.lightbar,
     searchlight: parts.searchlight, radio: parts.radio,
