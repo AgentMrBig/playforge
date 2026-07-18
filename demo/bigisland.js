@@ -13,6 +13,9 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
+// build stamp so "which build am I on" is answerable at a glance
+const BUILD = typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev";
+if (seedEl) seedEl.textContent = seed + " · build " + BUILD;
 
 const engine = new Engine(document.getElementById("game"), { clearColor: 0x8fb9dc });
 const world = new World();

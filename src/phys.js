@@ -348,7 +348,14 @@ export class RapierVehicle extends VehicleBody {
     // fronts alone can't bend the path much. Friction params only.
     const hb = this.handbrake;
     const slipFade = 1 - 0.55 * Math.min(1, Math.max(0, Math.abs(this.slipRear ?? 0) - 0.17) / 0.5);
-    const rearSide = hb ? this.driftSideFriction : this.sideFriction * slipFade;
+    // grip LOSS is instant (wheels lock), grip RECOVERY takes time — the
+    // rubber has to spin back up to road speed. Instant re-grip on space
+    // release snapped the car straight (Erik). ~0.5s ramp back.
+    const rearTarget = hb ? this.driftSideFriction : this.sideFriction * slipFade;
+    this._rearGrip = this._rearGrip ?? this.sideFriction;
+    if (rearTarget < this._rearGrip) this._rearGrip = rearTarget;             // lock: instant
+    else this._rearGrip = Math.min(rearTarget, this._rearGrip + 1.6 * dt);    // recover: ramp
+    const rearSide = this._rearGrip;
     this.ctrl.setWheelSideFrictionStiffness(0, hb ? this.sideFriction * 0.7 : this.sideFriction);
     this.ctrl.setWheelSideFrictionStiffness(1, hb ? this.sideFriction * 0.7 : this.sideFriction);
     this.ctrl.setWheelSideFrictionStiffness(2, rearSide);

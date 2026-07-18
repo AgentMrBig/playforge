@@ -8,6 +8,9 @@ import { resolve } from "path";
 
 export default defineConfig({
   base: "./",
+  // visible build stamp — Erik tested a stale cached index.html for a while
+  // without knowing; the HUD shows this so "which build am I on" is one glance
+  define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(5, 16).replace("T", " ")) },
   build: {
     outDir: "docs", emptyOutDir: true, chunkSizeWarningLimit: 2000,
     rollupOptions: {
