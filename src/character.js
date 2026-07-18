@@ -41,6 +41,10 @@ export async function loadCharacter(url, {
         clips.forEach((clip, i) => {
           if (a.name) clip.name = clips.length > 1 ? `${a.name}_${i}` : a.name;
           for (const tr of clip.tracks) tr.name = tr.name.replace(/mixamorig:?/i, "");
+          // strip root-motion position tracks: Mixamo bakes them in CENTIMETER
+          // scale (teleports a meter-scale rig into the void), and our
+          // controller drives locomotion anyway — clips must play in place
+          clip.tracks = clip.tracks.filter((tr) => !tr.name.endsWith(".position"));
           embeddedClips = embeddedClips.concat(clip);
         });
       } catch (e) { console.warn("anim", a.name, "failed:", e.message); }

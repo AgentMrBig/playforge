@@ -26,6 +26,12 @@ world.spawn("ground").mesh(hf.buildMesh((x, z, h, s, out) => {
 let guy = null;
 loadCharacter("models/character/humanoid_male.fbx", {
   textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+  animations: [                       // real Mixamo mocap (Erik's pack)
+    { name: "idle", url: "models/character/anims/idle.fbx" },
+    { name: "walk", url: "models/character/anims/walking.fbx" },
+    { name: "run", url: "models/character/anims/running.fbx" },
+    { name: "jump", url: "models/character/anims/jumping up.fbx" },
+  ],
 }).then((ch) => {
   guy = world.spawn("player").mesh(ch.visual).at(0, 0, 0)
     .add(new Body({ size: [0.5, 1.7, 0.5], offset: [0, 0.85, 0] }))
