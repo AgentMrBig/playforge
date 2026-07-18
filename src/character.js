@@ -20,7 +20,7 @@ import { Animator } from "./animation.js";
 const LOADERS = { fbx: () => new FBXLoader(), glb: () => new GLTFLoader(), gltf: () => new GLTFLoader() };
 
 export async function loadCharacter(url, {
-  targetHeight = 1.8, texture = null, textureDir = "", shadows = true,
+  targetHeight = 1.8, texture = null, textureDir = "", shadows = true, flipY = true,
 } = {}) {
   const ext = url.split(".").pop().toLowerCase();
   const loaded = await LOADERS[ext]().loadAsync(url);
@@ -31,7 +31,9 @@ export async function loadCharacter(url, {
   let tex = null;
   if (texture) {
     tex = new THREE.TextureLoader().setPath(textureDir.replace(/\/?$/, "/")).load(texture);
-    tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+    // flipY true for this pack's UVs — false (the vehicle setting) sampled the
+    // dark half of the palette atlas and made the skin come out near-black
+    tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = flipY;
   }
   root.traverse((o) => {
     if (!o.isMesh && !o.isSkinnedMesh) return;
@@ -93,11 +95,10 @@ function track(bone, times, eulers) {
   return new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, times, vals);
 }
 
-// arms rest rotation from T-pose. A single-axis sweep can't hang a Mixamo arm
-// perfectly (it arcs inward as it drops), so this is a tuned relaxed pose;
-// real Mixamo clips (auto-used when the model has them) look far better.
-const ARM_DOWN_L = D(-80), ARM_DOWN_R = D(80);
-const FORE_L = D(-18), FORE_R = D(18);           // slight elbow bend inward
+// arms-down rest, about the bone's LOCAL X (calibrated on this rig: a positive
+// X rotation on both upper arms swings them from T-pose down to the sides —
+// Z arced them forward). Arm forward/back swing is also about X.
+const ARM_DOWN = D(82);
 
 function buildHumanoidClips(bones) {
   const has = (n) => !!bones[n];
@@ -107,25 +108,21 @@ function buildHumanoidClips(bones) {
   {
     const t = [0, 1.5, 3];
     const tracks = [];
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[0, 0, ARM_DOWN_L], [D(2), 0, ARM_DOWN_L], [0, 0, ARM_DOWN_L]]));
-    if (has("RightArm")) tracks.push(track("RightArm", t, [[0, 0, ARM_DOWN_R], [D(2), 0, ARM_DOWN_R], [0, 0, ARM_DOWN_R]]));
-    if (has("LeftForeArm")) tracks.push(track("LeftForeArm", t, [[0, 0, FORE_L], [0, 0, FORE_L], [0, 0, FORE_L]]));
-    if (has("RightForeArm")) tracks.push(track("RightForeArm", t, [[0, 0, FORE_R], [0, 0, FORE_R], [0, 0, FORE_R]]));
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[ARM_DOWN, 0, 0], [ARM_DOWN + D(2), 0, 0], [ARM_DOWN, 0, 0]]));
+    if (has("RightArm")) tracks.push(track("RightArm", t, [[ARM_DOWN, 0, 0], [ARM_DOWN + D(2), 0, 0], [ARM_DOWN, 0, 0]]));
     if (has("Spine")) tracks.push(track("Spine", t, [[0, 0, 0], [D(1.5), 0, 0], [0, 0, 0]]));
     clips.idle = new THREE.AnimationClip("idle", 3, tracks);
   }
-  // WALK: leg swing ±26°, knee bend, counter arm swing (0.9s)
-  clips.walk = locomotion("walk", 0.9, D(26), D(20), D(14));
-  // RUN: bigger swing, forward lean (0.6s)
-  clips.run = locomotion("run", 0.6, D(42), D(38), D(26), D(10));
-  // JUMP: crouch → arms up (0.4s, clamps)
+  clips.walk = locomotion("walk", 0.9, D(26), D(22), D(16));
+  clips.run = locomotion("run", 0.6, D(42), D(40), D(28), D(10));
+  // JUMP: legs tuck, arms swing up (less X = arms rise) (0.4s, clamps)
   {
     const t = [0, 0.4];
     const tracks = [];
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[0, 0, ARM_DOWN_L], [D(-150), 0, ARM_DOWN_L * 0.4]]));
-    if (has("RightArm")) tracks.push(track("RightArm", t, [[0, 0, ARM_DOWN_R], [D(-150), 0, ARM_DOWN_R * 0.4]]));
-    if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, [[0, 0, 0], [D(30), 0, 0]]));
-    if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, [[0, 0, 0], [D(30), 0, 0]]));
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, [[ARM_DOWN, 0, 0], [D(20), 0, 0]]));
+    if (has("RightArm")) tracks.push(track("RightArm", t, [[ARM_DOWN, 0, 0], [D(20), 0, 0]]));
+    if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, [[0, 0, 0], [D(35), 0, 0]]));
+    if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, [[0, 0, 0], [D(35), 0, 0]]));
     clips.jump = new THREE.AnimationClip("jump", 0.4, tracks);
   }
   return clips;
@@ -133,16 +130,15 @@ function buildHumanoidClips(bones) {
   function locomotion(name, dur, legAmp, kneeAmp, armAmp, lean = 0) {
     const t = [0, dur * 0.25, dur * 0.5, dur * 0.75, dur];
     const sw = (a) => [[a, 0, 0], [0, 0, 0], [-a, 0, 0], [0, 0, 0], [a, 0, 0]];
+    const armsw = (a) => [[ARM_DOWN + a, 0, 0], [ARM_DOWN, 0, 0], [ARM_DOWN - a, 0, 0], [ARM_DOWN, 0, 0], [ARM_DOWN + a, 0, 0]];
     const tracks = [];
     if (has("LeftUpLeg")) tracks.push(track("LeftUpLeg", t, sw(legAmp)));
     if (has("RightUpLeg")) tracks.push(track("RightUpLeg", t, sw(-legAmp)));
-    // knees bend on the back-swing (simple: flex when leg is back)
     if (has("LeftLeg")) tracks.push(track("LeftLeg", t, [[0, 0, 0], [kneeAmp, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]));
     if (has("RightLeg")) tracks.push(track("RightLeg", t, [[0, 0, 0], [0, 0, 0], [0, 0, 0], [kneeAmp, 0, 0], [0, 0, 0]]));
-    // arms: down base + counter-swing to the legs
-    const arm = (base, a) => [[a, 0, base], [0, 0, base], [-a, 0, base], [0, 0, base], [a, 0, base]];
-    if (has("LeftArm")) tracks.push(track("LeftArm", t, arm(ARM_DOWN_L, -armAmp)));
-    if (has("RightArm")) tracks.push(track("RightArm", t, arm(ARM_DOWN_R, armAmp)));
+    // arms counter-swing to the legs (about X, around the arms-down rest)
+    if (has("LeftArm")) tracks.push(track("LeftArm", t, armsw(-armAmp)));
+    if (has("RightArm")) tracks.push(track("RightArm", t, armsw(armAmp)));
     if (lean && has("Spine")) tracks.push(track("Spine", t, [[lean, 0, 0], [lean, 0, 0], [lean, 0, 0], [lean, 0, 0], [lean, 0, 0]]));
     return new THREE.AnimationClip(name, dur, tracks);
   }

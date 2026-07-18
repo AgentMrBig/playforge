@@ -11,9 +11,10 @@ export default defineConfig({
   build: {
     outDir: "docs", emptyOutDir: true, chunkSizeWarningLimit: 2000,
     rollupOptions: {
-      input: {                              // the proving ground + the road editor
+      input: {                              // proving ground + road editor + character
         main: resolve(__dirname, "index.html"),
         roads: resolve(__dirname, "roads.html"),
+        character: resolve(__dirname, "character.html"),
       },
     },
   },
