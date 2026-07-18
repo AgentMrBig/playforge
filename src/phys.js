@@ -167,7 +167,8 @@ export class RapierVehicle extends VehicleBody {
       frictionSlip = 11.5,    // tire longitudinal traction
       sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
       steerGrip = 13,         // m/s² lateral-G that full steering may demand
-      driftSideFriction = 0.4,// rear lateral grip while handbraking (drift!)
+      driftSideFriction = 0.14,// rear grip on handbrake — tail actually
+                              // breaks loose (0.4 just squealed; Erik)
       restitution = 0.25,     // chassis bounciness (that NFS2 elasticity)
       // low damping: a flipping car must KEEP its momentum and tumble
       // (0.7 angular was strangling flips mid-rotation — Erik felt it)
@@ -208,9 +209,32 @@ export class RapierVehicle extends VehicleBody {
         .setRotation(quatY(entity.rotation.y))
         .setLinearDamping(this.linDamp).setAngularDamping(this.angDamp)
         .setCcdEnabled(true));
+    // chassis shape: CONVEX HULL of the actual body mesh — standing on the
+    // hood puts your feet ON the hood, not floating on a box (Erik). Falls
+    // back to a cuboid only if the rig has no body geometry.
+    let shape = null;
+    if (S?.bodyRoot) {
+      const pts = [];
+      entity.object3d.updateWorldMatrix(true, true);
+      const inv = new THREE.Matrix4().copy(entity.object3d.matrixWorld).invert();
+      const v = new THREE.Vector3();
+      S.bodyRoot.updateWorldMatrix(true, true);
+      S.bodyRoot.traverse((o) => {
+        if (!o.isMesh || !o.geometry?.attributes?.position) return;
+        const pos = o.geometry.attributes.position;
+        const stride = Math.max(1, Math.floor(pos.count / 300));
+        for (let i = 0; i < pos.count; i += stride) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).applyMatrix4(inv);
+          // into chassis frame: the visual still has its ground-origin here,
+          // the chassis center sits _restRide above it
+          pts.push(v.x, v.y - this._restRide, v.z);
+        }
+      });
+      if (pts.length >= 30) shape = R.ColliderDesc.convexHull(new Float32Array(pts));
+    }
+    if (!shape) shape = R.ColliderDesc.cuboid(track / 2 + 0.12, halfH, wb / 2 + 0.55);
     const col = P.world.createCollider(
-      R.ColliderDesc.cuboid(track / 2 + 0.12, halfH, wb / 2 + 0.55)
-        .setMass(this.mass)
+      shape.setMass(this.mass)
         .setFriction(0.5).setRestitution(this.restitution)
         .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS)
         .setContactForceEventThreshold(this.mass * 2.5), this.rb);
@@ -297,10 +321,18 @@ export class RapierVehicle extends VehicleBody {
     this.ctrl.setWheelEngineForce(2, engine / 2);
     this.ctrl.setWheelEngineForce(3, engine / 2);
     for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
-    // handbrake: lock rears + collapse their side grip → the tail comes out
+    // handbrake: lock rears — side grip collapses AND longitudinal traction
+    // drops (locked rubber slides in every direction) → the tail comes out.
+    // Off-handbrake, rear grip follows a falling tire curve with slip angle
+    // so a drift SUSTAINS under counter-steer instead of instantly re-gripping.
+    // All friction params, zero scripts.
     const hb = this.handbrake;
-    this.ctrl.setWheelSideFrictionStiffness(2, hb ? this.driftSideFriction : this.sideFriction);
-    this.ctrl.setWheelSideFrictionStiffness(3, hb ? this.driftSideFriction : this.sideFriction);
+    const slipFade = 1 - 0.55 * Math.min(1, Math.max(0, Math.abs(this.slipRear ?? 0) - 0.17) / 0.5);
+    const rearSide = hb ? this.driftSideFriction : this.sideFriction * slipFade;
+    this.ctrl.setWheelSideFrictionStiffness(2, rearSide);
+    this.ctrl.setWheelSideFrictionStiffness(3, rearSide);
+    this.ctrl.setWheelFrictionSlip(2, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
+    this.ctrl.setWheelFrictionSlip(3, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
     if (hb) { this.ctrl.setWheelBrake(2, this.mass * 0.011); this.ctrl.setWheelBrake(3, this.mass * 0.011); }
 
     this.ctrl.updateVehicle(dt);
@@ -456,7 +488,20 @@ export class CharacterBody {
     if (!this.rb && this.phys?.world) this._create(this._entity);
   }
 
+  /** hand control elsewhere (ragdoll owns the body) and back */
+  setEnabled(on) {
+    this.enabled = on;
+    this.col?.setEnabled(on);
+    if (on && this.rb) {
+      const p = this._entity.position, half = this.height / 2;
+      this.rb.setNextKinematicTranslation({ x: p.x, y: p.y + half, z: p.z });
+      this._lastSynced.copy(p);
+      this.velocity.set(0, 0, 0);
+    }
+  }
+
   _move(dt) {
+    if (this.enabled === false) return;
     const entity = this._entity, half = this.height / 2;
     // external teleport (exiting a car sets entity.position directly)
     if (entity.position.distanceToSquared(this._lastSynced) > 1) {

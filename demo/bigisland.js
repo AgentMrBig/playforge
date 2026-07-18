@@ -6,7 +6,7 @@ import {
   Engine, World, ThirdPersonRig, Audio, Collider, StreamedTerrain,
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
-  initRapier, Physics, RapierVehicle, CharacterBody,
+  initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -348,6 +348,57 @@ loadCharacter("models/character/humanoid_male.fbx", {
   player.mesh(ch.visual).add(ch.animator);
   ch.animator.play("idle");
   window.__ch = ch;
+
+  // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
+  // (muscle tone pulls toward whatever the Animator is playing — no scripts)
+  physReady.then(() => {
+    const rag = new Ragdoll(ch.bones, phys, { tone: 1.1 });
+    window.__rag = rag;
+    const cb = () => player.components.find((c) => c.ctrl && c.velocity);
+    player.add({
+      fixedUpdate(dt) {
+        if (rag.active) {
+          rag.fixedUpdate(dt);
+          // camera + world logic follow the flying body
+          const p = rag.pelvisPos();
+          player.position.set(p.x, p.y - 0.9, p.z);
+          const body = cb();
+          if (body) body._lastSynced.copy(player.position);   // no teleport-fight
+          if (rag.settled(1.3)) {                             // stand back up
+            rag.exit();
+            const g = heightAt(player.position.x, player.position.z);
+            player.at(player.position.x, g + 0.2, player.position.z);
+            cb()?.setEnabled(true);
+            ch.animator.play("idle", { fade: 0.2 });
+          }
+          return;
+        }
+        if (drivingCar) return;
+        // car-vs-player: fast car close to the capsule → you go flying
+        for (const car of cars) {
+          const vb = car.components.find((c) => c.rb);
+          if (!vb?.rb) continue;
+          const sp = vb.velocity.length();
+          if (sp < 5) continue;
+          const dx = car.position.x - player.position.x;
+          const dz = car.position.z - player.position.z;
+          // 3.5m: fires while the nose is arriving — the chassis otherwise
+          // stops dead against the (infinite-mass) capsule just out of range
+          if (dx * dx + dz * dz > 3.5 * 3.5) continue;
+          if (Math.abs(car.position.y - player.position.y) > 2) continue;
+          const chest = player.position.clone(); chest.y += 1.1;
+          rag.enter(
+            vb.velocity.clone().multiplyScalar(0.85).add(new THREE.Vector3(0, 2.5, 0)),
+            vb.velocity.clone().multiplyScalar(12),           // spin seasoning; momentum rides the inherited velocity
+            chest);
+          cb()?.setEnabled(false);
+          audio.play("crash", { volume: Math.min(1, sp / 18), pitch: 1.3 });
+          break;
+        }
+      },
+      update() { rag.update(); },                             // physics → bones
+    });
+  });
 }).catch((e) => console.warn("character:", e.message));
 
 // ============================================================================
