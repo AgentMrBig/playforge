@@ -125,19 +125,21 @@ export class CarCollisions {
       if (now - last < this.debounceMs) continue;
       this._lastHit.set(me, now);
 
-      // crumple direction = the contact normal pointing INTO this car; fall back
-      // to car→other (or travel dir into static geometry) if no manifold normal.
+      // raw crumple axis from the contact normal (fall back to car→other, or
+      // travel dir into static geometry, if no manifold normal).
       const dir = this._tmpA;
       const cp = wp ?? me.position;              // where to crumple around
-      if (normal) {
-        dir.set(normal.x, normal.y, normal.z);
-        if (dir.dot(this._cur.copy(cp).sub(me.position)) < 0) dir.negate(); // point inward
-      } else if (other?.position && (other.position.x || other.position.z)) {
-        dir.copy(other.position).sub(me.position);
-      } else if (vb.rb) { const lv = vb.rb.linvel(); dir.set(lv.x, 0, lv.z); }
+      if (normal) dir.set(normal.x, normal.y, normal.z);
+      else if (other?.position && (other.position.x || other.position.z)) dir.copy(other.position).sub(me.position);
+      else if (vb.rb) { const lv = vb.rb.linvel(); dir.set(lv.x, 0, lv.z); }
       else dir.set(0, 0, 1);
       if (dir.lengthSq() < 1e-6) continue;
       dir.normalize();
+      // FORCE it to point INTO the car (from the contact toward the car center),
+      // whatever the source — verts then cave INWARD (dent), never bulge out.
+      // (bug fix: the old check flipped this and the car grew where it was hit.)
+      const ox = cp.x - me.position.x, oy = cp.y - me.position.y, oz = cp.z - me.position.z;
+      if (dir.x * ox + dir.y * oy + dir.z * oz > 0) dir.negate();
 
       // localized crumple: verts within `radius` of the contact fold along `dir`
       // by `depth`, both in WORLD meters and scaling with severity. A semi's huge
