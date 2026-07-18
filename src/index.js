@@ -18,6 +18,7 @@ export { loadCharacter, CharacterController } from "./character.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { generateRoads, RoadGraph } from "./roadgen.js";
+export { layoutTowns } from "./townlayout.js";
 export { SkidMarks } from "./skidmarks.js";
 export { CarCollisions } from "./damage.js";
 export { loadModel, loadCarModel } from "./assets.js";

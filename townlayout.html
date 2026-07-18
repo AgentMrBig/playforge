@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlayForge — town layout test</title>
+<style>
+  html, body { margin: 0; background: #1a1e24; color: #cfd6de; font-family: system-ui, sans-serif; }
+  #wrap { display: flex; gap: 16px; padding: 14px; align-items: flex-start; }
+  canvas { background: #10141a; border-radius: 8px; }
+  #log { font-size: 13px; white-space: pre-wrap; max-width: 320px; line-height: 1.5; }
+  b { color: #ffd75e; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="map" width="760" height="760"></canvas>
+  <div id="log"></div>
+</div>
+<script type="module">
+  import { generateRoads, layoutTowns, fbm } from "./src/index.js";
+  const R = 1500, SEA = 0, seed = 7777;
+  const heightAt = (x, z) => {
+    const nx = x / R, nz = z / R, d = Math.hypot(nx, nz);
+    const falloff = Math.max(0, 1 - d * d * 1.05);
+    const base = fbm(nx * 2.6 + 10, nz * 2.6 + 10, { octaves: 5, seed }) * 0.5 + 0.5;
+    return -8 + falloff * (11 + base * 26);
+  };
+  const settlements = [
+    { x: 300, z: 120, r: 150 }, { x: -420, z: -260, r: 90 }, { x: 80, z: 560, r: 90 },
+    { x: -560, z: 300, r: 90 }, { x: 520, z: -420, r: 150 },
+  ].filter((s) => heightAt(s.x, s.z) > SEA + 1);
+  const runway = { x0: 700, z: 40, len: 260 };
+  const { roads, graph } = generateRoads({ settlements, heightAt, islandR: R, sea: SEA, runway, seed });
+  const placements = layoutTowns({ settlements, roadGraph: graph, heightAt, sea: SEA, seed });
+  window.__placements = placements;
+
+  const cv = document.getElementById("map"), ctx = cv.getContext("2d"), S = cv.width, VIEW = 1650;
+  const W2S = (x, z) => [S / 2 + (x / (VIEW * 2)) * S, S / 2 + (z / (VIEW * 2)) * S];
+  const N = 240, step = (VIEW * 2) / N;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const wx = -VIEW + i * step, wz = -VIEW + j * step, h = heightAt(wx, wz);
+    ctx.fillStyle = h < SEA ? "#2e5c8a" : h < SEA + 1.8 ? "#bcae78" : `rgb(${70 + Math.min(1,h/40)*30},${120 - Math.min(1,h/40)*20},66)`;
+    ctx.fillRect((i / N) * S, (j / N) * S, S / N + 1, S / N + 1);
+  }
+  // roads
+  const rc = { artery: "#e8c838", connector: "#ff8c3b", spur: "#5affa2" };
+  for (const r of roads) { ctx.beginPath(); r.points.forEach((p,i)=>{const[px,py]=W2S(p[0],p[1]); i?ctx.lineTo(px,py):ctx.moveTo(px,py);}); ctx.strokeStyle=rc[r.kind]||"#fff"; ctx.lineWidth=Math.max(2,r.width/VIEW*S); ctx.lineCap="round"; ctx.stroke(); }
+  // buildings — oriented footprints
+  const tcol = { house: "#c98f6a", shop: "#6a9fc9", big: "#b06ac9" };
+  for (const b of placements) {
+    const [px, py] = W2S(b.x, b.z);
+    ctx.save(); ctx.translate(px, py); ctx.rotate(b.rotY);
+    const w = b.w / (VIEW * 2) * S, d = b.d / (VIEW * 2) * S;
+    ctx.fillStyle = tol(b.type); ctx.fillRect(-w / 2, -d / 2, w, d);
+    ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.lineWidth = 1; ctx.strokeRect(-w / 2, -d / 2, w, d);
+    // a front-door notch (toward +local-z after our facing math) to see orientation
+    ctx.fillStyle = "#fff"; ctx.fillRect(-1.5, d / 2 - 2, 3, 2);
+    ctx.restore();
+  }
+  function tol(t){ return tcol[t] || "#ccc"; }
+
+  // checks
+  let onWater = placements.filter(b => heightAt(b.x, b.z) < SEA).length;
+  let onRoad = placements.filter(b => { const n = graph.nearestOnRoad(b.x, b.z); return n && n.dist < graph.roads[n.roadId].width * 0.5; }).length;
+  document.getElementById("log").innerHTML =
+    `<b>Town layout generated</b>\n` +
+    `settlements: ${settlements.length}\n` +
+    `buildings placed: ${placements.length}\n` +
+    `  by type: ${["house","shop","big"].map(t=>t+"="+placements.filter(b=>b.type===t).length).join(", ")}\n` +
+    `on water: <b>${onWater}</b> (want 0)\n` +
+    `on the road surface: <b>${onRoad}</b> (want 0)\n\n` +
+    `buildings line the roads, each facing the street (white notch = front door).\n` +
+    `brown=house · blue=shop · purple=big`;
+  window.__report = { count: placements.length, onWater, onRoad };
+</script>
+</body>
+</html>
