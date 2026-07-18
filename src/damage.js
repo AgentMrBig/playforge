@@ -30,13 +30,17 @@ export class CarCollisions {
     debounceMs = 110,        // per-car spacing so one contact ≠ instant crater
   } = {}) {
     this.hitForce = hitForce;
-    this.maxDent = maxDent;
+    this.maxDent = maxDent;            // dent-depth unit (scaled by severity)
+    this.maxCrush = 0.7;              // m — hard clamp on any vert's total travel (pancake depth)
     this.debounceMs = debounceMs;
     this._sparks = null;
     this._world = null;
     this._lastHit = new WeakMap();     // entity → last-dent timestamp
     this._tmpA = new THREE.Vector3();
     this._tmpB = new THREE.Vector3();
+    this._dir = new THREE.Vector3();   // impact dir in mesh-local (own temp)
+    this._rel = new THREE.Vector3();   // per-vertex temps (kept off _tmpA/_tmpB)
+    this._cur = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     // ---- wreck smoke: world-space puff pool, driven by entity.damage -------
     this.smokeStart = 2.5;             // damage value where wisps begin
@@ -102,8 +106,11 @@ export class CarCollisions {
   _onContact({ entityA, entityB, force }) {
     if (force < this.hitForce) return;
     const now = performance.now();
-    // strength 0..1 above threshold (14× mass ≈ a big wreck)
-    const strength = Math.min(1, (force - this.hitForce) / (1200 * 14));
+    // severity scales with REAL contact force, UNCAPPED at 1 — a fender tap is
+    // ~0.3, a full-speed wreck ~1.5, a semi flattening a sedan 3+. That number
+    // drives dent depth, whole-body crush, sparks, smoke, and the damage tally,
+    // so "total destruction" is just a big force delivering a big severity.
+    const severity = (force - this.hitForce) / (1200 * 12);
     for (const [me, other] of [[entityA, entityB], [entityB, entityA]]) {
       const vb = this._carVehicle(me);
       if (!vb) continue;
@@ -123,16 +130,21 @@ export class CarCollisions {
       if (dir.lengthSq() < 1e-6) continue;
       dir.normalize();
 
-      const amount = this.maxDent * (0.35 + 0.65 * strength);
-      this._dentCar(me, dir, amount);
+      // deformation is expressed as a FRACTION of each panel's own size (car
+      // meshes live in big FBX-native local units, not meters) — dentFrac folds
+      // the struck side, crush caves + flattens the whole shell. Both scale with
+      // severity: a tap ≈ 4% dent, a full wreck ≈ 16%, a semi pancakes it.
+      const dentFrac = Math.min(0.24, 0.03 + 0.13 * severity);
+      const crush = Math.min(0.55, severity * 0.22);
+      this._dentCar(me, dir, dentFrac, crush);
 
       // sparks at the struck side of the car
       const pt = this._tmpB.copy(me.position).addScaledVector(dir, 0.9);
       pt.y += 0.55;
-      this._sparks?.burst(Math.round(12 + strength * 70), pt);
+      this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
 
-      me.damage = (me.damage ?? 0) + strength;
-      me.onCarHit?.(strength, dir.clone());
+      me.damage = (me.damage ?? 0) + severity;
+      me.onCarHit?.(severity, dir.clone());
     }
   }
 
@@ -189,45 +201,60 @@ export class CarCollisions {
     geo.attributes.color.needsUpdate = true;
   }
 
-  /** dent every body panel of a car toward `dirWorld` by up to `amount` (m). */
-  _dentCar(entity, dirWorld, amount) {
+  /** deform a car: `dentFrac` (0..1 of panel size) crumples the struck side,
+   *  `crush` (0..1) caves the WHOLE shell inward + flattens it (semi pancakes). */
+  _dentCar(entity, dirWorld, dentFrac, crush) {
     entity.object3d?.traverse((o) => {
       if (!o.isMesh || !o.geometry?.attributes?.position) return;
       if (/wheel|tire|tyre|rim|glass|window/i.test(o.name)) return;  // skip spinners + glass
-      this._dentMesh(o, dirWorld, amount);
+      this._dentMesh(o, dirWorld, dentFrac, crush);
     });
   }
 
-  _dentMesh(mesh, dirWorld, amount) {
+  _dentMesh(mesh, dirWorld, dentFrac, crush) {
     const geo = mesh.geometry;
     const pos = geo.attributes.position;
     const ud = mesh.userData;
-    if (!ud._orig) {                                   // cache rest shape once
+    if (!ud._orig) {                                   // cache rest shape + size once
       ud._orig = new Float32Array(pos.array);
       geo.computeBoundingBox();
       ud._ctr = geo.boundingBox.getCenter(new THREE.Vector3());
+      ud._span = geo.boundingBox.getSize(new THREE.Vector3()).length() || 1;  // local-unit diagonal
     }
     // impact direction in the mesh's LOCAL frame (geometry space)
     mesh.getWorldQuaternion(this._q);
-    const local = dirWorld.clone().applyQuaternion(this._q.invert()).normalize();
-    const ctr = ud._ctr, orig = ud._orig, max = this.maxDent;
-    const rel = this._tmpA, cur = this._tmpB;
+    const local = this._dir.copy(dirWorld).applyQuaternion(this._q.invert()).normalize();
+    // dent + clamp in this panel's OWN units (fraction of its size)
+    const dent = ud._span * dentFrac, maxD = ud._span * 0.5;
+    const ctr = ud._ctr, orig = ud._orig;
+    const rel = this._rel, cur = this._cur;
     let touched = false;
     for (let i = 0; i < pos.count; i++) {
-      rel.set(pos.getX(i) - ctr.x, pos.getY(i) - ctr.y, pos.getZ(i) - ctr.z);
+      const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+      rel.set(px - ctr.x, py - ctr.y, pz - ctr.z);
       const r = rel.length() || 1e-4;
       const facing = (rel.x * local.x + rel.y * local.y + rel.z * local.z) / r;
-      if (facing <= 0.15) continue;                    // only the struck side
-      // push this vert inward (−local), scaled by how squarely it faces the hit
-      cur.set(pos.getX(i) - local.x * amount * facing,
-              pos.getY(i) - local.y * amount * facing,
-              pos.getZ(i) - local.z * amount * facing);
-      // clamp cumulative displacement from the rest position
+      let nx = px, ny = py, nz = pz;
+      // 1) directional dent — the struck side folds inward
+      if (facing > 0.15) {
+        nx -= local.x * dent * facing;
+        ny -= local.y * dent * facing;
+        nz -= local.z * dent * facing;
+      }
+      // 2) whole-body crush — every vert caves toward the body center and
+      // collapses vertically, so a big enough hit flattens the car (pancake).
+      // rel is re-read each hit, so this converges toward center, never past.
+      if (crush > 0) {
+        nx -= rel.x * crush * 0.5;
+        nz -= rel.z * crush * 0.5;
+        ny -= rel.y * crush * 0.9;
+      }
+      cur.set(nx, ny, nz);
+      // clamp each vert's TOTAL travel from rest (deep, for real destruction)
       const dx = cur.x - orig[i * 3], dy = cur.y - orig[i * 3 + 1], dz = cur.z - orig[i * 3 + 2];
       const d = Math.hypot(dx, dy, dz);
-      if (d > max) { const k = max / d; cur.set(orig[i * 3] + dx * k, orig[i * 3 + 1] + dy * k, orig[i * 3 + 2] + dz * k); }
-      pos.setXYZ(i, cur.x, cur.y, cur.z);
-      touched = true;
+      if (d > maxD) { const k = maxD / d; cur.set(orig[i * 3] + dx * k, orig[i * 3 + 1] + dy * k, orig[i * 3 + 2] + dz * k); }
+      if (d > 1e-4) { pos.setXYZ(i, cur.x, cur.y, cur.z); touched = true; }
     }
     if (touched) { pos.needsUpdate = true; geo.computeVertexNormals(); }
   }
