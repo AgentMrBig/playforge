@@ -213,7 +213,18 @@ export class RapierVehicle extends VehicleBody {
     // hood puts your feet ON the hood, not floating on a box (Erik). Falls
     // back to a cuboid only if the rig has no body geometry.
     let shape = null;
-    if (S?.bodyRoot) {
+    if (S?.hullPoints?.length >= 30) {
+      // rig supplied exact visual-space hull points (de-skinned vehicles) —
+      // shift into chassis frame, no scene-graph matrices involved
+      const pts = new Float32Array(S.hullPoints.length);
+      for (let i = 0; i < S.hullPoints.length; i += 3) {
+        pts[i] = S.hullPoints[i];
+        pts[i + 1] = S.hullPoints[i + 1] - this._restRide;
+        pts[i + 2] = S.hullPoints[i + 2];
+      }
+      shape = R.ColliderDesc.convexHull(pts);
+    }
+    if (!shape && S?.bodyRoot) {
       const pts = [];
       entity.object3d.updateWorldMatrix(true, true);
       const inv = new THREE.Matrix4().copy(entity.object3d.matrixWorld).invert();
@@ -382,7 +393,25 @@ export class RapierVehicle extends VehicleBody {
     // but a traction-limited launch should VISIBLY overspin the rubber
     this._spinExtra = (this._spinExtra ?? 0) + (this.wheelspin ? 38 * (1 / 60) : 0);
     const S = this.suspension;
-    if (S?.wheels) {
+    if (S?.boneMode) {
+      // skeletal rig (UE/Fab): wheels are BONES — vertical travel is
+      // bind-relative in the bone's parent frame; spin/steer compose ON the
+      // bind orientation (bone axes aren't identity)
+      this._q1 = this._q1 ?? new THREE.Quaternion();
+      this._q2 = this._q2 ?? new THREE.Quaternion();
+      this._wheelKeys.forEach((key, i) => {
+        const w = S.wheels[key], c = S.corners[key];
+        if (!w || !c) return;
+        const susp = this.ctrl.wheelSuspensionLength(i) ?? this.suspRest;
+        const hard = this.ctrl.wheelChassisConnectionPointCs(i);
+        const wantVisY = hard.y - susp + this._restRide;
+        w.position[c.upAxis] = c.bindL + (wantVisY - c.bindVisY) / c.gain;
+        const spin = (this.ctrl.wheelRotation(i) ?? 0) + (i >= 2 ? this._spinExtra : 0);
+        w.quaternion.copy(c.bindQ);
+        if (i < 2) w.quaternion.multiply(this._q1.setFromAxisAngle(c.steerAxis, this.steer * 0.9));
+        w.quaternion.multiply(this._q2.setFromAxisAngle(c.spinAxis, spin));
+      });
+    } else if (S?.wheels) {
       this._wheelKeys.forEach((key, i) => {
         const w = S.wheels[key];
         if (!w) return;

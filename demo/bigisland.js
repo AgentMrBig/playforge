@@ -394,9 +394,8 @@ loadCharacter("models/character/humanoid_male.fbx", {
           cb()?.setEnabled(false);
           // person-vs-car: body thud layered over a medium metal hit
           const hitVol = Math.min(1, sp / 18);
-          if (audio.playSfx("thud_body", { volume: hitVol }))
-            audio.playSfx("crash_metal_med", { volume: hitVol * 0.5, pitch: 1.1 });
-          else audio.play("crash", { volume: hitVol, pitch: 1.3 });
+          audio.playSfx("thud_body", { volume: hitVol });
+          audio.playSfx("crash_metal_med", { volume: hitVol * 0.45, pitch: 1.15 });
           break;
         }
       },
@@ -510,13 +509,12 @@ const physReady = initRapier().then(() => {
     const big = force > mass * 14;
     const vol = Math.min(1, force / (mass * (big ? 30 : 14)));
     const pitch = 0.9 + Math.random() * 0.25;
+    // real Suno files only — Erik killed the synth crash ("it's terrible")
     if (big) {
-      // layer: big metal + glass pop for the full wreck
-      if (audio.playSfx("crash_metal_big", { volume: vol, pitch })) {
-        audio.playSfx("glass_pop", { volume: vol * 0.7, pitch: 1 + Math.random() * 0.2 });
-      } else audio.play("crashBig", { volume: vol, pitch });
-    } else if (!audio.playSfx("crash_metal_med", { volume: vol, pitch })) {
-      audio.play("crash", { volume: vol, pitch });
+      audio.playSfx("crash_metal_big", { volume: vol, pitch });
+      audio.playSfx("glass_pop", { volume: vol * 0.7, pitch: 1 + Math.random() * 0.2 });
+    } else {
+      audio.playSfx("crash_metal_med", { volume: vol * 0.8, pitch: pitch * 1.1 });
     }
   });
 });
@@ -526,8 +524,7 @@ world.spawn("landingAudio").add({ fixedUpdate() {
     const vb = c.components.find((x) => x.rb);
     if (vb?.justLanded > 5) {
       const vol = Math.min(1, vb.justLanded / 16);
-      if (!audio.playSfx("thump_landing", { volume: vol, pitch: 0.95 + Math.random() * 0.15 }))
-        audio.play("crash", { volume: vol, pitch: 1.15 });
+      audio.playSfx("thump_landing", { volume: vol, pitch: 0.95 + Math.random() * 0.15 });
       vb.justLanded = 0;
     }
   }
@@ -553,10 +550,14 @@ const FLEET = [
   { name: "Classic", file: "models/sedanpack/Assets/Car.fbx",    dz: -5, hp: 300, ep: 13, top: 52, siren: 0, paint: 0xcc2222 },
   { name: "Police",  file: "models/sedanpack/Assets/Police.fbx", dz: 0,  hp: 360, ep: 14, top: 55, siren: 6 },
   { name: "Taxi",    file: "models/sedanpack/Assets/Taxi.fbx",   dz: 5,  hp: 260, ep: 12, top: 48, siren: 0 },
+  // Erik's Assetsville test export — skeletal UE rig, de-skinned at load
+  { name: "AVPolice", file: "models/fabpack/Ph_veh_PoliceCarSedan_01.fbx", dz: 10, hp: 380, ep: 14, top: 58, siren: 0,
+    opts: { targetLength: 5.0, textureDir: "models/fabpack", textureFlipY: true,
+      textureMap: { palette: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } } },
 ];
 const cars = [];
 for (const spec of FLEET) {
-  Promise.all([physReady, loadVehicle(spec.file, { targetLength: 4.7, textureDir: "models/sedanpack/Texture" })])
+  Promise.all([physReady, loadVehicle(spec.file, spec.opts ?? { targetLength: 4.7, textureDir: "models/sedanpack/Texture" })])
     .then(([, rig]) => {
       if (spec.paint) rig.setPaint(spec.paint);
       const e = world.spawn("drivable").mesh(rig.visual)

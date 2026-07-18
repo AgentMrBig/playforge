@@ -69,6 +69,7 @@ export async function loadVehicle(url, {
   shadows = true,
   textureDir = null,        // rebind material maps from here (fixes broken FBX refs)
   textureMap = null,        // {materialKeyword: filename} override
+  textureFlipY = false,     // per-pack UV convention (sedan pack false, Assetsville true)
 } = {}) {
   const ext = url.split(".").pop().toLowerCase();
   const loaderFn = LOADERS[ext];
@@ -84,7 +85,7 @@ export async function loadVehicle(url, {
       if (!cache.has(file)) {
         const t = texLoader.load(file);
         t.colorSpace = THREE.SRGBColorSpace;
-        t.flipY = false;                              // FBX UVs are already bottom-left
+        t.flipY = textureFlipY;                       // pack-specific UV convention
         cache.set(file, t);
       }
       return cache.get(file);
@@ -110,6 +111,26 @@ export async function loadVehicle(url, {
         if (file) { m.map = get(file); m.color.setHex(0xffffff); m.needsUpdate = true; }
       });
     });
+  }
+
+  // ---- SKELETAL vehicle path (UE exports: wheel BONES + one skinned mesh) --
+  // Fab/UE vehicles rig wheels as bones (wheelFL/FR/RL/RR) deforming a single
+  // SkinnedMesh — no separate wheel meshes to re-pivot. The bones ARE the
+  // pivots: spin/steer them and the skinning does the rest.
+  {
+    const boneWheels = {};
+    let hasSkin = false;
+    root.traverse((o) => {
+      if (o.isSkinnedMesh) hasSkin = true;
+      if (!o.isBone) return;
+      const n = o.name.toLowerCase();
+      if (!n.includes("wheel")) return;
+      const sub = n.includes("fl") ? "fl" : n.includes("fr") ? "fr"
+                : n.includes("rl") ? "rl" : n.includes("rr") ? "rr" : null;
+      if (sub) boneWheels[sub] = o;
+    });
+    if (hasSkin && Object.keys(boneWheels).length >= 4)
+      return rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shadows, textureDir, textureMap });
   }
 
   // ---- catalog meshes by role (surgery happens in raw model space) --------
@@ -241,6 +262,215 @@ export async function loadVehicle(url, {
     lights, paintMats: [...paintMats],
     openParts,
     /** repaint the body: tints the paint material(s) — hex like 0xff2020 */
+    setPaint(hex) { for (const m of paintMats) m.color.setHex(hex); },
+  };
+}
+
+/**
+ * Skeletal vehicle rig (UE/Fab exports): one rigidly-skinned mesh whose
+ * vertices each belong 100% to one bone (carBody / wheelFL/FR/RL/RR).
+ *
+ * Strategy: DE-SKIN AT LOAD. Every vertex is baked through its bone's bind
+ * transform once (applyBoneTransform — the renderer's own math), the mesh is
+ * split into a static body + four wheel meshes on plain pivot Groups at the
+ * measured wheel centers, and the original hierarchy is thrown away. No
+ * skinning at runtime, no bind matrices, no UE frame conventions — the
+ * result feeds the exact same suspension-rig contract as the mesh path.
+ * (Rigid skinning deforms nothing, so nothing is lost.)
+ */
+function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shadows }) {
+  const skins = [];
+  root.updateWorldMatrix(true, true);
+  root.traverse((o) => { if (o.isSkinnedMesh) skins.push(o); });
+
+  // ---- bake all vertices through the skinning math (raw world frame) ------
+  // buckets: "body" + wheel keys; each bucket → per-material triangle soup
+  const boneKeyByIndex = new Map();
+  for (const skin of skins)
+    skin.skeleton.bones.forEach((b, i) => {
+      for (const [key, wb] of Object.entries(boneWheels)) if (b === wb) boneKeyByIndex.set(skin.uuid + ":" + i, key);
+    });
+  const buckets = {};                     // key → matIndex → {pos:[], uv:[]}
+  const clusters = {};                    // wheel key → {sum, n, min, max}
+  const bb = { min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) };
+  const matList = [];                     // final material array
+  const matIndexOf = new Map();
+  const v = new THREE.Vector3();
+  for (const skin of skins) {
+    const geo = skin.geometry;
+    const pos = geo.attributes.position, uv = geo.attributes.uv;
+    const si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
+    const mats = Array.isArray(skin.material) ? skin.material : [skin.material];
+    for (const m of mats) if (!matIndexOf.has(m)) { matIndexOf.set(m, matList.length); matList.push(m); }
+    const groups = geo.groups?.length ? geo.groups : [{ start: 0, count: (geo.index ?? pos).count, materialIndex: 0 }];
+    const matForFace = (f) => {
+      const idx = f * 3;
+      for (const g of groups) if (idx >= g.start && idx < g.start + g.count) return matIndexOf.get(mats[g.materialIndex] ?? mats[0]);
+      return matIndexOf.get(mats[0]);
+    };
+    const keyForVert = (i) => {
+      let best = 0, bw = -1;
+      for (let k = 0; k < 4; k++) {
+        const w = sw.getComponent(i, k);
+        if (w > bw) { bw = w; best = si.getComponent(i, k); }
+      }
+      return boneKeyByIndex.get(skin.uuid + ":" + best) ?? "body";
+    };
+    const baked = (i, out) => {
+      out.fromBufferAttribute(pos, i);
+      skin.applyBoneTransform(i, out);
+      return out.applyMatrix4(skin.matrixWorld);
+    };
+    const idxArr = geo.index ? geo.index.array : null;
+    const faceCount = (idxArr ? idxArr.length : pos.count) / 3;
+    for (let f = 0; f < faceCount; f++) {
+      const ia = idxArr ? idxArr[f * 3] : f * 3;
+      const ib = idxArr ? idxArr[f * 3 + 1] : f * 3 + 1;
+      const ic = idxArr ? idxArr[f * 3 + 2] : f * 3 + 2;
+      const key = keyForVert(ia);
+      const mi = matForFace(f);
+      const bkt = (buckets[key] ?? (buckets[key] = {}));
+      const slot = (bkt[mi] ?? (bkt[mi] = { pos: [], uv: [] }));
+      for (const i of [ia, ib, ic]) {
+        baked(i, v);
+        slot.pos.push(v.x, v.y, v.z);
+        if (uv) slot.uv.push(uv.getX(i), uv.getY(i));
+        bb.min.min(v); bb.max.max(v);
+        if (key !== "body") {
+          const cl = clusters[key] ?? (clusters[key] = { sum: new THREE.Vector3(), n: 0, min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) });
+          cl.sum.add(v); cl.n++; cl.min.min(v); cl.max.max(v);
+        }
+      }
+    }
+  }
+  const centers = {};
+  for (const [k, cl] of Object.entries(clusters)) centers[k] = cl.sum.clone().divideScalar(cl.n);
+
+  // ---- PASS A: rotation from the wheel-center rectangle (points transform
+  // exactly; boxes under rotation do NOT — that bug sank two attempts) ------
+  const spread = (axis) => {
+    const vals = Object.values(centers).map((p) => p[axis]);
+    return Math.max(...vals) - Math.min(...vals);
+  };
+  const R = new THREE.Matrix4();
+  const rstep = (m) => {
+    R.premultiply(m);
+    for (const p of Object.values(centers)) p.applyMatrix4(m);
+  };
+  if (spread("z") < spread("y") && spread("z") < spread("x")) rstep(new THREE.Matrix4().makeRotationX(-Math.PI / 2));
+  else if (spread("x") < spread("y") && spread("x") < spread("z")) rstep(new THREE.Matrix4().makeRotationZ(Math.PI / 2));
+  if (spread("x") > spread("z")) rstep(new THREE.Matrix4().makeRotationY(-Math.PI / 2));
+
+  // ---- PASS B: stream every baked vertex through R once for EXACT bounds --
+  let rb, rcl, bodyB;
+  const passB = () => {
+    rb = { min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) };
+    rcl = {}; bodyB = { min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) };
+    for (const [key, bkt] of Object.entries(buckets)) {
+      for (const slot of Object.values(bkt)) {
+        for (let i = 0; i < slot.pos.length; i += 3) {
+          v.set(slot.pos[i], slot.pos[i + 1], slot.pos[i + 2]).applyMatrix4(R);
+          rb.min.min(v); rb.max.max(v);
+          if (key === "body") { bodyB.min.min(v); bodyB.max.max(v); }
+          else {
+            const c2 = rcl[key] ?? (rcl[key] = { min: new THREE.Vector3(1e9, 1e9, 1e9), max: new THREE.Vector3(-1e9, -1e9, -1e9) });
+            c2.min.min(v); c2.max.max(v);
+          }
+        }
+      }
+    }
+  };
+  passB();
+  // up-SIGN check: the wheel rectangle is symmetric, so the axis pick can't
+  // tell floor from roof — the police car came out upside down once. The
+  // body's mass must sit ABOVE the wheel centers; flip 180° if not.
+  {
+    const wheelMidY = Object.values(rcl).reduce((a, c2) => a + (c2.min.y + c2.max.y) / 2, 0) / Object.keys(rcl).length;
+    const bodyMidY = (bodyB.min.y + bodyB.max.y) / 2;
+    if (bodyMidY < wheelMidY) {
+      R.premultiply(new THREE.Matrix4().makeRotationZ(Math.PI));
+      for (const p of Object.values(centers)) p.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI));
+      passB();
+    }
+  }
+  const len = Math.max(rb.max.x - rb.min.x, rb.max.z - rb.min.z);
+  const s = targetLength / len;
+  let floorY = 1e9;
+  for (const c2 of Object.values(rcl)) floorY = Math.min(floorY, c2.min.y);
+  const cx = (rb.min.x + rb.max.x) / 2, cz = (rb.min.z + rb.max.z) / 2;
+  const fix = new THREE.Matrix4().makeTranslation(-cx * s, -floorY * s, -cz * s)
+    .multiply(new THREE.Matrix4().makeScale(s, s, s))
+    .multiply(R);
+  // final wheel centers + cluster extents (exact, scaled)
+  for (const [key, p] of Object.entries(centers)) {
+    p.multiplyScalar(s).add(new THREE.Vector3(-cx * s, -floorY * s, -cz * s));
+    const c2 = rcl[key];
+    clusters[key].min.copy(c2.min).multiplyScalar(s);
+    clusters[key].max.copy(c2.max).multiplyScalar(s);
+  }
+
+  // ---- build plain meshes: body group + wheel pivots at their centers -----
+  const visual = new THREE.Group();
+  const bodyRoot = new THREE.Group();
+  const wheelRoot = new THREE.Group();
+  visual.add(bodyRoot, wheelRoot);
+  const paintMats = new Set();
+  for (const m of matList) {
+    const n = (m.name || "").toLowerCase();
+    if (n.includes("glass")) { m.transparent = true; m.opacity = glassOpacity; m.color.setHex(0x20303a); }
+    else if (!n.includes("palette")) paintMats.add(m);
+  }
+  const hullPts = [];                                  // visual-space body verts for the physics hull
+  const buildMeshes = (bkt, parent, offset, collectHull) => {
+    for (const [mi, slot] of Object.entries(bkt)) {
+      const g = new THREE.BufferGeometry();
+      const arr = new Float32Array(slot.pos);
+      for (let i = 0; i < arr.length; i += 3) {
+        v.set(arr[i], arr[i + 1], arr[i + 2]).applyMatrix4(fix);
+        if (collectHull && (i % 24 === 0)) hullPts.push(v.x, v.y, v.z);
+        if (offset) v.sub(offset);
+        arr[i] = v.x; arr[i + 1] = v.y; arr[i + 2] = v.z;
+      }
+      g.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+      if (slot.uv.length) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(slot.uv), 2));
+      g.computeVertexNormals();                        // flat facets (non-indexed)
+      const mesh = new THREE.Mesh(g, matList[+mi]);
+      if (shadows) mesh.castShadow = true;
+      parent.add(mesh);
+    }
+  };
+  buildMeshes(buckets.body ?? {}, bodyRoot, null, true);
+  const wheels = {}, corners = {};
+  let radius = 0.32, width = 0.24;
+  for (const key of ["fl", "fr", "rl", "rr"]) {
+    if (!buckets[key]) continue;
+    const c = centers[key], cl = clusters[key];
+    const pivot = new THREE.Group();
+    pivot.position.copy(c);
+    wheelRoot.add(pivot);
+    buildMeshes(buckets[key], pivot, c);
+    wheels[key] = pivot;
+    corners[key] = { ox: c.x, oz: c.z, restLy: c.y };
+    radius = Math.max(0.15, (cl.max.y - cl.min.y) / 2);
+    width = Math.max(0.12, cl.max.x - cl.min.x);
+  }
+
+  const suspension = {
+    bodyRoot, wheelRoot, scale: 1,
+    hullPoints: hullPts,                 // exact visual-space physics hull, no scene-graph math
+    wheelRadius: radius, wheelWidth: width,
+    baseBodyY: 0, corners, wheels,
+    track: Math.abs(corners.fl.ox - corners.fr.ox) || 1.5,
+    wheelbase: Math.abs(corners.fl.oz - corners.rl.oz) || 2.8,
+    rearOffset: Math.abs(corners.rl.oz),
+  };
+
+  return {
+    visual, chassis: bodyRoot,
+    wheels, wheelRadius: radius, suspension,
+    doors: {}, hood: null, trunk: null, steering: null, lightbar: null,
+    searchlight: null, radio: null, lights: {}, paintMats: [...paintMats],
+    openParts: [],
     setPaint(hex) { for (const m of paintMats) m.color.setHex(hex); },
   };
 }
