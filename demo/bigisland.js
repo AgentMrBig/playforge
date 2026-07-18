@@ -373,10 +373,14 @@ loadCharacter("models/fabpack/SK_citizen_male_28.fbx", {
           if (body) body._lastSynced.copy(player.position);   // no teleport-fight
           if (rag.settled(1.3)) {                             // stand back up
             rag.exit();
-            const g = heightAt(player.position.x, player.position.z);
-            player.at(player.position.x, g + 0.2, player.position.z);
+            // get up WHERE the body came to rest — never below the terrain,
+            // but keep the pelvis height when it settled on top of something
+            // (snapping to raw terrain read as a teleport-respawn to Erik)
+            const p2 = rag.pelvisPos();
+            const g = heightAt(p2.x, p2.z);
+            player.at(p2.x, Math.max(g + 0.2, p2.y - 0.55), p2.z);
             cb()?.setEnabled(true);
-            ch.animator.play("idle", { fade: 0.2 });
+            ch.animator.play("idle", { fade: 0.55 });         // slow rise, not a pop
           }
           return;
         }

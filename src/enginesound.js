@@ -124,19 +124,33 @@ export class EngineSound {
     const body = entity.components.find((c) => c.speed !== undefined && c.throttle !== undefined);
     if (!body || !this.running) { n.master.gain.value *= 0.9; return; }
 
-    // ---- gearbox: speed → gear → rpm --------------------------------------
+    // ---- gearbox + engine state: RPM is SIMULATED, not a map of road speed.
+    // The engine is clutched to the DRIVEN wheels — wheelspin revs it past
+    // road speed, locked rears drag it down, and it carries its own inertia
+    // (Erik: "engine sounds are directly linked to the cars speed, this is
+    // not realistic").
     const topSpeed = body.topSpeed ?? 38;
     const s = Math.abs(body.speed);
+    const t0 = Math.abs(body.throttle);
     const band = topSpeed / this.gears;
-    const gear = Math.min(this.gears - 1, Math.floor(s / band));
-    if (gear !== this._gear) { this._shiftT = 0.14; this._gear = gear; }
+    // shift hysteresis: up near the top of the band, down well into the one
+    // below — no gear-hunting on the boundary
+    if (s > (this._gear + 1) * band * 1.02 && this._gear < this.gears - 1) { this._gear++; this._shiftT = 0.18; }
+    else if (s < this._gear * band * 0.82 && this._gear > 0) { this._gear--; this._shiftT = 0.12; }
     this._shiftT = Math.max(0, this._shiftT - dt);
-    let inGear = (s - gear * band) / band;        // 0..1 within the gear
-    let rpmN = 0.12 + inGear * 0.88;
-    if (this._shiftT > 0) rpmN *= 0.62;           // clutch dip on the shift
+    // what the driven wheels ask of the engine through the current gear
+    const inGear = Math.min(1.15, Math.max(0, (s - this._gear * band) / band));
+    let wheelRpmN = 0.12 + inGear * 0.88;
+    if (body.wheelspin) wheelRpmN = Math.max(wheelRpmN, 0.93);   // burnout: revs flare free
+    if (body.handbrake && s > 3) wheelRpmN *= 0.55;              // locked rears drag the clutch
     const idleN = this.idleRpm / this.redline;
-    const wantRpm = this.redline * Math.max(idleN, rpmN * Math.max(0.35, Math.abs(body.throttle)) + (1 - Math.abs(body.throttle)) * rpmN * 0.8);
-    this.rpm += (wantRpm - this.rpm) * (1 - Math.exp(-dt * 8));
+    let wantN = Math.max(idleN, this._shiftT > 0 ? wheelRpmN * 0.62 : wheelRpmN);
+    // engine inertia: throttle spins it up fast (faster still with a slipping
+    // wheel to help), engine-braking bleeds it down slow
+    const curN = this.rpm / this.redline;
+    const rate = wantN > curN ? (2.2 + 6 * t0) * (body.wheelspin ? 1.6 : 1) : 1.4;
+    const step = Math.max(-rate * dt, Math.min(rate * dt, wantN - curN));
+    this.rpm = (curN + step) * this.redline;
 
     // ---- firing frequency drives the stack (one octave down: warm, not
     // whiney — pitch still tracks rpm, just in a listenable register) -------

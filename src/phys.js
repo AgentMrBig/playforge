@@ -371,14 +371,29 @@ export class RapierVehicle extends VehicleBody {
     // drags them), and CRUCIALLY the momentum keeps ruling because the
     // fronts alone can't bend the path much. Friction params only.
     const hb = this.handbrake;
-    const slipFade = 1 - 0.55 * Math.min(1, Math.max(0, Math.abs(this.slipRear ?? 0) - 0.17) / 0.5);
-    // grip LOSS is instant (wheels lock), grip RECOVERY takes time — the
-    // rubber has to spin back up to road speed. Instant re-grip on space
-    // release snapped the car straight (Erik). ~0.5s ramp back.
-    const rearTarget = hb ? this.driftSideFriction : this.sideFriction * slipFade;
+    // SLIP-BASED rear grip — no recovery timers (Erik: releasing the ebrake
+    // must not re-hook mid-slide; the slide is held by throttle/brake).
+    // 1) kinetic < static: an axle sliding sideways holds less rubber, and
+    //    grip only returns as the slip angle itself decays. Low grip keeps
+    //    the slide alive keeps grip low — the hysteresis Erik wants IS this
+    //    feedback loop, no clock needed.
+    const slipA = Math.abs(this.slipRear ?? 0);
+    const kin = 1 - 0.8 * THREE.MathUtils.smoothstep(slipA, 0.06, 0.3);
+    // 2) friction circle: longitudinal demand (throttle spin or brake drag)
+    //    spends the same contact patch — flooring it mid-slide keeps the
+    //    rear loose, lifting off lets it hook back up. Normalized against
+    //    the powertrain's own launch force so it bites on genuine saturation
+    //    (burnout, panic brake), not on ordinary full-throttle cruising.
+    const longDemand = Math.min(1,
+      Math.abs(engine) / (this.mass * this.enginePower) * 1.15 +
+      brake / (this.mass * this.brakePower) * 0.8);
+    const circle = Math.sqrt(Math.max(0.06, 1 - longDemand * longDemand));
+    const rearTarget = hb ? this.driftSideFriction : this.sideFriction * kin * circle;
     this._rearGrip = this._rearGrip ?? this.sideFriction;
-    if (rearTarget < this._rearGrip) this._rearGrip = rearTarget;             // lock: instant
-    else this._rearGrip = Math.min(rearTarget, this._rearGrip + 1.6 * dt);    // recover: ramp
+    if (rearTarget < this._rearGrip) this._rearGrip = rearTarget;             // loss: instant
+    // the one time constant left is physical: locked rubber spinning back
+    // up to road speed (~0.25s), not a hand-tuned "recovery" clock
+    else this._rearGrip = Math.min(rearTarget, this._rearGrip + this.sideFriction * 4 * dt);
     const rearSide = this._rearGrip;
     this.ctrl.setWheelSideFrictionStiffness(0, hb ? this.sideFriction * 0.7 : this.sideFriction);
     this.ctrl.setWheelSideFrictionStiffness(1, hb ? this.sideFriction * 0.7 : this.sideFriction);
