@@ -227,8 +227,14 @@ export class RapierVehicle extends VehicleBody {
     };
     for (const key of this._wheelKeys) {
       const c = corners[key];
+      // single-axle rigs (the pack's rear "wheels_b" mesh) report BOTH rear
+      // corners at ox=0 — that put both raycast wheels on the centerline
+      // (one merged skid mark, rear grip acting at the middle). Spread them
+      // to the real half-track.
+      let ox = c.ox;
+      if (Math.abs(ox) < 0.05) ox = (key.endsWith("l") ? 1 : -1) * track / 2;
       this.ctrl.addWheel(
-        { x: c.ox, y: hardY, z: c.oz }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 },
+        { x: ox, y: hardY, z: c.oz }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 },
         this.suspRest, rad);
     }
     for (let i = 0; i < 4; i++) {
