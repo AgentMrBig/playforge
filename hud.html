@@ -29,13 +29,8 @@
     hud.render({ kmh: 92, topKmh: 140, onGround: true });
     // interactive: slider drives it (needs a real pointer; fine for manual play)
     const spd = document.getElementById("spd");
+    spd.value = 118; hud.render({ kmh: 118, topKmh: 140, onGround: true });
     spd.addEventListener("input", () => hud.render({ kmh: +spd.value, topKmh: 140, onGround: true }));
-    // gentle auto-demo when a real rAF is available (won't tick in a throttled tab)
-    let t = 0;
-    (function demo() {
-      if (!document.hidden) { t += 0.016; const v = 70 + 68 * Math.sin(t * 0.6); hud.render({ kmh: Math.max(0, v), topKmh: 140, onGround: true }); }
-      requestAnimationFrame(demo);
-    })();
   </script>
 </body>
 </html>
