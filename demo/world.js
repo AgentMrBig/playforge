@@ -92,10 +92,11 @@ const bandMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0 });
 const cones = [];
 for (let i = 0; i < 9; i++) {
   const g = new THREE.Group();
-  const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.45; c.castShadow = true;
-  const b = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.31, 0.16, 10), bandMat); b.position.y = 0.5;
+  // visuals centered on the entity origin = the physics body center
+  const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.03; c.castShadow = true;
+  const b = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.31, 0.16, 10), bandMat); b.position.y = 0.08;
   g.add(c, b);
-  cones.push(world.spawn("cone").mesh(g).at(-40 + i * 14, 0, -80));
+  cones.push(world.spawn("cone").mesh(g).at(-40 + i * 14, 0.42, -80));
 }
 
 // jump ramp — a wedge with a matching ground provider so the car climbs + flies

@@ -353,20 +353,29 @@ const crateMat = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.
 for (let row = 0; row < 3; row++)                        // crate pyramid
   for (let i = 0; i < 3 - row; i++)
     prop(new THREE.Mesh(crateGeo, crateMat).clone(),
-      RUN.x0 + 80 + i * 0.9 + row * 0.45, RUN.h + row * 0.86, LANE,
+      RUN.x0 + 80 + i * 0.9 + row * 0.45, RUN.h + 0.43 + row * 0.86, LANE,
       { half: [0.425, 0.425, 0.425], mass: 25, restitution: 0.2 });
 const coneGeo = new THREE.ConeGeometry(0.35, 0.9, 10);
 const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a1a });
 for (let i = 0; i < 7; i++) {                            // cone slalom
   const g = new THREE.Group();
-  const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.45; c.castShadow = true;
+  const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.03; c.castShadow = true; // centered on the body
   g.add(c);
-  prop(g, RUN.x0 + 120 + i * 10, RUN.h, LANE, { half: [0.28, 0.42, 0.28], mass: 3.5, restitution: 0.35 });
+  prop(g, RUN.x0 + 120 + i * 10, RUN.h + 0.42, LANE, { half: [0.28, 0.42, 0.28], mass: 3.5, restitution: 0.35 });
 }
-const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1.4, 20, 14),
-  new THREE.MeshStandardMaterial({ color: 0xc03a70, roughness: 0.6 }));
+// the push ball — striped so you SEE it roll (a plain sphere reads as sliding)
+const ballTex = (() => {
+  const cv = document.createElement("canvas"); cv.width = 128; cv.height = 64;
+  const g = cv.getContext("2d");
+  const cols = ["#c03a70", "#f0e8dc", "#3a6ec0", "#f0e8dc"];
+  for (let i = 0; i < 8; i++) { g.fillStyle = cols[i % 4]; g.fillRect(i * 16, 0, 16, 64); }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1.4, 24, 16),
+  new THREE.MeshStandardMaterial({ map: ballTex, roughness: 0.6 }));
 ballMesh.castShadow = true;
-prop(ballMesh, RUN.x0 + 205, RUN.h, LANE, { half: { r: 1.4 }, mass: 120, shape: "ball", restitution: 0.55 });
+prop(ballMesh, RUN.x0 + 205, RUN.h + 1.4, LANE, { half: { r: 1.4 }, mass: 120, shape: "ball", restitution: 0.55 });
 // static concrete barriers
 const BARRIERS = [];
 for (let i = 0; i < 3; i++) {

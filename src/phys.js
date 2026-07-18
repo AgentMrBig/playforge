@@ -108,16 +108,17 @@ export class Physics {
   }
 
   /**
-   * Dynamic prop: the entity's visual becomes a real rigid box the cars can
-   * plow through (cones, crates, obstacles). Entity origin becomes the body
-   * CENTER; existing children are shifted down half-height to compensate.
+   * Dynamic prop: the entity's visual becomes a real rigid body the cars can
+   * plow through (cones, crates, obstacles). CONVENTION: entity.position is
+   * the body CENTER, and the visual must be authored centered on the entity
+   * origin. (The old auto-shift-children hack put center-origin meshes a
+   * half-height below their body — Erik watched the big ball visually ORBIT
+   * its physics center and rightly called it fake-looking.)
    */
   addDynamicProp(entity, { half = [0.3, 0.45, 0.3], mass = 4, friction = 0.7, restitution = 0.3, shape = "box" } = {}) {
     const p = entity.position;
-    const lift = shape === "ball" ? (half.r ?? half[0]) : half[1];
-    for (const child of entity.object3d.children) child.position.y -= lift;
     const rb = this.world.createRigidBody(
-      R.RigidBodyDesc.dynamic().setTranslation(p.x, p.y + lift, p.z)
+      R.RigidBodyDesc.dynamic().setTranslation(p.x, p.y, p.z)
         .setRotation(quatY(entity.rotation?.y ?? 0)).setCanSleep(true));
     const desc = shape === "ball"
       ? R.ColliderDesc.ball(half.r ?? half[0])
@@ -309,7 +310,13 @@ export class RapierVehicle extends VehicleBody {
     const latV = this.velocity.dot(right);
 
     let grounded = 0;
-    for (let i = 0; i < 4; i++) if (this.ctrl.wheelIsInContact(i)) grounded++;
+    this.wheelContacts = this.wheelContacts ?? {};
+    this._wheelKeys.forEach((key, i) => {
+      const hit = this.ctrl.wheelIsInContact(i);
+      if (hit) grounded++;
+      const cp = hit ? this.ctrl.wheelContactPoint(i) : null;
+      this.wheelContacts[key] = cp ? { x: cp.x, y: cp.y, z: cp.z } : null;
+    });
     this.onGround = grounded >= 2;
 
     // slip state — from the real velocities, for SkidMarks/audio

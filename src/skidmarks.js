@@ -89,7 +89,10 @@ export class SkidMarks {
 
     // ---- are we slipping? Physically: rear slip angle past the tire peak,
     // wheelspin, or locked wheels — NOT "turning at all" -------------------
-    const yaw = entity.rotation.y;
+    // heading from the QUATERNION — entity.rotation.y is a wrapped euler on a
+    // fully-3D body and lies during sharp turns (marks veered off; Erik saw)
+    const f3 = new THREE.Vector3(0, 0, 1).applyQuaternion(entity.object3d.quaternion);
+    const yaw = Math.atan2(f3.x, f3.z);
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
     const spd = Math.abs(body.speed);
@@ -107,14 +110,21 @@ export class SkidMarks {
 
     if (!slipping) { this._prev = null; return; }
 
-    // rear axle ground points
-    const cx = entity.position.x - fwd.x * this.rearOffset;
-    const cz = entity.position.z - fwd.z * this.rearOffset;
+    // rear ground points — the REAL wheel contact points when the body has
+    // them (Rapier raycast wheels), else derived from the rear-axle offsets
     const pts = [];
-    for (const side of [-1, 1]) {
-      const x = cx + right.x * this.track * side;
-      const z = cz + right.z * this.track * side;
-      pts.push(new THREE.Vector3(x, this._groundY(world, x, z) + this.yLift, z));
+    const wc = body.wheelContacts;
+    if (wc?.rl && wc?.rr) {
+      pts.push(new THREE.Vector3(wc.rl.x, wc.rl.y + this.yLift, wc.rl.z));
+      pts.push(new THREE.Vector3(wc.rr.x, wc.rr.y + this.yLift, wc.rr.z));
+    } else {
+      const cx = entity.position.x - fwd.x * this.rearOffset;
+      const cz = entity.position.z - fwd.z * this.rearOffset;
+      for (const side of [-1, 1]) {
+        const x = cx + right.x * this.track * side;
+        const z = cz + right.z * this.track * side;
+        pts.push(new THREE.Vector3(x, this._groundY(world, x, z) + this.yLift, z));
+      }
     }
     if (this._prev) {
       const moved = pts[0].distanceTo(this._prev[0]);
