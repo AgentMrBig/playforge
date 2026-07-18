@@ -54,6 +54,14 @@ export class Input {
     on(target, "contextmenu", (e) => e.preventDefault());
   }
 
+  /** GTA-style mouse look: click canvas → pointer locks; Esc releases (browser default) */
+  enablePointerLock() {
+    const req = () => { if (document.pointerLockElement !== this.target) this.target.requestPointerLock(); };
+    this.target.addEventListener("pointerdown", req);
+    this._h.push([this.target, "pointerdown", req]);
+  }
+  get pointerLocked() { return document.pointerLockElement === this.target; }
+
   bind(action, codes) { this._bindings.set(action, codes); }
 
   down(code) { return this._keys.has(code); }

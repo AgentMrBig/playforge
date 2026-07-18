@@ -3,6 +3,7 @@ export { Engine } from "./engine.js";
 export { World, Entity } from "./world.js";
 export { Input } from "./input.js";
 export { OrbitRig, FollowRig } from "./camera.js";
+export { ThirdPersonRig } from "./thirdperson.js";
 export { Audio } from "./audio.js";
 export { Body, Collider, raycast } from "./physics.js";
 export { Emitter } from "./particles.js";

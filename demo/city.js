@@ -1,7 +1,7 @@
 // PLAYFORGE CITY — GTA-style procedural city: seeded generator, AI traffic,
 // on-foot player. R = new city, ?seed=N pins one.
 import {
-  Engine, World, OrbitRig, Audio, Body, Collider, THREE,
+  Engine, World, ThirdPersonRig, Audio, Body, Collider, THREE,
 } from "../src/index.js";
 import { generateCity, rng } from "./citygen.js";
 
@@ -155,11 +155,14 @@ const player = world.spawn("player")
   .add(new Body({ size: [0.6, 1.35, 0.6], offset: [0, 0.55, 0] }))
   .add(new PlayerMove());
 
-// camera: follow loosely, orbit around the player
-const rig = new OrbitRig({ target: city.spawn, distance: 14, pitch: 0.42, maxDist: 400 });
-world.spawn("camera").add(rig).add({
-  update(dt) { rig.target.lerp(player.position.clone().add(new THREE.Vector3(0, 1.4, 0)), dt * 3); },
+// camera: the GTA rig — click once to lock the mouse, Esc to release
+engine.input.enablePointerLock();
+const rig = new ThirdPersonRig(player, {
+  distance: 6.5,
+  isSprinting: () => engine.input.down("ShiftLeft") &&
+    Math.hypot(player.get(Body).velocity.x, player.get(Body).velocity.z) > 8,
 });
+world.spawn("camera").add(rig);
 
 // R = new city
 window.addEventListener("keydown", (e) => {
