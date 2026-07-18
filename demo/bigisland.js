@@ -7,7 +7,7 @@ import {
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle,
-  fbm, ridged, mulberry, THREE,
+  fbm, ridged, mulberry, THREE, HUD,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -485,6 +485,15 @@ world.spawn("hud").add({ update() {
   el.textContent = drivingCar
     ? `${drivingCar.specName} · ${Math.round(drivingCar.components.find((c) => c.rb)?.kmh ?? 0)} km/h · [O]panels [C]paint [L]lights [F]recover`
     : `${cars.length}/3 cars · tiles ${terrain.tileCount} · runway → brick wall dead ahead · [E] near a car to drive`;
+} });
+
+// SPEEDOMETER (General, #179 HUD lane): analog gauge, visible only while driving.
+// Driven off the engine's own per-frame update — reads the current car's kmh read-only.
+const speedo = new HUD().mount();
+world.spawn("speedo").add({ update() {
+  const rb = drivingCar?.components.find((c) => c.rb);
+  speedo.canvas.style.display = rb ? "block" : "none";
+  if (rb) speedo.render({ kmh: rb.kmh ?? 0, onGround: true });
 } });
 
 engine.start();
