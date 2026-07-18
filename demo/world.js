@@ -4,7 +4,7 @@
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Heightfield,
   VehicleBody, PlayerVehicleControls, EngineSound, SkidMarks,
-  Animator, buildHumanoid, loadVehicle, VehicleRig,
+  Animator, buildHumanoid, loadVehicle, VehicleRig, RoadNetwork,
   fbm, mulberry, THREE,
 } from "../src/index.js";
 
@@ -116,6 +116,18 @@ function makeRamp(x0, length, height, width) {
   return provider;
 }
 world.spawn("ramp").add(makeRamp(150, 16, 4.2, 12));  // climb 16m to 4.2m, launch
+
+// circuit road looping the proving ground (shows the road system in context)
+const roads = new RoadNetwork({ ground: (x, z) => islandHeight(x, z) });
+world.spawn("roads").add(roads);
+{
+  const loop = [], R = 195;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    loop.push([Math.cos(a) * R * (0.9 + 0.15 * Math.sin(a * 2)), Math.sin(a) * R]);
+  }
+  roads.addRoad(loop, { width: 10, closed: true });
+}
 
 // ============================================================================
 // CARS — the textured pack, fully rigged

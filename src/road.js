@@ -30,9 +30,9 @@ export class RoadNetwork {
   init(entity, world) { world.scene.add(this.group); this.world = world; }
   dispose() { this.group.parent?.remove(this.group); }
 
-  addRoad(points, { width = 8 } = {}) {
+  addRoad(points, { width = 8, closed = false } = {}) {
     const nodes = points.map((p) => Array.isArray(p) ? new THREE.Vector3(p[0], 0, p[1]) : p.clone());
-    const road = { nodes, width, group: new THREE.Group() };
+    const road = { nodes, width, closed, group: new THREE.Group() };
     this.roads.push(road);
     this.group.add(road.group);
     this._rebuild(road);
@@ -50,8 +50,8 @@ export class RoadNetwork {
       }
       return;
     }
-    const curve = new THREE.CatmullRomCurve3(road.nodes, false, "catmullrom", 0.5);
-    const n = Math.max(8, (road.nodes.length - 1) * this.segPerNode);
+    const curve = new THREE.CatmullRomCurve3(road.nodes, !!road.closed, "catmullrom", 0.5);
+    const n = Math.max(8, (road.nodes.length - (road.closed ? 0 : 1)) * this.segPerNode);
     const pts = curve.getPoints(n).map((p) => this._onGround(p));
 
     const hw = road.width * 0.5;
@@ -121,11 +121,11 @@ export class RoadNetwork {
   clear() { for (const r of this.roads) r.group.clear(); this.roads.length = 0; }
 
   toJSON() {
-    return { roads: this.roads.map((r) => ({ width: r.width, nodes: r.nodes.map((n) => [+n.x.toFixed(2), +n.z.toFixed(2)]) })) };
+    return { roads: this.roads.map((r) => ({ width: r.width, closed: !!r.closed, nodes: r.nodes.map((n) => [+n.x.toFixed(2), +n.z.toFixed(2)]) })) };
   }
   fromJSON(data) {
     this.clear();
-    for (const r of data.roads || []) this.addRoad(r.nodes, { width: r.width });
+    for (const r of data.roads || []) this.addRoad(r.nodes, { width: r.width, closed: r.closed });
   }
 }
 
