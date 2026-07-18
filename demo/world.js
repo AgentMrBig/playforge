@@ -4,7 +4,7 @@
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Heightfield,
   VehicleBody, PlayerVehicleControls, EngineSound, SkidMarks,
-  Animator, buildHumanoid, loadVehicle, VehicleRig, RoadNetwork,
+  Animator, buildHumanoid, loadVehicle, VehicleRig, RoadNetwork, CarCollisions,
   fbm, mulberry, THREE,
 } from "../src/index.js";
 
@@ -133,6 +133,7 @@ world.spawn("roads").add(roads);
 // CARS — the textured pack, fully rigged
 // ============================================================================
 let drivingCar = null;
+world.spawn("carCollisions").add(new CarCollisions({ audio }));   // car-vs-car contact + sparks
 const FLEET = [
   { name: "Classic", file: "models/sedanpack/Assets/Car.fbx",    z: -6, hp: 300, ep: 13, top: 52, grip: 11, siren: 0, paint: 0xcc2222 },
   { name: "Police",  file: "models/sedanpack/Assets/Police.fbx", z: 0,  hp: 360, ep: 14, top: 55, grip: 12, siren: 6 },
