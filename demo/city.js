@@ -2,7 +2,7 @@
 // on-foot player. R = new city, ?seed=N pins one.
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Collider,
-  VehicleBody, PlayerVehicleControls, THREE,
+  VehicleBody, PlayerVehicleControls, EngineSound, Animator, buildHumanoid, THREE,
 } from "../src/index.js";
 import { generateCity, rng } from "./citygen.js";
 
@@ -126,40 +126,35 @@ for (let i = 0; i < 34; i++) {
     .add(ai);
 }
 
-// ---- drivable cars (VehicleBody physics) near spawn ------------------------
+// ---- drivable cars: four hp tiers, each with its own simulated engine ------
 let drivingCar = null; // entity while behind the wheel
-const parked = [];
-for (let i = 0; i < 4; i++) {
-  const { visual, chassis, wheels } = makeCar(CAR_COLORS[(i + 2) % CAR_COLORS.length]);
+const GARAGE = [
+  { name: "Sedan",     hp: 120,   enginePower: 8,  topSpeed: 32, color: 0xd8d8d8 },
+  { name: "Muscle",    hp: 450,   enginePower: 12, topSpeed: 42, color: 0xc23b3b },
+  { name: "Supercar",  hp: 800,   enginePower: 16, topSpeed: 52, color: 0xd8a13b },
+  { name: "TOP FUEL",  hp: 11000, enginePower: 34, topSpeed: 90, color: 0x2f2f34 },
+];
+for (let i = 0; i < GARAGE.length; i++) {
+  const spec = GARAGE[i];
+  const { visual, chassis, wheels } = makeCar(spec.color);
   const e = world.spawn("drivable")
     .mesh(visual)
     .at(city.spawn[0] + 6 + i * 5, 0, city.spawn[2] + 4)
-    .add(new VehicleBody({ chassis, wheels }))
-    .add(new PlayerVehicleControls({ enabled: () => drivingCar === e }));
+    .add(new VehicleBody({ chassis, wheels, enginePower: spec.enginePower, topSpeed: spec.topSpeed }))
+    .add(new PlayerVehicleControls({ enabled: () => drivingCar === e }))
+    .add(new EngineSound(audio, { hp: spec.hp }));
   e.rotation.y = Math.PI / 2;
-  parked.push(e);
+  e.specName = spec.name;
+  e.specHp = spec.hp;
 }
 
-// engine hum: pitch follows speed while driving
-let engineOsc = null;
-function engineSound(on) {
-  if (on && !engineOsc && audio.ctx) {
-    const o = audio.ctx.createOscillator(), g = audio.ctx.createGain();
-    o.type = "sawtooth"; o.frequency.value = 55; g.gain.value = 0.05;
-    o.connect(g).connect(audio.ctx.destination); o.start();
-    engineOsc = { o, g };
-  } else if (!on && engineOsc) { engineOsc.o.stop(); engineOsc = null; }
-}
-world.spawn("enginePitch").add({
+world.spawn("hud").add({
   update() {
-    if (engineOsc && drivingCar) {
-      const b = drivingCar.get(VehicleBody);
-      engineOsc.o.frequency.value = 55 + b.kmh * 2.4;
-      engineOsc.g.gain.value = 0.035 + Math.min(b.kmh / 400, 0.05);
-    }
     const hudSpeed = document.getElementById("speed");
     if (hudSpeed) hudSpeed.textContent = drivingCar
-      ? Math.round(drivingCar.get(VehicleBody).kmh) + " km/h" : "";
+      ? drivingCar.specName + " (" + drivingCar.specHp + " hp) — " +
+        Math.round(drivingCar.get(VehicleBody).kmh) + " km/h"
+      : "";
   },
 });
 
@@ -182,24 +177,27 @@ class PlayerMove {
     if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
     if (wish.lengthSq() > 0.01)
       entity.rotation.y = Math.atan2(body.velocity.x, body.velocity.z);
+
+    // drive the animation state machine off physics state
+    const anim = entity.get(Animator);
+    if (anim) {
+      const planar = Math.hypot(body.velocity.x, body.velocity.z);
+      if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
+      else if (planar > 8) anim.play("run", { fade: 0.15 });
+      else if (planar > 0.5) anim.play("walk", { fade: 0.18, speed: planar / 4.4 });
+      else anim.play("idle", { fade: 0.3 });
+    }
   }
 }
 
+const rigHuman = buildHumanoid({ shirt: 0x4d8dff });
 const player = world.spawn("player")
-  .mesh((() => {
-    const g = new THREE.Group();
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.5),
-      new THREE.MeshStandardMaterial({ color: 0x4d8dff }));
-    b.position.y = 0.45; b.castShadow = true;
-    const h = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
-      new THREE.MeshStandardMaterial({ color: 0xf2c9a0 }));
-    h.position.y = 1.15; h.castShadow = true;
-    g.add(b, h);
-    return g;
-  })())
+  .mesh(rigHuman.root)
   .at(...city.spawn)
-  .add(new Body({ size: [0.6, 1.35, 0.6], offset: [0, 0.55, 0] }))
+  .add(new Body({ size: [0.6, 1.55, 0.6], offset: [0, 0.78, 0] }))
+  .add(new Animator(rigHuman.root, rigHuman.clips))
   .add(new PlayerMove());
+player.get(Animator).play("idle");
 
 // camera: the GTA rig — click once to lock the mouse, Esc to release
 engine.input.enablePointerLock();
@@ -217,7 +215,7 @@ window.addEventListener("keydown", (e) => {
     if (drivingCar) {                       // step out
       const car = drivingCar;
       drivingCar = null;
-      engineSound(false);
+      car.components.find((c) => c.rpm !== undefined)?.stop();
       const yaw = car.rotation.y;
       player.at(car.position.x + Math.cos(yaw) * 2.4, car.position.y + 0.3,
                 car.position.z - Math.sin(yaw) * 2.4);
@@ -234,7 +232,7 @@ window.addEventListener("keydown", (e) => {
         drivingCar = best;
         player.object3d.visible = false;
         audio.play("click");
-        engineSound(true);
+        best.components.find((c) => c.rpm !== undefined)?.start();
         rig.target = best;
         rig.distance = 9.5;
       }
