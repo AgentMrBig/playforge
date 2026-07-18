@@ -67,6 +67,50 @@ export class Audio {
     }
   }
 
+  /**
+   * Real SFX files (Erik's Suno sounds). Manifest maps a pool name to
+   * variation URLs; playSfx picks a random take with pitch/volume control.
+   * Files that fail to decode (missing → Vite serves HTML with a 200) are
+   * skipped silently, so callers can fall back to the synth recipes:
+   *
+   *   await audio.loadSfx({ crash_metal_big: ["sfx/crash_metal_big_1.wav", ...] });
+   *   if (!audio.playSfx("crash_metal_big", { volume: 0.8 })) audio.play("crashBig");
+   */
+  async loadSfx(manifest) {
+    this._ensure();
+    this._sfx = this._sfx ?? new Map();
+    const jobs = [];
+    for (const [name, urls] of Object.entries(manifest)) {
+      for (const url of urls) {
+        jobs.push(fetch(url)
+          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
+          .then((ab) => this.ctx.decodeAudioData(ab))
+          .then((buf) => {
+            if (!this._sfx.has(name)) this._sfx.set(name, []);
+            this._sfx.get(name).push(buf);
+          })
+          .catch(() => {}));                     // missing/HTML: skip quietly
+      }
+    }
+    await Promise.all(jobs);
+    return this._sfx;
+  }
+
+  /** play a random take from a loaded pool; returns false if none loaded */
+  playSfx(name, { volume = 1, pitch = 1 } = {}) {
+    const pool = this._sfx?.get(name);
+    if (!pool?.length) return false;
+    this._ensure();
+    const src = this.ctx.createBufferSource();
+    src.buffer = pool[Math.floor(Math.random() * pool.length)];
+    src.playbackRate.value = pitch;
+    const g = this.ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g).connect(this.ctx.destination);
+    src.start();
+    return true;
+  }
+
   /** looping background music from a file URL */
   music(url, { volume = 0.35 } = {}) {
     if (this._music) this._music.pause();

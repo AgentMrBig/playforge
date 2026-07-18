@@ -392,7 +392,11 @@ loadCharacter("models/character/humanoid_male.fbx", {
             vb.velocity.clone().multiplyScalar(12),           // spin seasoning; momentum rides the inherited velocity
             chest);
           cb()?.setEnabled(false);
-          audio.play("crash", { volume: Math.min(1, sp / 18), pitch: 1.3 });
+          // person-vs-car: body thud layered over a medium metal hit
+          const hitVol = Math.min(1, sp / 18);
+          if (audio.playSfx("thud_body", { volume: hitVol }))
+            audio.playSfx("crash_metal_med", { volume: hitVol * 0.5, pitch: 1.1 });
+          else audio.play("crash", { volume: hitVol, pitch: 1.3 });
           break;
         }
       },
@@ -493,7 +497,8 @@ const physReady = initRapier().then(() => {
   for (const [e, opts] of props) phys.addDynamicProp(e, opts);
 
   // CRASH AUDIO — driven by the physics, not scripted:
-  // chassis contact-force events (walls, cars, roof slams while tumbling)
+  // chassis contact-force events (walls, cars, roof slams while tumbling).
+  // Real Suno files when present (public/sfx/), synth recipes as fallback.
   let lastCrash = 0;
   phys.onContact(({ entityA, entityB, force }) => {
     const car = [entityA, entityB].find((e) => e?.components?.some((c) => c.rb));
@@ -503,10 +508,16 @@ const physReady = initRapier().then(() => {
     lastCrash = now;
     const mass = 1200;
     const big = force > mass * 14;
-    audio.play(big ? "crashBig" : "crash", {
-      volume: Math.min(1, force / (mass * (big ? 30 : 14))),
-      pitch: 0.9 + Math.random() * 0.25,
-    });
+    const vol = Math.min(1, force / (mass * (big ? 30 : 14)));
+    const pitch = 0.9 + Math.random() * 0.25;
+    if (big) {
+      // layer: big metal + glass pop for the full wreck
+      if (audio.playSfx("crash_metal_big", { volume: vol, pitch })) {
+        audio.playSfx("glass_pop", { volume: vol * 0.7, pitch: 1 + Math.random() * 0.2 });
+      } else audio.play("crashBig", { volume: vol, pitch });
+    } else if (!audio.playSfx("crash_metal_med", { volume: vol, pitch })) {
+      audio.play("crash", { volume: vol, pitch });
+    }
   });
 });
 // hard wheel landings off jumps (suspension slam, not a chassis contact)
@@ -514,11 +525,25 @@ world.spawn("landingAudio").add({ fixedUpdate() {
   for (const c of cars) {
     const vb = c.components.find((x) => x.rb);
     if (vb?.justLanded > 5) {
-      audio.play("crash", { volume: Math.min(1, vb.justLanded / 16), pitch: 1.15 });
+      const vol = Math.min(1, vb.justLanded / 16);
+      if (!audio.playSfx("thump_landing", { volume: vol, pitch: 0.95 + Math.random() * 0.15 }))
+        audio.play("crash", { volume: vol, pitch: 1.15 });
       vb.justLanded = 0;
     }
   }
 } });
+// Erik's Suno sound pools — variations load if the files exist, else the
+// synth fallbacks above keep working (missing files are skipped silently)
+audio.loadSfx({
+  crash_metal_big: [1, 2, 3].map((i) => `sfx/crash_metal_big_${i}.mp3`)
+    .concat([1, 2, 3].map((i) => `sfx/crash_metal_big_${i}.wav`)),
+  crash_metal_med: [1, 2].map((i) => `sfx/crash_metal_med_${i}.mp3`)
+    .concat([1, 2].map((i) => `sfx/crash_metal_med_${i}.wav`)),
+  thud_body: [1, 2].map((i) => `sfx/thud_body_${i}.mp3`).concat([1, 2].map((i) => `sfx/thud_body_${i}.wav`)),
+  thump_landing: [1, 2].map((i) => `sfx/thump_landing_${i}.mp3`).concat([1, 2].map((i) => `sfx/thump_landing_${i}.wav`)),
+  glass_pop: [1, 2].map((i) => `sfx/glass_pop_${i}.mp3`).concat([1, 2].map((i) => `sfx/glass_pop_${i}.wav`)),
+  crunch_plastic: [1, 2].map((i) => `sfx/crunch_plastic_${i}.mp3`).concat([1, 2].map((i) => `sfx/crunch_plastic_${i}.wav`)),
+});
 
 // ============================================================================
 // THE FLEET — textured pack cars on real physics
