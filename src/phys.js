@@ -65,7 +65,21 @@ export class Physics {
         const a = this._handleEnt.get(ev.collider1()) ?? null;
         const b = this._handleEnt.get(ev.collider2()) ?? null;
         const force = ev.totalForceMagnitude();
-        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, relSpeed: rel, ev });
+        // WHERE and from WHAT DIRECTION the hit landed — the damage system
+        // deforms only geometry near the real contact, along the real normal
+        // (Erik: a frontal hit must not crush the roof or the rear)
+        let point = null, normal = null;
+        if (c1 && c2) {
+          this.world.contactPair(c1, c2, (manifold) => {
+            if (manifold.numSolverContacts() > 0) {
+              const p = manifold.solverContactPoint(0);
+              const n = manifold.normal();
+              if (p) point = { x: p.x, y: p.y, z: p.z };
+              if (n) normal = { x: n.x, y: n.y, z: n.z };
+            }
+          });
+        }
+        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, relSpeed: rel, point, normal, ev });
       });
     }
   }
