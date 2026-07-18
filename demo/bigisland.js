@@ -7,7 +7,7 @@ import {
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
-  fbm, ridged, mulberry, THREE, HUD, Minimap,
+  fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -668,5 +668,13 @@ world.spawn("minimap").add({ update() {
   });
 } });
 
+// ROAD NETWORK (General slice): procedural roads wiring the settlements + runway spur,
+// laid on the terrain through Ninja's RoadNetwork; RoadGraph exposed on __pf so traffic
+// AI (Ember) can snap + follow lanes. Routes dodge water/steep ground (see roadgen.js).
+const roadNet = new RoadNetwork({ ground: heightAt });
+const { roads: _roadLayout, graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
+_roadLayout.forEach((r) => roadNet.addRoad(r.points, { width: r.width }));
+world.spawn("roads").add(roadNet);
+
 engine.start();
-window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, get drivingCar() { return drivingCar; } };
+window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
