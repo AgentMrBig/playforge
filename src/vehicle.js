@@ -200,9 +200,16 @@ export class VehicleBody {
     if (groundY === -Infinity) groundY = 0; // flat-world default floor
     if (entity.position.y <= groundY + 0.02) {
       entity.position.y = groundY;
+      // ramp launch: rising ground under us becomes upward velocity, so at a
+      // ramp lip the car keeps that momentum and actually flies (then lands
+      // and the suspension soaks it up)
+      const climb = THREE.MathUtils.clamp(
+        (groundY - (this._prevGroundY ?? groundY)) / Math.max(dt, 1e-4), 0, 16);
+      this.velocity.y = Math.max(this.velocity.y, climb);
       if (this.velocity.y < 0) this.velocity.y = 0;
       this.onGround = true;
     }
+    this._prevGroundY = groundY;
 
     // ---- collide with AABB Colliders (buildings, props) -------------------
     this._collide(world, entity);
