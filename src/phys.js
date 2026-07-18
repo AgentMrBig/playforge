@@ -167,10 +167,10 @@ export class RapierVehicle extends VehicleBody {
       frictionSlip = 11.5,    // tire longitudinal traction
       sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
       steerGrip = 13,         // m/s² lateral-G that full steering may demand
-      driftSideFriction = 0.09,// rear grip on handbrake — measured sweep:
+      driftSideFriction = 0.11,// rear grip on handbrake — measured sweep:
                               // 0.12→17° slip, 0.09→32°, 0.07→50°(spin).
-                              // 0.09 = the slide STARTS and momentum rules
-                              // (0.3 was grip; 0.14 was a crane-pivot turn)
+                              // 0.11 + halved front steer cap = progressive
+                              // tail-out entry instead of a nose-whip
       restitution = 0.25,     // chassis bounciness (that NFS2 elasticity)
       // low damping: a flipping car must KEEP its momentum and tumble
       // (0.7 angular was strangling flips mid-rotation — Erik felt it)
@@ -309,7 +309,12 @@ export class RapierVehicle extends VehicleBody {
     // δ_cap = atan(L·a/v²) (how real steering feels: you don't crank 15°
     // at 90 km/h). Input shaping only — the tires still do the physics.
     const v2 = Math.max(fwdSpeed * fwdSpeed, 1);
-    const cap = Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2));
+    let cap = Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2));
+    // handbrake pulled: the FRONT must not crank the nose around — Erik saw
+    // the front "gaining turn speed" instead of the tail stepping out. Less
+    // front steering authority = the rotation has to come from the rear
+    // sliding wide, which is what a handbrake actually does.
+    if (this.handbrake) cap *= 0.5;
     const target = this.steerInput * cap;
     const rate = this.steerSpeed * (this.steerInput === 0 ? 1.6 : 0.65); // ease in, snap back
     const dS = THREE.MathUtils.clamp(target - this.steer, -rate * dt, rate * dt);
