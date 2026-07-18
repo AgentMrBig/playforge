@@ -54,6 +54,19 @@ export class Body {
       entity.position.setComponent(axis, entity.position.getComponent(axis) + d);
       this._resolve(axis, entity, colliders);
     }
+    // heightfield terrain: clamp the body's feet to the ground surface
+    for (const e of world.entities) {
+      for (const c of e.components) {
+        if (typeof c.heightAt !== "function" || typeof c.slopeAt !== "function") continue;
+        const bottom = entity.position.y + this.offset.y - this.size.y * 0.5;
+        const h = c.heightAt(entity.position.x, entity.position.z);
+        if (h !== -Infinity && bottom <= h + 0.02) {
+          entity.position.y = h + this.size.y * 0.5 - this.offset.y + 0.001;
+          if (this.velocity.y < 0) this.velocity.y = 0;
+          this.onGround = true;
+        }
+      }
+    }
     this._fireTriggers(world, entity);
   }
 

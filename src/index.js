@@ -8,4 +8,6 @@ export { Audio } from "./audio.js";
 export { Body, Collider, raycast } from "./physics.js";
 export { Emitter } from "./particles.js";
 export { tween, after, every, Tweens, Ease } from "./tween.js";
+export { Heightfield } from "./terrain.js";
+export { noise2, fbm, ridged, mulberry } from "./noise.js";
 export * as THREE from "three";
