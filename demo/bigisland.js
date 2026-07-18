@@ -550,10 +550,16 @@ const FLEET = [
   { name: "Classic", file: "models/sedanpack/Assets/Car.fbx",    dz: -5, hp: 300, ep: 13, top: 52, siren: 0, paint: 0xcc2222 },
   { name: "Police",  file: "models/sedanpack/Assets/Police.fbx", dz: 0,  hp: 360, ep: 14, top: 55, siren: 6 },
   { name: "Taxi",    file: "models/sedanpack/Assets/Taxi.fbx",   dz: 5,  hp: 260, ep: 12, top: 48, siren: 0 },
-  // Erik's Assetsville test export — skeletal UE rig, de-skinned at load
+  // Erik's Assetsville exports — skeletal UE rigs, de-skinned at load
   { name: "AVPolice", file: "models/fabpack/Ph_veh_PoliceCarSedan_01.fbx", dz: 10, hp: 380, ep: 14, top: 58, siren: 0,
     opts: { targetLength: 5.0, textureDir: "models/fabpack", textureFlipY: true,
       textureMap: { palette: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } } },
+  { name: "Hearse", file: "models/fabpack/SK_veh_Hearse.fbx", dz: 15, hp: 300, ep: 13, top: 52, siren: 0,
+    opts: { targetLength: 5.6, textureDir: "models/fabpack", textureFlipY: true,
+      textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
+  { name: "CargoTruck", file: "models/fabpack/SK_veh_CargoTruckOld.fbx", dz: 20, hp: 260, ep: 10, top: 40, siren: 0, mass: 2600,
+    opts: { targetLength: 7.0, textureDir: "models/fabpack", textureFlipY: true,
+      textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
 ];
 const cars = [];
 for (const spec of FLEET) {
@@ -566,6 +572,7 @@ for (const spec of FLEET) {
       e.add(new RapierVehicle({
         suspension: rig.suspension, wheelRadius: rig.wheelRadius,
         enginePower: spec.ep, topSpeed: spec.top,
+        ...(spec.mass ? { mass: spec.mass } : {}),      // trucks weigh like trucks
       }))
         .add(new VehicleRig(rig, { sirenHz: spec.siren }))
         .add(new EngineSound(audio, { hp: spec.hp }))
