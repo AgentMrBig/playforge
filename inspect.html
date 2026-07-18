@@ -41,6 +41,18 @@ loader.load(url, (root) => {
   });
   lines.push(`--- materials ---`);
   for (const [n, info] of seen) lines.push(`${n}: map=${info.map} color=#${info.color} ${info.transparent?"transp ":""}${info.type}`);
+  // character intel: skinned meshes, skeleton bones, embedded animation clips
+  const skinned = []; root.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+  lines.push(`--- rig ---`);
+  lines.push(`skinnedMeshes: ${skinned.length}`);
+  if (skinned.length) {
+    const bones = skinned[0].skeleton?.bones || [];
+    lines.push(`bones: ${bones.length}`);
+    lines.push(`boneNames: ${bones.slice(0, 40).map((b) => b.name).join(", ")}`);
+  }
+  const clips = root.animations || [];
+  lines.push(`animations: ${clips.length}`);
+  clips.forEach((c) => lines.push(`  clip "${c.name}" ${c.duration.toFixed(2)}s tracks=${c.tracks.length}`));
   const summary = { url, size: size.toArray(), text: lines.join("\n") };
   window.__inspect = summary;
   out.textContent = lines.join("\n");

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>PLAYFORGE — Character</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9ec4e4; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: fixed; left: 12px; top: 10px; color: #fff; font: 13px/1.5 system-ui, sans-serif;
+         user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #hud b { color: #ffd75e; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><b>PLAYFORGE — Character</b> · click to look · WASD walk · Shift run · Space jump<br>
+<span id="stats">loading…</span></div>
+<script type="module" src="/demo/character.js"></script>
+</body>
+</html>

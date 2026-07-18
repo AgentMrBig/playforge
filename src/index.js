@@ -12,6 +12,7 @@ export { Heightfield } from "./terrain.js";
 export { VehicleBody, PlayerVehicleControls } from "./vehicle.js";
 export { EngineSound } from "./enginesound.js";
 export { Animator, buildHumanoid } from "./animation.js";
+export { loadCharacter, CharacterController } from "./character.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { SkidMarks } from "./skidmarks.js";
