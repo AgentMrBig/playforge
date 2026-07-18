@@ -167,8 +167,10 @@ export class RapierVehicle extends VehicleBody {
       frictionSlip = 11.5,    // tire longitudinal traction
       sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
       steerGrip = 13,         // m/s² lateral-G that full steering may demand
-      driftSideFriction = 0.14,// rear grip on handbrake — tail actually
-                              // breaks loose (0.4 just squealed; Erik)
+      driftSideFriction = 0.09,// rear grip on handbrake — measured sweep:
+                              // 0.12→17° slip, 0.09→32°, 0.07→50°(spin).
+                              // 0.09 = the slide STARTS and momentum rules
+                              // (0.3 was grip; 0.14 was a crane-pivot turn)
       restitution = 0.25,     // chassis bounciness (that NFS2 elasticity)
       // low damping: a flipping car must KEEP its momentum and tumble
       // (0.7 angular was strangling flips mid-rotation — Erik felt it)
@@ -332,14 +334,18 @@ export class RapierVehicle extends VehicleBody {
     this.ctrl.setWheelEngineForce(2, engine / 2);
     this.ctrl.setWheelEngineForce(3, engine / 2);
     for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
-    // handbrake: lock rears — side grip collapses AND longitudinal traction
-    // drops (locked rubber slides in every direction) → the tail comes out.
-    // Off-handbrake, rear grip follows a falling tire curve with slip angle
-    // so a drift SUSTAINS under counter-steer instead of instantly re-gripping.
-    // All friction params, zero scripts.
+    // handbrake: LOCK the rears. Erik's spec (and physics): the handbrake
+    // does NOT tighten the turn — it drops rear traction until the slide
+    // STARTS, and the car carries on along its momentum while rotating.
+    // So: rear side grip falls (not to zero — 0.14 made the front axle
+    // pivot the car like a crane), fronts soften slightly (the sliding rear
+    // drags them), and CRUCIALLY the momentum keeps ruling because the
+    // fronts alone can't bend the path much. Friction params only.
     const hb = this.handbrake;
     const slipFade = 1 - 0.55 * Math.min(1, Math.max(0, Math.abs(this.slipRear ?? 0) - 0.17) / 0.5);
     const rearSide = hb ? this.driftSideFriction : this.sideFriction * slipFade;
+    this.ctrl.setWheelSideFrictionStiffness(0, hb ? this.sideFriction * 0.7 : this.sideFriction);
+    this.ctrl.setWheelSideFrictionStiffness(1, hb ? this.sideFriction * 0.7 : this.sideFriction);
     this.ctrl.setWheelSideFrictionStiffness(2, rearSide);
     this.ctrl.setWheelSideFrictionStiffness(3, rearSide);
     this.ctrl.setWheelFrictionSlip(2, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
