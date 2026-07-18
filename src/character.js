@@ -95,6 +95,12 @@ export async function loadCharacter(url, {
     root.traverse((o) => {
       if (!o.isSkinnedMesh) return;
       found = true;
+      // CPU sampling must mimic the renderer: 'attached' bindMatrixInverse
+      // and boneMatrices only refresh on the RENDER path — sampling through
+      // stale ones after transforming the root gives garbage bounds (that
+      // mis-scaled the UE citizen into invisibility)
+      o.bindMatrixInverse.copy(o.matrixWorld).invert();
+      o.skeleton.update();
       const pos = o.geometry.attributes.position;
       const stride = Math.max(1, Math.floor(pos.count / 4000));
       for (let i = 0; i < pos.count; i += stride) {
