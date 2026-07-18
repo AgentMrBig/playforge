@@ -493,7 +493,9 @@ const speedo = new HUD().mount();
 world.spawn("speedo").add({ update() {
   const rb = drivingCar?.components.find((c) => c.rb);
   speedo.canvas.style.display = rb ? "block" : "none";
-  if (rb) speedo.render({ kmh: rb.kmh ?? 0, onGround: true });
+  // FIXED gauge max from the car's top speed (+12% headroom), rounded to a tidy 20 —
+  // so the dial never grows when you peg it (Erik 2026-07-18); needle just pins at top.
+  if (rb) speedo.render({ kmh: rb.kmh ?? 0, topKmh: Math.ceil(((rb.topSpeed ?? 38) * 3.6 * 1.12) / 20) * 20, onGround: true });
 } });
 
 engine.start();

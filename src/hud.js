@@ -103,9 +103,10 @@ export class HUD {
    */
   render(state = {}) {
     const kmh = Math.max(0, state.kmh || 0);
-    // gauge max: explicit > constructed > grows to fit the fastest speed we've seen
+    // gauge max is FIXED once set (Erik 2026-07-18: the dial must NOT grow/rescale when
+    // you max out — a real speedo's top number never moves). The needle pins at the top
+    // instead (clamped below). Pass an explicit topKmh from the car's top speed.
     this.topKmh = state.topKmh ?? this.topKmh ?? niceMax(kmh || 120);
-    if (kmh > this.topKmh) this.topKmh = niceMax(kmh);
     const top = this.topKmh;
     const ctx = this.ctx, S = this.size, c = S / 2, r = S * 0.41;
 
