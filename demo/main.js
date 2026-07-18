@@ -1,38 +1,60 @@
-// PlayForge demo: a tiny collect-the-cubes game.
-// This file is the API pitch — if this reads well, the engine works.
-import { Engine, World, OrbitRig, Audio, THREE } from "../src/index.js";
+// PlayForge demo v2: platform-hopper showcasing physics, particles, tweens.
+// Jump across floating islands, grab the gold cubes, don't fall.
+import {
+  Engine, World, OrbitRig, Audio, Body, Collider, Emitter,
+  tween, after, THREE,
+} from "../src/index.js";
 
 const engine = new Engine(document.getElementById("game"));
 const world = new World();
 const audio = new Audio();
 engine.world = world;
 
-// ---- lights & ground -------------------------------------------------------
+// ---- lights ----------------------------------------------------------------
 world.spawn("sun").mesh(makeSun());
-world.spawn("ground").mesh(new THREE.Mesh(
-  new THREE.CylinderGeometry(14, 14, 0.5, 48),
-  new THREE.MeshStandardMaterial({ color: 0x3d7a3f }),
-)).at(0, -0.25, 0);
-world.find("ground").object3d.children[0].receiveShadow = true;
-
 function makeSun() {
   const g = new THREE.Group();
   const sun = new THREE.DirectionalLight(0xfff2d8, 2.4);
   sun.position.set(12, 18, 8);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  const s = 20;
+  const s = 24;
   Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s });
   g.add(sun, new THREE.AmbientLight(0x8899bb, 0.7));
   return g;
 }
 
-// ---- player ----------------------------------------------------------------
-class PlayerController {
-  constructor() { this.vel = new THREE.Vector3(); this.onGround = true; }
+// ---- floating islands (physics colliders + meshes) -------------------------
+const ISLANDS = [
+  [0, 0, 0, 7],      // x, y, z, size — home island
+  [9, 1.2, -3, 4],
+  [15, 2.5, 2, 3.5],
+  [10, 3.6, 8, 3],
+  [2, 4.5, 12, 3.5],
+  [-6, 3.2, 8, 3],
+  [-9, 1.6, 0, 4],
+];
+for (const [x, y, z, s] of ISLANDS) {
+  world.spawn("island")
+    .mesh(shadowed(new THREE.Mesh(
+      new THREE.BoxGeometry(s, 1, s),
+      new THREE.MeshStandardMaterial({ color: 0x3d7a3f }),
+    ), true))
+    .at(x, y - 0.5, z)
+    .add(new Collider({ size: [s, 1, s] }));
+}
+
+// bobbing motion on the outer islands — tween as ambient animation
+world.findAll("island").slice(1).forEach((isl, i) => {
+  tween(isl.position, { y: isl.position.y + 0.4 }, 1.6 + i * 0.2,
+        { ease: "sineInOut", yoyo: true, repeat: Infinity, delay: i * 0.3 });
+});
+
+// ---- player (real physics body now) ----------------------------------------
+class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
+    const body = entity.get(Body);
     const cam = world.camera;
-    // camera-relative WASD (stick support comes along free)
     const f = new THREE.Vector3(); cam.getWorldDirection(f); f.y = 0; f.normalize();
     const r = new THREE.Vector3().crossVectors(f, new THREE.Vector3(0, 1, 0));
     const stick = input.stick("left");
@@ -40,82 +62,94 @@ class PlayerController {
     const iz = input.axis("KeyS", "KeyW") - stick.y;
     const wish = f.multiplyScalar(iz).addScaledVector(r, ix);
     if (wish.lengthSq() > 1) wish.normalize();
-    this.vel.x = wish.x * 6; this.vel.z = wish.z * 6;
-
-    if ((input.pressed("Space") || input.pressed("Mouse2")) && this.onGround) {
-      this.vel.y = 8; this.onGround = false; audio.play("jump");
+    body.velocity.x = wish.x * 6;
+    body.velocity.z = wish.z * 6;
+    if (input.pressed("Space") && body.onGround) {
+      body.velocity.y = 9.5;
+      audio.play("jump");
+      dust.burst(10, entity.position.clone().setY(entity.position.y - 0.4));
     }
-    this.vel.y -= 24 * dt;
-    entity.position.addScaledVector(this.vel, dt);
-    if (entity.position.y <= 0.5) { entity.position.y = 0.5; this.vel.y = 0; this.onGround = true; }
-    // face where you're going
-    if (this.vel.x * this.vel.x + this.vel.z * this.vel.z > 0.1)
-      entity.rotation.y = Math.atan2(this.vel.x, this.vel.z);
-    // fell off the disc? back to center
-    if (entity.position.distanceTo(new THREE.Vector3(0, entity.position.y, 0)) > 14.5) {
-      entity.at(0, 0.5, 0); audio.play("die");
+    if (wish.lengthSq() > 0.01)
+      entity.rotation.y = Math.atan2(body.velocity.x, body.velocity.z);
+    // fell off the world
+    if (entity.position.y < -12) {
+      audio.play("die");
+      entity.at(0, 2, 0);
+      body.velocity.set(0, 0, 0);
+      shake(0.5);
     }
   }
 }
 
 const player = world.spawn("player")
   .mesh(makeBody())
-  .at(0, 0.5, 0)
-  .add(new PlayerController());
+  .at(0, 2, 0)
+  .add(new Body({ size: [0.6, 1.35, 0.6], offset: [0, 0.55, 0] }))
+  .add(new PlayerMove());
 
 function makeBody() {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x4d8dff });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.5), mat);
-  body.position.y = 0.15; body.castShadow = true;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x4d8dff }));
+  body.position.y = 0.45; body.castShadow = true;
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
     new THREE.MeshStandardMaterial({ color: 0xf2c9a0 }));
-  head.position.y = 0.9; head.castShadow = true;
+  head.position.y = 1.15; head.castShadow = true;
   g.add(body, head);
   return g;
 }
 
-// ---- collectibles ----------------------------------------------------------
-class Spin {
-  constructor(speed = 2) { this.speed = speed; }
-  update(dt, { entity, engine }) {
-    entity.rotation.y += this.speed * dt;
-    entity.position.y = 0.8 + Math.sin(engine.time * 3 + entity.position.x) * 0.15;
-  }
-}
-class Collectible {
-  fixedUpdate(_dt, { entity, world }) {
-    const p = world.find("player");
-    if (p && entity.position.distanceTo(p.position) < 1.0) {
-      world.destroy(entity);
-      audio.play("pickup");
-      score++;
-      document.getElementById("score").textContent = score;
-      if (world.findAll("coin").length <= 1) { audio.play("win"); spawnCoins(); }
-    }
-  }
-}
+// world-space particle emitters (attached to a static root entity)
+const fx = world.spawn("fx");
+const dust = new Emitter({ color: 0xcfc7b8, count: 128, speed: [0.5, 2], life: [0.2, 0.5], gravity: 2, size: 0.1 });
+const boomGold = new Emitter({ color: 0xffd75e, color2: 0xff7722, count: 256, speed: [2, 7], life: [0.3, 0.8], gravity: 7, size: 0.16 });
+fx.add(dust).add(boomGold);
 
+// ---- coins on random islands ----------------------------------------------
 let score = 0;
-function spawnCoins() {
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2 + Math.random();
-    const d = 4 + Math.random() * 8;
-    world.spawn("coin")
-      .mesh(shadowed(new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, 0.5, 0.5),
-        new THREE.MeshStandardMaterial({ color: 0xffd75e, emissive: 0x664400 }),
-      )))
-      .at(Math.cos(a) * d, 0.8, Math.sin(a) * d)
-      .add(new Spin(2 + Math.random() * 2))
-      .add(new Collectible());
-  }
+function spawnCoin() {
+  const [x, y, z] = ISLANDS[1 + Math.floor(Math.random() * (ISLANDS.length - 1))];
+  const coin = world.spawn("coin")
+    .mesh(shadowed(new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.5, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xffd75e, emissive: 0x664400 }),
+    )))
+    .at(x, y + 1.0, z)
+    .add({ update(dt, { entity, engine }) { entity.rotation.y += 3 * dt; } })
+    .add(new Collider({
+      size: [1.4, 1.6, 1.4], trigger: true,
+      onEnter(other) {
+        if (other.name !== "player") return;
+        audio.play("pickup");
+        score++;
+        document.getElementById("score").textContent = score;
+        boomGold.burst(36, coin.position.clone());
+        world.destroy(coin);
+        after(0.6, spawnCoin);
+      },
+    }));
+  // pop-in: scale 0 → 1 with backOut
+  coin.object3d.scale.setScalar(0.01);
+  tween(coin.object3d.scale, { x: 1, y: 1, z: 1 }, 0.35, { ease: "backOut" });
 }
-function shadowed(m) { m.castShadow = true; return m; }
-spawnCoins();
+for (let i = 0; i < 3; i++) spawnCoin();
 
-// ---- camera ----------------------------------------------------------------
-world.spawn("camera").add(new OrbitRig({ target: [0, 1, 0], distance: 16, pitch: 0.55 }));
+function shadowed(m, receive = false) { m.castShadow = true; m.receiveShadow = receive; return m; }
+
+// ---- camera + screen shake -------------------------------------------------
+const rig = new OrbitRig({ target: [2, 2, 4], distance: 22, pitch: 0.5 });
+world.spawn("camera").add(rig).add({
+  update(dt, { world }) { // follow the player loosely
+    rig.target.lerp(player.position.clone().add(new THREE.Vector3(0, 1, 0)), dt * 2.5);
+    if (shakeT > 0) {
+      shakeT -= dt;
+      world.camera.position.x += (Math.random() - 0.5) * shakeT * 0.6;
+      world.camera.position.y += (Math.random() - 0.5) * shakeT * 0.6;
+    }
+  },
+});
+let shakeT = 0;
+function shake(t) { shakeT = t; }
 
 engine.start();
-window.__pf = { engine, world, audio }; // debug handle (also used by tests)
+window.__pf = { engine, world, audio, player, spawnCoin }; // debug/test handle

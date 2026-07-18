@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Input } from "./input.js";
+import { Tweens } from "./tween.js";
 
 /**
  * Engine — owns the renderer, the loop, and the active scene.
@@ -64,6 +65,7 @@ export class Engine {
         steps++;
       }
       if (steps === Engine.MAX_CATCHUP) this._accum = 0;
+      Tweens.update(dt);
       world._update(dt, this);
       if (world.camera) this.renderer.render(world.scene, world.camera);
     }
