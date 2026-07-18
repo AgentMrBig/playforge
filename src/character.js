@@ -69,12 +69,53 @@ export async function loadCharacter(url, {
     });
   });
 
-  // ---- normalize: Y-up already, center X/Z, seat on ground, scale ---------
-  let box = new THREE.Box3().setFromObject(root);
+  // ---- UE-skeleton support (Assetsville etc.): rename bones to the Mixamo
+  // names every downstream system speaks (clips, ragdoll, controllers) ------
+  const UE_ALIAS = {
+    pelvis: "Hips", spine_01: "Spine", spine_02: "Spine1", spine_03: "Spine2",
+    neck_01: "Neck", head: "Head",
+    clavicle_l: "LeftShoulder", upperarm_l: "LeftArm", lowerarm_l: "LeftForeArm", hand_l: "LeftHand",
+    clavicle_r: "RightShoulder", upperarm_r: "RightArm", lowerarm_r: "RightForeArm", hand_r: "RightHand",
+    thigh_l: "LeftUpLeg", calf_l: "LeftLeg", foot_l: "LeftFoot",
+    thigh_r: "RightUpLeg", calf_r: "RightLeg", foot_r: "RightFoot",
+  };
+  let isUE = false;
+  root.traverse((o) => {
+    if (o.isBone && UE_ALIAS[o.name.toLowerCase()]) { o.name = UE_ALIAS[o.name.toLowerCase()]; isUE = true; }
+  });
+
+  // ---- normalize. UE exports lie through node transforms (Z-up, cm bones,
+  // unposed geometry bounds) — measure by SKINNED VERTICES when skinned: the
+  // same ground truth the renderer uses.
+  const skinnedBounds = () => {
+    root.updateWorldMatrix(true, true);
+    const bb = new THREE.Box3();
+    let found = false;
+    const v = new THREE.Vector3();
+    root.traverse((o) => {
+      if (!o.isSkinnedMesh) return;
+      found = true;
+      const pos = o.geometry.attributes.position;
+      const stride = Math.max(1, Math.floor(pos.count / 4000));
+      for (let i = 0; i < pos.count; i += stride) {
+        v.fromBufferAttribute(pos, i);
+        o.applyBoneTransform(i, v);
+        v.applyMatrix4(o.matrixWorld);
+        bb.expandByPoint(v);
+      }
+    });
+    return found ? bb : new THREE.Box3().setFromObject(root);
+  };
+  let box = skinnedBounds();
   let size = box.getSize(new THREE.Vector3());
+  if (size.z > size.y * 1.4) {                     // Z-up export: height along Z
+    root.rotation.x = -Math.PI / 2;
+    box = skinnedBounds();
+    size = box.getSize(new THREE.Vector3());
+  }
   const scale = targetHeight / (size.y || 1.8);
-  root.scale.setScalar(scale);
-  box = new THREE.Box3().setFromObject(root);
+  root.scale.multiplyScalar(scale);
+  box = skinnedBounds();
   const c = box.getCenter(new THREE.Vector3());
   root.position.x -= c.x; root.position.z -= c.z; root.position.y -= box.min.y;
 
