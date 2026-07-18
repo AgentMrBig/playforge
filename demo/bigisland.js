@@ -407,7 +407,34 @@ const physReady = initRapier().then(() => {
   for (const b of BARRIERS) phys.addBox(b.half, b.center);
   phys.addMeshCollider(rampMesh);
   for (const [e, opts] of props) phys.addDynamicProp(e, opts);
+
+  // CRASH AUDIO — driven by the physics, not scripted:
+  // chassis contact-force events (walls, cars, roof slams while tumbling)
+  let lastCrash = 0;
+  phys.onContact(({ entityA, entityB, force }) => {
+    const car = [entityA, entityB].find((e) => e?.components?.some((c) => c.rb));
+    if (!car) return;
+    const now = performance.now();
+    if (now - lastCrash < 140) return;                  // debounce pile-up spam
+    lastCrash = now;
+    const mass = 1200;
+    const big = force > mass * 14;
+    audio.play(big ? "crashBig" : "crash", {
+      volume: Math.min(1, force / (mass * (big ? 30 : 14))),
+      pitch: 0.9 + Math.random() * 0.25,
+    });
+  });
 });
+// hard wheel landings off jumps (suspension slam, not a chassis contact)
+world.spawn("landingAudio").add({ fixedUpdate() {
+  for (const c of cars) {
+    const vb = c.components.find((x) => x.rb);
+    if (vb?.justLanded > 5) {
+      audio.play("crash", { volume: Math.min(1, vb.justLanded / 16), pitch: 1.15 });
+      vb.justLanded = 0;
+    }
+  }
+} });
 
 // ============================================================================
 // THE FLEET — textured pack cars on real physics

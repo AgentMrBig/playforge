@@ -19,6 +19,8 @@ export class Audio {
       die:    { type: "sawtooth", from: 300, to: 40, dur: 0.5, vol: 0.4 },
       click:  { type: "square", from: 850, to: 850, dur: 0.04, vol: 0.25 },
       win:    { type: "sine", from: 520, to: 1040, dur: 0.35, vol: 0.4 },
+      crash:    { type: "triangle", from: 130, to: 28, dur: 0.42, vol: 0.5, noise: 0.9 },
+      crashBig: { type: "triangle", from: 90, to: 22, dur: 0.85, vol: 0.65, noise: 1.25 },
     }));
     this._music = null;
     const unlock = () => {

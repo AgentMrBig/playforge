@@ -179,6 +179,9 @@ export class RapierVehicle extends VehicleBody {
     });
     this.rb = null; this.ctrl = null; this.phys = null;
     this._wheelKeys = ["fl", "fr", "rl", "rr"];
+    // reverse tops out ~30 mph unless the car spec says otherwise
+    this.reverseSpeed = opts.reverseSpeed ?? 13.4;
+    this.justLanded = 0;
   }
 
   init(entity, world) {
@@ -287,7 +290,9 @@ export class RapierVehicle extends VehicleBody {
       else brake = this.mass * this.brakePower * 0.9;
     } else if (t < -0.01) {
       if (fwdSpeed > 0.5) brake = -t * this.mass * this.brakePower * 0.9;
-      else engine = t * F * 0.5 * Math.max(0.2, 1 - Math.abs(fwdSpeed) / this.reverseSpeed);
+      // reverse gear: FULL torque, but the ratio tops out around 30 mph
+      // (Erik's spec — punchy backing up, low terminal speed)
+      else engine = t * F * Math.max(0, 1 - Math.abs(fwdSpeed) / this.reverseSpeed);
     }
     this.ctrl.setWheelEngineForce(2, engine / 2);
     this.ctrl.setWheelEngineForce(3, engine / 2);
@@ -309,6 +314,9 @@ export class RapierVehicle extends VehicleBody {
     entity.object3d.quaternion.set(q.x, q.y, q.z, q.w);
 
     const lv = this.rb.linvel();
+    const prevVy = this._prevVy ?? 0;
+    this._prevVy = lv.y;
+    const wasGrounded = this.onGround;
     this.velocity.set(lv.x, lv.y, lv.z);
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(entity.object3d.quaternion);
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(entity.object3d.quaternion);
@@ -324,6 +332,8 @@ export class RapierVehicle extends VehicleBody {
       this.wheelContacts[key] = cp ? { x: cp.x, y: cp.y, z: cp.z } : null;
     });
     this.onGround = grounded >= 2;
+    // hard-landing signal (m/s of fall absorbed) — crash audio reads this
+    this.justLanded = !wasGrounded && this.onGround && prevVy < -4 ? -prevVy : 0;
 
     // slip state — from the real velocities, for SkidMarks/audio
     const sa = Math.abs(this.speed);
