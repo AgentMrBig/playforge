@@ -1,0 +1,17 @@
+{
+  "name": "playforge",
+  "version": "0.1.0",
+  "description": "PlayForge — a JavaScript game engine built on three.js: entities, loop, input, cameras, audio. The game layer three.js doesn't have.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
