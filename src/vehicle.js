@@ -109,10 +109,11 @@ export class VehicleBody {
       // what makes high-speed turns sweep wide instead of pivoting.
       const latCap = (this.handbrake ? this.maxLatAccel * 1.6 : this.maxLatAccel) / Math.max(Math.abs(speed), 1);
       yawRate = THREE.MathUtils.clamp(yawRate, -latCap, latCap);
-      entity.rotation.y = yaw - yawRate * dt;
-      // the nose turns; a slice of forward momentum becomes sideways slip
-      const slip = yawRate * dt * speed * 0.35;
-      lat += slip;
+      // + sign: the body yaws WITH its front wheels (the sign bug that made
+      // the car steer mirror-image of its own wheels lived here)
+      entity.rotation.y = yaw + yawRate * dt;
+      // rotating the frame leaves momentum behind: lat gains -Δθ·speed
+      lat += -yawRate * dt * speed * 0.35;
     }
 
     // rebuild world velocity (keep vertical component for gravity)
@@ -176,18 +177,31 @@ export class VehicleBody {
         col.entity = e;
         const o = col.aabb(this._other);
         if (!this._box.intersectsBox(o)) continue;
-        // push out along the shallowest horizontal axis, bleed speed
+        // minimal-push resolution across ALL THREE axes. Shallow vertical
+        // overlaps resolve UP (curbs, sidewalks, ground slabs) — horizontal-
+        // only resolution was silently bulldozing cars sideways off the map.
         const dxa = o.max.x - this._box.min.x, dxb = this._box.max.x - o.min.x;
         const dza = o.max.z - this._box.min.z, dzb = this._box.max.z - o.min.z;
+        const dya = o.max.y - this._box.min.y;             // push up only
         const px = Math.min(dxa, dxb), pz = Math.min(dza, dzb);
-        if (px < pz) {
+        const py = dya;
+        // wheels are round: anything lower than ~knee height is a curb we
+        // mount, regardless of which overlap axis is shallower. py === 0
+        // means we're exactly ON the surface (the giant ground slab!) — that
+        // must never fall through to a horizontal shove.
+        if (py < 0.5) {
+          if (py > 0.001) entity.position.y += py;
+          if (this.velocity.y < 0) this.velocity.y = 0;
+          this.onGround = true;
+        } else if (px < pz) {
           entity.position.x += dxa < dxb ? px : -px;
           this.velocity.x *= -0.25;
+          this.velocity.multiplyScalar(0.82);              // crunch scrubs speed
         } else {
           entity.position.z += dza < dzb ? pz : -pz;
           this.velocity.z *= -0.25;
+          this.velocity.multiplyScalar(0.82);
         }
-        this.velocity.multiplyScalar(0.82); // crunch scrubs speed
       }
     }
   }

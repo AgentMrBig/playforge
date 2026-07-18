@@ -105,6 +105,9 @@ export function generateCity(world, seed = 1337, { N = 8, CELL = 26, ROAD = 7 } 
       const cx = -half + ROAD + blockW / 2 + bx * CELL;
       const cz = -half + ROAD + blockW / 2 + bz * CELL;
       walks.push(box(blockW, 0.25, blockW, cx, 0.125, cz));
+      // real curb: cars mount it (step-up), players hop it
+      world.spawn("curb").at(cx, 0, cz)
+        .add(new Collider({ size: [blockW, 0.5, blockW], offset: [0, 0, 0] }));
 
       const isPark = r() < 0.12;
       if (isPark) {

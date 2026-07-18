@@ -4,8 +4,9 @@
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Collider, StreamedTerrain,
   VehicleBody, PlayerVehicleControls, EngineSound, Animator, buildHumanoid,
-  fbm, ridged, mulberry, THREE,
+  SkidMarks, fbm, ridged, mulberry, THREE,
 } from "../src/index.js";
+import { muscle } from "./carmodels.js";
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 document.getElementById("seed").textContent = seed;
@@ -233,33 +234,14 @@ player.get(Animator).play("idle");
 
 // ---- a car to explore with (Muscle spec + engine sound) --------------------
 let drivingCar = null;
-function makeCar(color) { // compact copy of the city car visual
-  const g = new THREE.Group(), chassis = new THREE.Group(), wheels = {};
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 3.2),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3 }));
-  body.position.y = 0.55; body.castShadow = true;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.45, 1.6),
-    new THREE.MeshStandardMaterial({ color: 0x202830 }));
-  cabin.position.set(0, 1.0, -0.1);
-  chassis.add(body, cabin);
-  const wm = new THREE.MeshStandardMaterial({ color: 0x14161a });
-  for (const [k, wx, wz] of [["fl", -0.7, 1.05], ["fr", 0.7, 1.05], ["rl", -0.7, -1.05], ["rr", 0.7, -1.05]]) {
-    const p = new THREE.Group();
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.25, 10), wm);
-    w.rotation.z = Math.PI / 2; p.add(w);
-    p.position.set(wx, 0.32, wz); p.rotation.order = "YXZ";
-    g.add(p); wheels[k] = p;
-  }
-  g.add(chassis);
-  return { visual: g, chassis, wheels };
-}
-const carBits = makeCar(0xc23b3b);
+const carBits = muscle(0xc23b3b);
 const car = world.spawn("drivable")
   .mesh(carBits.visual)
   .at(player.position.x + 4, heightAt(player.position.x + 4, player.position.z), player.position.z)
   .add(new VehicleBody({ chassis: carBits.chassis, wheels: carBits.wheels, enginePower: 12, topSpeed: 42 }))
   .add(new PlayerVehicleControls({ enabled: () => drivingCar === car }))
-  .add(new EngineSound(audio, { hp: 450 }));
+  .add(new EngineSound(audio, { hp: 450 }))
+  .add(new SkidMarks({ rearOffset: 1.45, track: 0.8 }));
 car.specName = "Muscle"; car.specHp = 450;
 
 // camera + enter/exit + HUD

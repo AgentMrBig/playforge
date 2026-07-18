@@ -83,6 +83,15 @@ export class Body {
       if (col.trigger) continue;
       const other = col.aabb(this._other);
       if (!box.intersectsBox(other)) continue;
+      // low obstacle in the walk path? step up onto it (curbs, low slabs)
+      if (axis !== 1) {
+        const step = other.max.y - box.min.y;
+        if (step > 0 && step <= 0.4) {
+          entity.position.y += step + 0.001;
+          this._bodyBox(entity);
+          continue;
+        }
+      }
       const v = this.velocity.getComponent(axis);
       const half = this.size.getComponent(axis) * 0.5;
       const off = this.offset.getComponent(axis);

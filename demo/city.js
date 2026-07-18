@@ -2,8 +2,10 @@
 // on-foot player. R = new city, ?seed=N pins one.
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Collider,
-  VehicleBody, PlayerVehicleControls, EngineSound, Animator, buildHumanoid, THREE,
+  VehicleBody, PlayerVehicleControls, EngineSound, Animator, buildHumanoid,
+  SkidMarks, THREE,
 } from "../src/index.js";
+import { CAR_MODELS } from "./carmodels.js";
 import { generateCity, rng } from "./citygen.js";
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) ||
@@ -129,20 +131,25 @@ for (let i = 0; i < 34; i++) {
 // ---- drivable cars: four hp tiers, each with its own simulated engine ------
 let drivingCar = null; // entity while behind the wheel
 const GARAGE = [
-  { name: "Sedan",     hp: 120,   enginePower: 8,  topSpeed: 32, color: 0xd8d8d8 },
-  { name: "Muscle",    hp: 450,   enginePower: 12, topSpeed: 42, color: 0xc23b3b },
-  { name: "Supercar",  hp: 800,   enginePower: 16, topSpeed: 52, color: 0xd8a13b },
-  { name: "TOP FUEL",  hp: 11000, enginePower: 34, topSpeed: 90, color: 0x2f2f34 },
+  { name: "Sedan",     hp: 120,   enginePower: 8,  topSpeed: 32, model: "sedan",    color: 0xd8d8d8 },
+  { name: "Muscle",    hp: 450,   enginePower: 12, topSpeed: 42, model: "muscle",   color: 0xc23b3b },
+  { name: "Supercar",  hp: 800,   enginePower: 16, topSpeed: 52, model: "sports",   color: 0xd8a13b },
+  { name: "TOP FUEL",  hp: 11000, enginePower: 34, topSpeed: 90, model: "dragster", color: 0x2f2f34, wheelbase: 4.6, grip: 9 },
 ];
 for (let i = 0; i < GARAGE.length; i++) {
   const spec = GARAGE[i];
-  const { visual, chassis, wheels } = makeCar(spec.color);
+  const { visual, chassis, wheels } = CAR_MODELS[spec.model](spec.color);
   const e = world.spawn("drivable")
     .mesh(visual)
-    .at(city.spawn[0] + 6 + i * 5, 0, city.spawn[2] + 4)
-    .add(new VehicleBody({ chassis, wheels, enginePower: spec.enginePower, topSpeed: spec.topSpeed }))
+    .at(city.spawn[0] + 6 + i * 6, 0, city.spawn[2] + 4)
+    .add(new VehicleBody({
+      chassis, wheels, enginePower: spec.enginePower, topSpeed: spec.topSpeed,
+      wheelbase: spec.wheelbase ?? 2.9, grip: spec.grip ?? 7.5,
+      wheelRadius: spec.model === "dragster" ? 0.55 : 0.34,
+    }))
     .add(new PlayerVehicleControls({ enabled: () => drivingCar === e }))
-    .add(new EngineSound(audio, { hp: spec.hp }));
+    .add(new EngineSound(audio, { hp: spec.hp }))
+    .add(new SkidMarks({ rearOffset: spec.model === "dragster" ? 2.2 : 1.35, track: spec.model === "dragster" ? 0.85 : 0.78 }));
   e.rotation.y = Math.PI / 2;
   e.specName = spec.name;
   e.specHp = spec.hp;
