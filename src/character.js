@@ -62,9 +62,13 @@ export async function loadCharacter(url, {
   root.traverse((o) => {
     if (!o.isMesh && !o.isSkinnedMesh) return;
     if (shadows) o.castShadow = true;
+    // UE exports carry an all-zeros vertex-paint channel; FBXLoader enables
+    // vertexColors for it and multiplies the whole model to black
+    if (o.geometry?.attributes?.color) o.geometry.deleteAttribute("color");
     (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
       if (!m) return;
       if (tex) { m.map = tex; m.color.setHex(0xffffff); }
+      m.vertexColors = false;
       m.side = THREE.FrontSide; m.needsUpdate = true;
     });
   });
