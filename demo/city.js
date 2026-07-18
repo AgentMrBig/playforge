@@ -6,6 +6,7 @@ import {
   SkidMarks, THREE,
 } from "../src/index.js";
 import { CAR_MODELS } from "./carmodels.js";
+import { loadCarModel } from "../src/assets.js";
 import { generateCity, rng } from "./citygen.js";
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) ||
@@ -156,6 +157,24 @@ for (let i = 0; i < GARAGE.length; i++) {
   e.specName = spec.name;
   e.specHp = spec.hp;
 }
+
+// ---- user-supplied model: the RX-7 (FBX) rolls into the garage async -------
+loadCarModel("/models/LPRX7.fbx", { targetLength: 4.3 }).then(({ visual, chassis, wheels }) => {
+  const e = world.spawn("drivable")
+    .mesh(visual)
+    .at(city.spawn[0] + 6 + GARAGE.length * 6, 0, city.spawn[2] + 4)
+    .add(new VehicleBody({
+      chassis, wheels: wheels ?? undefined,
+      enginePower: 13, topSpeed: 46, maxLatAccel: 10.5, wheelRadius: 0.31,
+    }))
+    .add(new EngineSound(audio, { hp: 280, cylinders: 4 })) // rotary screamer-ish
+    .add(new SkidMarks({ rearOffset: 1.25, track: 0.72 }));
+  const e2 = e; // closure for controls
+  e.add(new PlayerVehicleControls({ enabled: () => drivingCar === e2 }));
+  e.rotation.y = Math.PI / 2;
+  e.specName = "RX-7"; e.specHp = 280;
+  console.log("RX-7 loaded, wheels:", wheels ? Object.keys(wheels).join(",") : "none detected");
+}).catch((err) => console.warn("RX-7 load failed:", err.message));
 
 world.spawn("hud").add({
   update() {

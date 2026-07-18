@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
 /**
  * Asset loading with sane normalization (the pipeline CabForge proved):
@@ -31,9 +32,11 @@ export async function loadModel(url, {
   center = true,
   seatOnGround = true,
   targetLength = 0,        // scale so max(x,z) extent equals this (0 = keep)
+  rotateY = 0,             // extra yaw if the model faces the wrong way
+  alignLengthToZ: opts_alignZ = false, // vehicles: ensure long axis is Z
   shadows = true,
 } = {}) {
-  const key = url + "|" + targetLength + "|" + zUp;
+  const key = url + "|" + targetLength + "|" + zUp + "|" + rotateY + "|" + opts_alignZ;
   if (CACHE.has(key)) {
     const c = CACHE.get(key);
     return { group: c.group.clone(true), size: c.size.clone() };
@@ -51,6 +54,8 @@ export async function loadModel(url, {
     const loader = new OBJLoader();
     if (materials) loader.setMaterials(materials);
     root = await loader.loadAsync(url);
+  } else if (/\.fbx$/i.test(url)) {
+    root = await new FBXLoader().loadAsync(url);
   } else {
     throw new Error("loadModel: unsupported format " + url);
   }
@@ -61,6 +66,17 @@ export async function loadModel(url, {
   const up = zUp === "auto" ? size.z > size.y && size.z > size.x * 0.8 : zUp;
   if (up) {
     root.traverse((o) => { if (o.isMesh) o.geometry.applyMatrix4(new THREE.Matrix4().makeRotationX(-Math.PI / 2)); });
+    box = new THREE.Box3().setFromObject(root);
+    size = box.getSize(new THREE.Vector3());
+  }
+  // vehicles must be long along Z (the engine's forward); rotate if X-long
+  if (opts_alignZ && size.x > size.z) {
+    root.rotation.y = Math.PI / 2;
+    box = new THREE.Box3().setFromObject(root);
+    size = box.getSize(new THREE.Vector3());
+  }
+  if (rotateY) {
+    root.rotation.y += rotateY;
     box = new THREE.Box3().setFromObject(root);
     size = box.getSize(new THREE.Vector3());
   }
@@ -93,7 +109,7 @@ const WHEEL_PATTERNS = {
 
 /** load + adapt a model for VehicleBody: returns { visual, chassis, wheels } */
 export async function loadCarModel(url, opts = {}) {
-  const { group } = await loadModel(url, { targetLength: 4.4, ...opts });
+  const { group } = await loadModel(url, { targetLength: 4.4, alignLengthToZ: true, ...opts });
   const wheels = {};
   const candidates = [];
   group.traverse((o) => { if (/wheel|tyre|tire/i.test(o.name)) candidates.push(o); });
