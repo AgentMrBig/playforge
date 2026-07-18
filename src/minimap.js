@@ -119,8 +119,9 @@ export class Minimap {
       ctx.lineWidth = 1; ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.stroke();
     }
 
-    // player arrow at center (points toward heading; screen y is down, so negate)
-    ctx.save(); ctx.translate(c, c); ctx.rotate(-heading);
+    // player arrow at center. heading convention: 0 = facing north (−z, up on the map),
+    // increasing clockwise (+x/east = +π/2). Mount computes it as atan2(fwd.x, −fwd.z).
+    ctx.save(); ctx.translate(c, c); ctx.rotate(heading);
     ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(5, 6); ctx.lineTo(0, 3); ctx.lineTo(-5, 6); ctx.closePath();
     ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = "#1c2530"; ctx.stroke();
     ctx.restore();

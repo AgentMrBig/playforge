@@ -338,12 +338,17 @@ export class RapierVehicle extends VehicleBody {
     // slip state — from the real velocities, for SkidMarks/audio
     const sa = Math.abs(this.speed);
     this.slipFront = this.slipRear = sa > 1.5 ? Math.atan2(latV, sa) : 0;
+    // launch is traction-limited (engine force >> rear grip at low speed) —
+    // that's a burnout, and burnouts lay rubber
+    this.wheelspin = this.throttle > 0.75 && sa < this.topSpeed * 0.2 && this.onGround;
     this.sliding = this.onGround &&
-      (Math.abs(latV) > 3.2 || (this.handbrake && sa > 3));
-    this.wheelspin = this.throttle > 0.85 && sa < this.topSpeed * 0.18 && this.onGround;
+      (Math.abs(latV) > 3.2 || (this.handbrake && sa > 3) || this.wheelspin);
     this.upset = false;                                   // no states. ever.
 
     // wheel visuals: spin/steer/suspension straight from the controller
+    // burnout overspin: the raycast controller spins wheels at ground speed,
+    // but a traction-limited launch should VISIBLY overspin the rubber
+    this._spinExtra = (this._spinExtra ?? 0) + (this.wheelspin ? 38 * (1 / 60) : 0);
     const S = this.suspension;
     if (S?.wheels) {
       this._wheelKeys.forEach((key, i) => {
@@ -354,14 +359,14 @@ export class RapierVehicle extends VehicleBody {
         // wheel CENTER in chassis space = hardpoint + suspension travel down;
         // lift into the ground-origin frame the visual rig lives in
         w.position.y = (hard.y - susp + this._restRide) / (S.scale ?? 1);
-        w.rotation.x = this.ctrl.wheelRotation(i) ?? 0;
+        w.rotation.x = (this.ctrl.wheelRotation(i) ?? 0) + (i >= 2 ? this._spinExtra : 0);
         if (i < 2) w.rotation.y = this.steer * 0.9;
       });
     } else if (this.wheels) {
       this._wheelKeys.forEach((key, i) => {
         const w = this.wheels[key];
         if (!w) return;
-        w.rotation.x = this.ctrl.wheelRotation(i) ?? 0;
+        w.rotation.x = (this.ctrl.wheelRotation(i) ?? 0) + (i >= 2 ? this._spinExtra : 0);
         if (i < 2) w.rotation.y = this.steer * 0.9;
       });
     }
