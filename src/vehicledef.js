@@ -396,6 +396,19 @@ function rigSkeletalVehicle(root, boneWheels, { targetLength, glassOpacity, shad
       passB();
     }
   }
+  // FRONT-sign check: same symmetry problem fore/aft — the Hearse arrived
+  // 180° flipped, so the "front" indices steered its REAR wheels (Erik:
+  // wheels spin but don't turn). The BONE NAMES are the ground truth:
+  // FL/FR must sit at greater +Z than RL/RR. Spin the car if they don't.
+  {
+    const frontZ = ((centers.fl?.z ?? 0) + (centers.fr?.z ?? 0)) / 2;
+    const rearZ = ((centers.rl?.z ?? 0) + (centers.rr?.z ?? 0)) / 2;
+    if (frontZ < rearZ) {
+      R.premultiply(new THREE.Matrix4().makeRotationY(Math.PI));
+      for (const p of Object.values(centers)) p.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI));
+      passB();
+    }
+  }
   const len = Math.max(rb.max.x - rb.min.x, rb.max.z - rb.min.z);
   const s = targetLength / len;
   let floorY = 1e9;
