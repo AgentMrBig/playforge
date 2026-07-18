@@ -130,6 +130,12 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyO") vr.rig.openParts.some((p) => p.target > 0.5) ? vr.closeAll() : vr.openAll();
   const map = { Digit1: "door_fl", Digit2: "door_fr", Digit3: "door_bl", Digit4: "door_br", Digit5: "hood", Digit6: "trunk" };
   if (map[e.code]) vr.toggle(map[e.code]);
+  if (e.code === "KeyC") {                             // C = cycle paint color
+    const palette = [0xd21f1f, 0x1f5fd2, 0x111418, 0xe0e0e0, 0x1f9d55, 0xe0a020, 0x8a2be2];
+    vr._paintI = ((vr._paintI ?? -1) + 1) % palette.length;
+    vr.rig.setPaint(palette[vr._paintI]);
+  }
+  if (e.code === "KeyL") vr.headlights = !vr.headlights; // L = headlights
 });
 
 world.spawn("hud").add({ update() {

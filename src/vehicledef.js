@@ -44,8 +44,9 @@ function classify(name) {
   }
   if (n.includes("hood") || n.includes("bonnet")) return { role: "hood" };
   if (n.includes("trunk") || n.includes("boot")) return { role: "trunk" };
-  if (n.includes("light") && (n.includes("bar") || n.includes("police") || n.includes("siren")))
-    return { role: "lightbar" };
+  if (n.includes("search")) return { role: "searchlight" };
+  if (n.includes("light")) return { role: "lightbar" };
+  if (n.includes("radio")) return { role: "radio" };
   if (n.includes("base") || n.includes("body")) return { role: "body" };
   return { role: "detail" };
 }
@@ -113,8 +114,9 @@ export async function loadVehicle(url, {
 
   // ---- catalog meshes by role (surgery happens in raw model space) --------
   const parts = { wheels: {}, doors: {}, hood: null, trunk: null, steering: null,
-                  body: null, lightbar: null };
+                  body: null, lightbar: null, searchlight: null, radio: null };
   const lights = {};
+  const paintMats = new Set();       // body-paint materials, for setPaint()
   const box = new THREE.Box3();
   const meshes = [];
   root.traverse((o) => { if (o.isMesh) meshes.push(o); });
@@ -134,6 +136,8 @@ export async function loadVehicle(url, {
       else if (mn2.includes("turnlight_l")) lights.turnL = m;
       else if (mn2.includes("turnlight_r")) lights.turnR = m;
       else if (mn2.includes("lightforward")) lights.head = m;
+      else if (mn2.includes("base") || mn2.includes("_color") || mn2 === "car_police" || mn2 === "car_taxi")
+        paintMats.add(m);            // the body paint (tintable)
       if (m.name === "Glass" || mn2.includes("glass")) {
         m.transparent = true; m.opacity = glassOpacity;
         m.color.setHex(0x20303a); m.shininess = 90;
@@ -160,6 +164,10 @@ export async function loadVehicle(url, {
       parts.trunk = { pivot: repivot(mesh, hinge, "XYZ"), axis: "x", open: 0.95 };
     } else if (role === "steering") {
       parts.steering = repivot(mesh, c, "ZYX");
+    } else if (role === "searchlight") {
+      parts.searchlight = repivot(mesh, c, "YXZ"); // spins around Y (sweeps)
+    } else if (role === "radio") {
+      parts.radio = mesh;
     } else if (role === "body" && !parts.body) {
       parts.body = mesh;
     } else if (role === "lightbar") {
@@ -193,8 +201,12 @@ export async function loadVehicle(url, {
     wheels: Object.keys(parts.wheels).length ? parts.wheels : null,
     wheelRadius: (parts._wheelR ?? 0.32) * scale,
     doors: parts.doors, hood: parts.hood, trunk: parts.trunk,
-    steering: parts.steering, lightbar: parts.lightbar, lights,
+    steering: parts.steering, lightbar: parts.lightbar,
+    searchlight: parts.searchlight, radio: parts.radio,
+    lights, paintMats: [...paintMats],
     openParts,
+    /** repaint the body: tints the paint material(s) — hex like 0xff2020 */
+    setPaint(hex) { for (const m of paintMats) m.color.setHex(hex); },
   };
 }
 
@@ -207,12 +219,12 @@ const smooth = (t) => t * t * (3 - 2 * t);
  * or openAll()/closeAll() from your controls.
  */
 export class VehicleRig {
-  constructor(rig, { steeringRatio = 6, sirenHz = 0 } = {}) {
+  constructor(rig, { steeringRatio = 6, sirenHz = 0, headlights = false } = {}) {
     this.rig = rig;
     this.steeringRatio = steeringRatio;
-    this.sirenHz = sirenHz;                            // >0 flashes lightbar
+    this.sirenHz = sirenHz;                            // >0 flashes lightbar + spins searchlight
+    this.headlights = headlights;
     this._t = 0;
-    this._brakeBase = rig.lights.brake ? rig.lights.brake.emissive?.clone() : null;
   }
   init() {
     // remember rest emissive so we can pulse without drift
@@ -243,14 +255,25 @@ export class VehicleRig {
       p.pivot.rotation[p.axis] = p.open * smooth(p.t);
     }
     // lights
+    const L = this.rig.lights;
     if (body) {
       const braking = body.throttle < -0.05 && body.speed > 0.5;
       const reversing = body.speed < -0.3;
-      if (this.rig.lights.brake)
-        this.rig.lights.brake.emissive.setScalar(braking ? 0.9 : 0.12);
-      if (this.rig.lights.reverse)
-        this.rig.lights.reverse.emissive.setScalar(reversing ? 0.8 : 0);
+      if (L.brake) L.brake.emissive.setScalar(braking ? 0.9 : 0.12);
+      if (L.reverse) L.reverse.emissive.setScalar(reversing ? 0.8 : 0);
+      if (L.head) { L.head.emissive = L.head.emissive ?? new THREE.Color(0);
+                    L.head.emissive.setScalar(this.headlights ? 0.8 : 0.25); }
+      // turn signals blink with steering intent (~2.5 Hz amber)
+      const blink = Math.floor(this._t * 2.5) % 2 === 0 ? 0.9 : 0;
+      const wantL = body.steer > 0.08, wantR = body.steer < -0.08;
+      if (L.turnL) { L.turnL.emissive = L.turnL.emissive ?? new THREE.Color(0);
+                     L.turnL.emissive.setRGB(wantL ? blink : 0, wantL ? blink * 0.4 : 0, 0); }
+      if (L.turnR) { L.turnR.emissive = L.turnR.emissive ?? new THREE.Color(0);
+                     L.turnR.emissive.setRGB(wantR ? blink : 0, wantR ? blink * 0.4 : 0, 0); }
     }
+    // police rotating searchlight
+    if (this.rig.searchlight && this.sirenHz > 0)
+      this.rig.searchlight.rotation.y += dt * 3.0;
     // police siren flash: pulse the lightbar's red/blue emissive materials
     if (this.sirenHz > 0 && this.rig.lightbar && !this._sirenMats) {
       this._sirenMats = { red: [], blue: [] };
