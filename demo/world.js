@@ -5,6 +5,7 @@ import {
   Engine, World, ThirdPersonRig, Audio, Body, Heightfield,
   VehicleBody, PlayerVehicleControls, EngineSound, SkidMarks,
   Animator, buildHumanoid, loadVehicle, VehicleRig, RoadNetwork, CarCollisions,
+  initRapier, Physics, RapierVehicle,
   fbm, mulberry, THREE,
 } from "../src/index.js";
 
@@ -46,13 +47,14 @@ function islandHeight(x, z) {
 const hf = new Heightfield({ size: ISLE, res: 200, heightAt: islandHeight });
 const SAND = new THREE.Color(0xd9c58a), GRASS = new THREE.Color(0x4c8a45);
 const ROCK = new THREE.Color(0x7b7671), TARMAC = new THREE.Color(0x33373d);
-world.spawn("island").mesh(hf.buildMesh((x, z, h, slope, out) => {
+const islandMesh = hf.buildMesh((x, z, h, slope, out) => {
   const r = Math.hypot(x, z);
   if (r < 235) out.copy(TARMAC).lerp(GRASS, THREE.MathUtils.clamp((r - 150) / 85, 0, 1)); // course tarmac fading to grass
   else if (h < SEA + 1.2) out.copy(SAND);
   else if (slope > 0.7 || h > 11) out.copy(ROCK);
   else out.copy(GRASS);
-})).add(hf);
+});
+world.spawn("island").mesh(islandMesh).add(hf);
 
 // sea
 const sea = world.spawn("sea").mesh(new THREE.Mesh(
@@ -83,16 +85,17 @@ paint(0.5, 12, 120, 0, 0xd84040);                    // finish line (red)
   ring.position.set(-70, 0.02, 95); world.scene.add(ring);
 })();
 
-// slalom cones (visual)
+// slalom cones — real dynamic bodies once physics is up (plow through them!)
 const coneGeo = new THREE.ConeGeometry(0.35, 0.9, 10);
 const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a1a });
 const bandMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0 });
+const cones = [];
 for (let i = 0; i < 9; i++) {
   const g = new THREE.Group();
   const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.45; c.castShadow = true;
   const b = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.31, 0.16, 10), bandMat); b.position.y = 0.5;
-  g.add(c, b); g.position.set(-40 + i * 14, 0, -80);
-  world.scene.add(g);
+  g.add(c, b);
+  cones.push(world.spawn("cone").mesh(g).at(-40 + i * 14, 0, -80));
 }
 
 // jump ramp — a wedge with a matching ground provider so the car climbs + flies
@@ -104,7 +107,8 @@ function makeRamp(x0, length, height, width) {
   const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x9a5a2e, roughness: 1 }));
   mesh.position.set(x0, 0, -width / 2); mesh.castShadow = true; mesh.receiveShadow = true;
   world.scene.add(mesh);
-  // ground provider covering the ramp footprint (physics matches the visual)
+  // ground provider covering the ramp footprint (the walking player still
+  // uses heightAt; the CARS collide with the actual mesh via Rapier now)
   const provider = {
     heightAt(x, z) {
       const lx = x - x0;
@@ -113,9 +117,23 @@ function makeRamp(x0, length, height, width) {
     },
     slopeAt() { return height / length; },
   };
-  return provider;
+  return { mesh, provider };
 }
-world.spawn("ramp").add(makeRamp(150, 16, 4.2, 12));  // climb 16m to 4.2m, launch
+const ramp = makeRamp(150, 16, 4.2, 12);              // climb 16m to 4.2m, launch
+world.spawn("ramp").add(ramp.provider);
+
+// ============================================================================
+// REAL PHYSICS — Rapier. Terrain/ramp colliders ARE the render meshes:
+// the car collides with everything that has a shape, from any angle.
+// ============================================================================
+const phys = new Physics({ gravity: -20 });
+const physReady = initRapier().then(() => {
+  world.spawn("physics").add(phys);
+  phys.addMeshCollider(islandMesh);                   // the island, exactly as drawn
+  phys.addMeshCollider(ramp.mesh);                    // the ramp, exactly as drawn
+  phys.addGroundPlane(SEA - 4);                       // nothing falls forever
+  for (const c of cones) phys.addDynamicProp(c, { half: [0.28, 0.42, 0.28], mass: 3.5, restitution: 0.35 });
+});
 
 // circuit road looping the proving ground (shows the road system in context)
 const roads = new RoadNetwork({ ground: (x, z) => islandHeight(x, z) });
@@ -141,23 +159,23 @@ const FLEET = [
 ];
 const cars = [];
 for (const spec of FLEET) {
-  loadVehicle(spec.file, { targetLength: 4.7, textureDir: "models/sedanpack/Texture" }).then((rig) => {
-    if (spec.paint) rig.setPaint(spec.paint);
-    const e = world.spawn("drivable")
-      .mesh(rig.visual).at(-115, 0, spec.z)
-      .add(new VehicleBody({
-        chassis: rig.chassis, wheels: rig.wheels ?? undefined, wheelRadius: rig.wheelRadius,
-        suspension: rig.suspension, enginePower: spec.ep, topSpeed: spec.top, maxLatAccel: spec.grip,
+  Promise.all([physReady, loadVehicle(spec.file, { targetLength: 4.7, textureDir: "models/sedanpack/Texture" })])
+    .then(([, rig]) => {
+      if (spec.paint) rig.setPaint(spec.paint);
+      const e = world.spawn("drivable").mesh(rig.visual).at(-115, 0, spec.z);
+      e.rotation.y = Math.PI / 2;                      // face down the straight (+X) — BEFORE the body spawns
+      e.add(new RapierVehicle({
+        suspension: rig.suspension, wheelRadius: rig.wheelRadius,
+        enginePower: spec.ep, topSpeed: spec.top,
       }))
-      .add(new VehicleRig(rig, { sirenHz: spec.siren }))
-      .add(new EngineSound(audio, { hp: spec.hp }))
-      .add(new SkidMarks());
-    const self = e;
-    e.add(new PlayerVehicleControls({ enabled: () => drivingCar === self }));
-    e.rotation.y = Math.PI / 2;                        // face down the straight (+X)
-    e.specName = spec.name; e.rig = rig;
-    cars.push(e);
-  }).catch((err) => console.warn(spec.name, err.message));
+        .add(new VehicleRig(rig, { sirenHz: spec.siren }))
+        .add(new EngineSound(audio, { hp: spec.hp }))
+        .add(new SkidMarks());
+      const self = e;
+      e.add(new PlayerVehicleControls({ enabled: () => drivingCar === self }));
+      e.specName = spec.name; e.rig = rig;
+      cars.push(e);
+    }).catch((err) => console.warn(spec.name, err.message));
 }
 
 // ============================================================================
@@ -235,4 +253,4 @@ world.spawn("hud").add({ update() {
 } });
 
 engine.start();
-window.__pf = { engine, world, audio, player, cars, hf, get drivingCar() { return drivingCar; } };
+window.__pf = { engine, world, audio, player, cars, hf, phys, physReady, cones, get drivingCar() { return drivingCar; } };

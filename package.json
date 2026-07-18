@@ -9,6 +9,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
     "three": "^0.185.1"
   },
   "devDependencies": {
