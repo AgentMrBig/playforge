@@ -514,8 +514,8 @@ export class RapierVehicle extends VehicleBody {
  * to walk, set y to jump) and `onGround`. Entity origin stays at the FEET.
  */
 export class CharacterBody {
-  constructor({ radius = 0.32, height = 1.7, gravity = -20 } = {}) {
-    Object.assign(this, { radius, height, gravity });
+  constructor({ radius = 0.32, height = 1.7, gravity = -20, massKg = 80 } = {}) {
+    Object.assign(this, { radius, height, gravity, massKg });
     this.velocity = new THREE.Vector3();
     this.onGround = true;
     this.phys = null; this.rb = null; this.col = null; this.ctrl = null;
@@ -591,8 +591,31 @@ export class CharacterBody {
     const t = this.rb.translation();
     const nx = t.x + mv.x, ny = t.y + mv.y, nz = t.z + mv.z;
     this.rb.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+    const wasGrounded = this.onGround;
+    const fallVy = this.velocity.y;
     this.onGround = this.ctrl.computedGrounded();
+    const justLanded = !wasGrounded && this.onGround && fallVy < -2;
     if (this.onGround && this.velocity.y < 0) this.velocity.y = 0;
+    // standing WEIGHT: a kinematic capsule is infinitely heavy to the solver,
+    // so a person on a car hood pressed nothing (Erik: "it needs to feel my
+    // weight"). Apply his real weight (m·g) to whatever dynamic body he
+    // stands on, at his feet — the suspension answers honestly.
+    if (this.onGround && this.ctrl.numComputedCollisions) {
+      const n = this.ctrl.numComputedCollisions();
+      for (let i = 0; i < n; i++) {
+        const cc = this.ctrl.computedCollision(i);
+        const body = cc?.collider?.parent?.();
+        if (!body || body.bodyType() !== 0) continue;      // dynamic bodies only
+        const nyr = cc.normal1?.y ?? 0;
+        if (Math.abs(nyr) < 0.5) continue;                 // standing contact, not a wall graze
+        const foot = cc.witness1 ?? { x: nx, y: ny - half, z: nz };
+        // continuous standing weight, plus the full landing momentum m·Δv
+        // when he JUMPS onto it — that's the thump you actually feel
+        let jy = this.gravity * this.massKg * dt;              // gravity is negative
+        if (justLanded) jy += fallVy * this.massKg;
+        body.applyImpulseAtPoint({ x: 0, y: jy, z: 0 }, { x: foot.x, y: foot.y, z: foot.z }, true);
+      }
+    }
     entity.position.set(nx, ny - half, nz);
     this._lastSynced.copy(entity.position);
   }

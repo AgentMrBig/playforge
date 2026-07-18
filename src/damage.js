@@ -38,6 +38,13 @@ export class CarCollisions {
     this._tmpA = new THREE.Vector3();
     this._tmpB = new THREE.Vector3();
     this._q = new THREE.Quaternion();
+    // ---- wreck smoke: world-space puff pool, driven by entity.damage -------
+    this.smokeStart = 2.5;             // damage value where wisps begin
+    this.smokeFull = 9;                // damage where it's a black wrecked plume
+    this._smoke = null;                // THREE.Points pool (additive, fades to 0)
+    this._sPos = null; this._sVel = null; this._sCol = null; this._sLife = null; this._sLife0 = null; this._sBase = null;
+    this._sNext = 0; this._sCount = 240;
+    this._emitAcc = new WeakMap();     // per-car fractional emission accumulator
   }
 
   init(entity, world) {
@@ -47,6 +54,7 @@ export class CarCollisions {
       speed: [2, 9], life: [0.12, 0.45], gravity: 15, spread: Math.PI * 0.7,
     });
     entity.add(this._sparks);
+    this._buildSmoke(entity);
     // register on the physics contact seam once it exists (Rapier init is async)
     const hook = () => {
       const phys = this._findPhysics(world);
@@ -54,6 +62,32 @@ export class CarCollisions {
       else setTimeout(hook, 200);
     };
     hook();
+  }
+
+  // world-space smoke pool (normal blend, so it can go dark unlike the additive
+  // spark Emitter). Added to the system entity's node, which lives at world
+  // origin in the scene, so puffs stay where they were emitted (not glued to
+  // the car).
+  _buildSmoke(entity) {
+    const n = this._sCount;
+    this._sPos = new Float32Array(n * 3);
+    this._sVel = new Float32Array(n * 3);
+    this._sCol = new Float32Array(n * 3);
+    this._sLife = new Float32Array(n);
+    this._sLife0 = new Float32Array(n);
+    this._sBase = new Float32Array(n);     // per-puff base grey (faded by life)
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this._sPos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this._sCol, 3));
+    // additive so faded/dead puffs (colour → 0) vanish cleanly, like the spark
+    // Emitter. Wreck severity reads through DENSITY + size, not darkness.
+    this._smoke = new THREE.Points(geo, new THREE.PointsMaterial({
+      size: 0.9, vertexColors: true, transparent: true, opacity: 0.6,
+      depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+    }));
+    this._smoke.frustumCulled = false;
+    geo.setDrawRange(0, 0);
+    entity.object3d.add(this._smoke);
   }
 
   _findPhysics(world) {
@@ -100,6 +134,59 @@ export class CarCollisions {
       me.damage = (me.damage ?? 0) + strength;
       me.onCarHit?.(strength, dir.clone());
     }
+  }
+
+  // ---- per-frame: emit wreck smoke from damaged cars + advance the pool ----
+  update(dt) {
+    if (!this._smoke || !this._world) return;
+    for (const e of this._world.entities) {
+      if (!this._carVehicle(e) || !e.damage || e.damage < this.smokeStart) continue;
+      // 0..1 severity across the smoke band → emission rate + darkness
+      const sev = Math.min(1, (e.damage - this.smokeStart) / (this.smokeFull - this.smokeStart));
+      const rate = 6 + sev * 34;                        // puffs/sec
+      let acc = (this._emitAcc.get(e) ?? 0) + rate * dt;
+      const yaw = e.rotation.y;
+      const fx = Math.sin(yaw), fz = Math.cos(yaw);     // car forward = engine bay
+      while (acc >= 1) { acc -= 1; this._spawnPuff(e, fx, fz, sev); }
+      this._emitAcc.set(e, acc);
+    }
+    this._stepSmoke(dt);
+  }
+
+  _spawnPuff(car, fx, fz, sev) {
+    const i = this._sNext; this._sNext = (this._sNext + 1) % this._sCount;
+    const p = car.position;
+    this._sPos[i*3]   = p.x + fx * 1.35 + (Math.random() - 0.5) * 0.4;
+    this._sPos[i*3+1] = p.y + 0.7 + Math.random() * 0.2;
+    this._sPos[i*3+2] = p.z + fz * 1.35 + (Math.random() - 0.5) * 0.4;
+    this._sVel[i*3]   = (Math.random() - 0.5) * 0.5;
+    this._sVel[i*3+1] = 1.2 + Math.random() * 0.9;      // rise
+    this._sVel[i*3+2] = (Math.random() - 0.5) * 0.5;
+    // sootier (lower base) when lightly hurt, thicker/brighter smoke when wrecked
+    // — density does most of the "wrecked" work; base grey adds body
+    this._sBase[i] = 0.28 + sev * 0.22;
+    this._sLife[i] = this._sLife0[i] = 1.1 + Math.random() * 1.3 + sev * 0.8;
+  }
+
+  _stepSmoke(dt) {
+    const P = this._sPos, V = this._sVel, C = this._sCol, L = this._sLife, L0 = this._sLife0, B = this._sBase;
+    let maxAlive = 0;
+    for (let i = 0; i < this._sCount; i++) {
+      if (L[i] <= 0) { C[i*3] = C[i*3+1] = C[i*3+2] = 0; continue; }
+      L[i] -= dt;
+      V[i*3+1] += 0.4 * dt;                             // buoyant lift
+      V[i*3] *= 0.98; V[i*3+2] *= 0.98;
+      P[i*3] += V[i*3] * dt; P[i*3+1] += V[i*3+1] * dt; P[i*3+2] += V[i*3+2] * dt;
+      // fade in fast, out slow: brightness peaks early then dissolves to 0
+      const t = Math.max(L[i], 0) / L0[i];              // 1 (new) → 0 (dead)
+      const c = B[i] * Math.min(1, t * 3) * t;          // additive → clean vanish
+      C[i*3] = C[i*3+1] = C[i*3+2] = c;
+      maxAlive = i + 1;
+    }
+    const geo = this._smoke.geometry;
+    geo.setDrawRange(0, maxAlive);
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.color.needsUpdate = true;
   }
 
   /** dent every body panel of a car toward `dirWorld` by up to `amount` (m). */
