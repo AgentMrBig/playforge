@@ -20,4 +20,5 @@ export { CarCollisions } from "./damage.js";
 export { loadModel, loadCarModel } from "./assets.js";
 export { loadVehicle, VehicleRig } from "./vehicledef.js";
 export { noise2, fbm, ridged, mulberry } from "./noise.js";
+export { HUD } from "./hud.js";
 export * as THREE from "three";

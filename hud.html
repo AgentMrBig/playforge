@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlayForge — HUD test</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+  /* faux ground so the translucent HUD has something to read over */
+  #scene {
+    position: fixed; inset: 0;
+    background: linear-gradient(#7db4e6 0%, #a9d0ef 42%, #6f9e52 42%, #3f6f34 100%);
+  }
+  #hint { position: fixed; top: 12px; left: 14px; color: #fff; opacity: .8; font-size: 13px;
+          text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  #hint b { font-weight: 700; }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <div id="hint"><b>HUD test</b> — drag the slider to sweep the needle · <code>window.__hud.render({kmh})</code></div>
+  <input id="spd" type="range" min="0" max="150" value="0"
+         style="position:fixed; left:14px; bottom:18px; width:240px;" />
+  <script type="module">
+    import { HUD } from "./src/hud.js";
+    const hud = new HUD({ topKmh: 140, corner: "br" }).mount();
+    window.__hud = hud;
+    // deterministic first frame so a headless screenshot proves the draw
+    hud.render({ kmh: 92, topKmh: 140, onGround: true });
+    // interactive: slider drives it (needs a real pointer; fine for manual play)
+    const spd = document.getElementById("spd");
+    spd.addEventListener("input", () => hud.render({ kmh: +spd.value, topKmh: 140, onGround: true }));
+    // gentle auto-demo when a real rAF is available (won't tick in a throttled tab)
+    let t = 0;
+    (function demo() {
+      if (!document.hidden) { t += 0.016; const v = 70 + 68 * Math.sin(t * 0.6); hud.render({ kmh: Math.max(0, v), topKmh: 140, onGround: true }); }
+      requestAnimationFrame(demo);
+    })();
+  </script>
+</body>
+</html>

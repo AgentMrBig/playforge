@@ -87,7 +87,6 @@ export class VehicleBody {
     this.upset = false;
     this._quat = new THREE.Quaternion();
     this._angVel = new THREE.Vector3();     // world-space rad/s
-    this._rightingT = 0;                    // time spent resting off-wheels
     this._half = new THREE.Vector3(0.95, 0.62, 2.2); // body half-extents (center +0.62 up)
     this._box = new THREE.Box3();
     this._other = new THREE.Box3();
@@ -115,8 +114,39 @@ export class VehicleBody {
       this._susp.pitch, entity.rotation.y, this._susp.roll, "YXZ"));
     this._angVel.set(0, this.yawRate, 0);
     if (seedAngVel) this._angVel.add(seedAngVel);
-    this._rightingT = 0;
     this.sliding = true;                     // marks + audio read this
+  }
+
+  // upright + calm → hand the rigid body back to the driving model (this is
+  // physics settling, not a scripted reset — orientation/velocity carry over)
+  _settle(entity) {
+    this.upset = false;
+    const e = new THREE.Euler().setFromQuaternion(this._quat, "YXZ");
+    entity.rotation.set(0, e.y, 0);
+    this.yawRate = this._angVel.y;
+    const fwd = new THREE.Vector3(Math.sin(e.y), 0, Math.cos(e.y));
+    this.speed = this.velocity.dot(fwd);
+    this.sliding = false;
+    this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
+  }
+
+  /**
+   * Manual recovery (bind it to F) — the player's way off the roof. Sets the
+   * car upright at rest where it lies. Explicit player tool, not hidden magic.
+   */
+  recover(entity, world) {
+    const e = this.upset
+      ? new THREE.Euler().setFromQuaternion(this._quat, "YXZ")
+      : entity.rotation;
+    const yaw = e.y;
+    this.upset = false;
+    this.velocity.set(0, 0, 0);
+    this.yawRate = 0; this.speed = 0;
+    this._angVel.set(0, 0, 0);
+    this.sliding = false; this.wheelspin = false;
+    this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
+    entity.rotation.set(0, yaw, 0);
+    entity.position.y = groundYAt(world, entity.position.x, entity.position.z);
   }
 
   get kmh() { return Math.abs(this.speed * 3.6); }
@@ -203,9 +233,12 @@ export class VehicleBody {
       const yawAccel = (a * ayF - b * ayR) * this.mass / this.inertia;
       this.yawRate = THREE.MathUtils.clamp(this.yawRate + yawAccel * dt, -3.5, 3.5);
       entity.rotation.y = yaw + this.yawRate * dt;
-      // trip-over: sliding sideways HARD at speed digs the tires in and
-      // flips the car (dirt-trip) — the NFS2 "hit the wall wrong" moment
-      if (Math.abs(vy) > 11 && speedAbs > 14 && this.onGround) {
+      // trip-over: sliding sideways VIOLENTLY digs the tires in and flips
+      // the car (dirt-trip). Threshold is deliberately extreme — a normal
+      // power slide (vy 8-14) must stay a power slide; Erik's drift at 65
+      // was tripping the old 11 m/s gate. Real flips come from impacts
+      // (applyImpulse) — this only catches truly ballistic sideways travel.
+      if (Math.abs(vy) > 18 && Math.hypot(vx, vy) > 22 && this.onGround) {
         const roll = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
           .multiplyScalar(Math.sign(vy) * (2.6 + Math.abs(vy) * 0.06));
         this._enterUpset(entity, roll);
@@ -239,6 +272,7 @@ export class VehicleBody {
 
     // ---- integrate + ground ----------------------------------------------
     entity.position.addScaledVector(this.velocity, dt);
+    const wasAirborne = !this.onGround;
     this.onGround = false;
     let groundY = -Infinity;
     for (const e of world.entities)
@@ -250,6 +284,20 @@ export class VehicleBody {
     if (groundY === -Infinity) groundY = 0; // flat-world default floor
     if (entity.position.y <= groundY + 0.02) {
       entity.position.y = groundY;
+      // landing SIDEWAYS off a jump digs the wheels in and trips the car —
+      // the honest flip trigger ("drive it crazy enough or make jumps")
+      if (wasAirborne && this.velocity.y < -6) {
+        const ny = entity.rotation.y;
+        const latV = this.velocity.x * Math.cos(ny) - this.velocity.z * Math.sin(ny);
+        if (Math.abs(latV) > 8) {
+          const fall = -this.velocity.y;
+          const roll = new THREE.Vector3(Math.sin(ny), 0, Math.cos(ny))
+            .multiplyScalar(Math.sign(latV) * (1.8 + Math.abs(latV) * 0.09 + fall * 0.05));
+          this._enterUpset(entity, roll);
+          this.velocity.y = 2.5;
+          return;
+        }
+      }
       // ramp launch: rising ground under us becomes upward velocity, so at a
       // ramp lip the car keeps that momentum and actually flies (then lands
       // and the suspension soaks it up)
@@ -325,10 +373,12 @@ export class VehicleBody {
       contacts++;
       deepest = Math.max(deepest, pen);
       pv.copy(this._angVel).cross(r).add(this.velocity);   // point velocity
-      // normal force: stiff spring + damping, elastic-ish (NFS2 bounce)
-      let fn = pen * 90 - pv.y * 6;
+      // normal force: stiff spring + damping, elastic-ish (NFS2 bounce).
+      // 240/corner ⇒ rest penetration ≈ 2.5cm on 4 corners — the old 90/60
+      // let the body visibly SINK ~7cm into the ground (Erik caught it)
+      let fn = pen * 240 - pv.y * 9;
       if (fn < 0) continue;
-      fn = Math.min(fn, 60);
+      fn = Math.min(fn, 150);
       F.y += fn;
       // friction opposes the point's horizontal slide
       const fh = Math.hypot(pv.x, pv.z);
@@ -343,29 +393,15 @@ export class VehicleBody {
     if (deepest > 0.02 && this.velocity.y < 0) this.velocity.y *= -0.35;   // elastic bounce
     if (deepest > 0.3) entity.position.y += (deepest - 0.3);               // hard depen
 
-    // ---- settle / auto-right ------------------------------------------------
+    // ---- settle: upright + calm → seamlessly back to driving ---------------
+    // NO auto-righting. The old "NFS2 forgiveness" fired timed flip impulses
+    // (with an inverted axis, no less) — Erik watched the car rotate 90°,
+    // hold 1.3s, rotate again, "like clockwork", and called it: don't fake
+    // it. If the car ends on its roof, it stays there — recover() (F key)
+    // is the player's honest way out, same as BeamNG.
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this._quat);
     const calm = this._angVel.length() < 0.7 && this.velocity.length() < 3 && contacts > 0;
-    if (calm && up.y > 0.85) {                       // upright: back to driving
-      this.upset = false;
-      const e = new THREE.Euler().setFromQuaternion(this._quat, "YXZ");
-      entity.rotation.set(0, e.y, 0);
-      this.yawRate = this._angVel.y;
-      const fwd = new THREE.Vector3(Math.sin(e.y), 0, Math.cos(e.y));
-      this.speed = this.velocity.dot(fwd);
-      this.sliding = false;
-      this._susp = { heave: 0, heaveV: 0, roll: 0, rollV: 0, pitch: 0, pitchV: 0 };
-      return;
-    }
-    if (calm && up.y <= 0.85) {                      // resting on side/roof
-      this._rightingT += dt;
-      if (this._rightingT > 1.3) {                   // NFS2 forgiveness: flip it back
-        const axis = new THREE.Vector3(up.z, 0, -up.x).normalize();
-        if (axis.lengthSq() > 0.01) this._angVel.addScaledVector(axis, up.y < 0 ? 4.2 : 3.0);
-        this.velocity.y = Math.max(this.velocity.y, 3.2);
-        this._rightingT = 0;
-      }
-    } else this._rightingT = 0;
+    if (calm && up.y > 0.85) { this._settle(entity); return; }
 
     entity.object3d.quaternion.copy(this._quat);
   }

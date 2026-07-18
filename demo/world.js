@@ -216,6 +216,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   const target = drivingCar ?? (() => { let b=null,d=5; for(const c of cars){const dd=c.position.distanceTo(player.position); if(dd<d){b=c;d=dd;}} return b; })();
+  if (e.code === "KeyF" && target) target.get(VehicleBody)?.recover(target, world); // BeamNG-style recover
   const vr = target?.components.find((c) => c.openAll);
   if (!vr) return;
   if (e.code === "KeyO") vr.rig.openParts.some((p) => p.target > 0.5) ? vr.closeAll() : vr.openAll();
