@@ -592,6 +592,11 @@ export class CharacterBody {
     this.col?.setEnabled(on);
     if (on && this.rb) {
       const p = this._entity.position, half = this.height / 2;
+      // HARD teleport, not just setNextKinematic: the next _move runs as a
+      // _pre hook BEFORE the world step applies the pending translation, so
+      // the controller was still colliding from the OLD spot and wrote that
+      // back into the entity — the ragdoll get-up "teleport respawn" (Erik)
+      this.rb.setTranslation({ x: p.x, y: p.y + half, z: p.z }, true);
       this.rb.setNextKinematicTranslation({ x: p.x, y: p.y + half, z: p.z });
       this._lastSynced.copy(p);
       this.velocity.set(0, 0, 0);

@@ -38,17 +38,20 @@ const SEGMENTS = [
   ["shinR",     "RightLeg",     "RightFoot",     0.06],
 ];
 const JOINTS = [
-  // parent      child        at-bone (the anatomical pivot)
-  ["pelvis",    "chest",     "Spine1"],
-  ["chest",     "head",      "Head"],
-  ["chest",     "upperArmL", "LeftArm"],
-  ["upperArmL", "forearmL",  "LeftForeArm"],
-  ["chest",     "upperArmR", "RightArm"],
-  ["upperArmR", "forearmR",  "RightForeArm"],
-  ["pelvis",    "thighL",    "LeftUpLeg"],
-  ["thighL",    "shinL",     "LeftLeg"],
-  ["pelvis",    "thighR",    "RightUpLeg"],
-  ["thighR",    "shinR",     "RightLeg"],
+  // parent      child        at-bone            limit (rad from bind pose —
+  //                                             anatomical range; Erik: "limit
+  //                                             the damage so they wont go all
+  //                                             weird")
+  ["pelvis",    "chest",     "Spine1",        0.55],
+  ["chest",     "head",      "Head",          0.85],
+  ["chest",     "upperArmL", "LeftArm",       1.55],
+  ["upperArmL", "forearmL",  "LeftForeArm",   1.45],
+  ["chest",     "upperArmR", "RightArm",      1.55],
+  ["upperArmR", "forearmR",  "RightForeArm",  1.45],
+  ["pelvis",    "thighL",    "LeftUpLeg",     1.25],
+  ["thighL",    "shinL",     "LeftLeg",       1.35],
+  ["pelvis",    "thighR",    "RightUpLeg",    1.25],
+  ["thighR",    "shinR",     "RightLeg",      1.35],
 ];
 // ragdoll parts share a collision group that ignores itself (limbs would
 // otherwise fight their neighbors) but hits everything else
@@ -113,11 +116,17 @@ export class Ragdoll {
         // bone pivot in body-local space
         pOff: a.clone().sub(mid).applyQuaternion(quat.clone().invert()),
         targetQ: boneWorldQ.clone(),
+        // bone LOCAL rest position — update() overwrites bone positions while
+        // ragdolling, and the clips are quaternion-only so nothing puts them
+        // back. Without this restore every ragdoll left the skeleton a bit
+        // more displaced until it was "liquid poured out" (Erik) and the
+        // next enter() built bodies from the corrupted pose.
+        restPos: bone.position.clone(),
       };
       this.segments.push(seg);
       this._byName[name] = seg;
     }
-    for (const [pn, cn, pivotBone] of JOINTS) {
+    for (const [pn, cn, pivotBone, limit] of JOINTS) {
       const p = this._byName[pn], c = this._byName[cn];
       const bone = this.bones[pivotBone];
       if (!p || !c || !bone) continue;
@@ -126,7 +135,11 @@ export class Ragdoll {
       const j = P.world.createImpulseJoint(
         R.JointData.spherical({ x: a1.x, y: a1.y, z: a1.z }, { x: a2.x, y: a2.y, z: a2.z }),
         p.body, c.body, true);
-      this._joints.push(j);
+      // bind-pose relative orientation — the ligament limit is measured from here
+      const qp = p.body.rotation(), qc = c.body.rotation();
+      const rel0 = new THREE.Quaternion(qp.x, qp.y, qp.z, qp.w).invert()
+        .multiply(new THREE.Quaternion(qc.x, qc.y, qc.z, qc.w));
+      this._joints.push({ j, p, c, limit: limit ?? 1.5, rel0 });
     }
   }
 
@@ -211,6 +224,37 @@ export class Ragdoll {
         s.body.applyTorqueImpulse({ x: torque.x * k, y: torque.y * k, z: torque.z * k }, true);
       }
     }
+    // ligaments: past the anatomical limit, a stiff equal-and-opposite torque
+    // pair shoves the joint back inside its range (elbows/knees no longer fold
+    // backward). Same inertia-scaled discipline as the muscles.
+    for (const L of this._joints) {
+      if (!L.limit) continue;
+      const qp = L.p.body.rotation(), qc = L.c.body.rotation();
+      const parentQ = T.q1.set(qp.x, qp.y, qp.z, qp.w);
+      const rel = T.q2.copy(parentQ).invert().multiply(T.q3.set(qc.x, qc.y, qc.z, qc.w));
+      const err = T.q3.copy(L.rel0).invert().multiply(rel);
+      if (err.w < 0) { err.x *= -1; err.y *= -1; err.z *= -1; err.w *= -1; }
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
+      const over = ang - L.limit;
+      if (over > 0) {
+        const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
+        // err = rel0⁻¹·δ·rel0 — the axis lives in the CHILD-BIND frame, so
+        // world = parentQ·rel0·axis (parentQ alone pushed sideways and FED
+        // energy in: joints blew past π and the body never settled)
+        const bindW = T.q2.copy(parentQ).multiply(L.rel0);
+        const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3).applyQuaternion(bindW);
+        const wp = L.p.body.angvel(), wc = L.c.body.angvel();
+        const relW = T.v2.set(wc.x - wp.x, wc.y - wp.y, wc.z - wp.z).dot(axis);
+        // gains in Δω terms: ~28·relW ≈ critically damped once both bodies
+        // take their share; hard cap keeps one step from ever injecting more
+        // than ~12 rad/s (420/45 uncapped chattered at 60Hz, hit 106 rad/s,
+        // and the sanity clamp then bled ALL momentum — body plopped in place)
+        const mag = Math.min(140 * over + 28 * Math.max(0, relW), 750);
+        const k = L.c.inertia * dt * mag;
+        L.c.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
+        L.p.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
+      }
+    }
     // settle tracking + hard sanity clamps (a bad tune must never feed the
     // solver runaway energy — that froze the page once)
     let maxV = 0;
@@ -255,11 +299,14 @@ export class Ragdoll {
   /** hand the bones back to the Animator */
   exit() {
     this.active = false;
-    for (const s of this.segments) s.body.setEnabled?.(false);
+    for (const s of this.segments) {
+      s.body.setEnabled?.(false);
+      s.bone.position.copy(s.restPos);       // undo update()'s position writes
+    }
   }
 
   dispose() {
-    for (const j of this._joints) this.phys.world.removeImpulseJoint(j, true);
+    for (const L of this._joints) this.phys.world.removeImpulseJoint(L.j ?? L, true);
     for (const s of this.segments) this.phys.world.removeRigidBody(s.body);
     this.segments = []; this._joints = [];
   }

@@ -165,20 +165,33 @@ export class CarCollisions {
       const sev = Math.min(1, (e.damage - this.smokeStart) / (this.smokeFull - this.smokeStart));
       const rate = 6 + sev * 34;                        // puffs/sec
       let acc = (this._emitAcc.get(e) ?? 0) + rate * dt;
-      const yaw = e.rotation.y;
-      const fx = Math.sin(yaw), fz = Math.cos(yaw);     // car forward = engine bay
-      while (acc >= 1) { acc -= 1; this._spawnPuff(e, fx, fz, sev); }
+      // engine bay = between the two FRONT TIRES (Erik). Use the real wheel
+      // contacts when grounded; else quaternion forward — never euler yaw,
+      // which lies the moment the body tilts (emitter wandered off the car).
+      const vb = this._carVehicle(e);
+      const wc = vb?.wheelContacts;
+      let ex, ey, ez;
+      if (wc?.FL && wc?.FR) {
+        ex = (wc.FL.x + wc.FR.x) / 2;
+        ey = (wc.FL.y + wc.FR.y) / 2 + 0.55;
+        ez = (wc.FL.z + wc.FR.z) / 2;
+      } else {
+        const f = new THREE.Vector3(0, 0, 1).applyQuaternion(e.object3d.quaternion);
+        ex = e.position.x + f.x * 1.35;
+        ey = e.position.y + 0.45;
+        ez = e.position.z + f.z * 1.35;
+      }
+      while (acc >= 1) { acc -= 1; this._spawnPuff(ex, ey, ez, sev); }
       this._emitAcc.set(e, acc);
     }
     this._stepSmoke(dt);
   }
 
-  _spawnPuff(car, fx, fz, sev) {
+  _spawnPuff(ex, ey, ez, sev) {
     const i = this._sNext; this._sNext = (this._sNext + 1) % this._sCount;
-    const p = car.position;
-    this._sPos[i*3]   = p.x + fx * 1.35 + (Math.random() - 0.5) * 0.4;
-    this._sPos[i*3+1] = p.y + 0.7 + Math.random() * 0.2;
-    this._sPos[i*3+2] = p.z + fz * 1.35 + (Math.random() - 0.5) * 0.4;
+    this._sPos[i*3]   = ex + (Math.random() - 0.5) * 0.4;
+    this._sPos[i*3+1] = ey + Math.random() * 0.2;
+    this._sPos[i*3+2] = ez + (Math.random() - 0.5) * 0.4;
     this._sVel[i*3]   = (Math.random() - 0.5) * 0.5;
     this._sVel[i*3+1] = 1.2 + Math.random() * 0.9;      // rise
     this._sVel[i*3+2] = (Math.random() - 0.5) * 0.5;
