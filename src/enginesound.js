@@ -59,18 +59,24 @@ export class EngineSound {
     }
     shaper.curve = curve;
 
+    // two cascaded lowpasses = 24 dB/oct — keeps the top end from whining
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
     lp.frequency.value = 400;
+    const lp2 = ctx.createBiquadFilter();
+    lp2.type = "lowpass";
+    lp2.frequency.value = 600;
 
     // oscillator stack: fundamental + sub + harmonics (meaner = more of them)
     const oscs = [], oscGains = [];
+    // baseGain + rpmFade: how much of the voice survives at redline.
+    // Upper harmonics FADE with rpm (that was the whine); sub and noise grow.
     const spec = [
-      { type: "sawtooth", mult: 1, gain: 0.5 },
-      { type: "square", mult: 0.5, gain: 0.34 + this.mean * 0.25 },        // sub growl
-      { type: "sawtooth", mult: 2, gain: 0.1 + this.mean * 0.3, detune: 9 },
-      { type: "sawtooth", mult: 3, gain: this.mean * 0.22, detune: -13 },
-      { type: "square", mult: 0.25, gain: Math.max(0, this.mean - 0.55) * 0.9 }, // top-fuel bass thump
+      { type: "sawtooth", mult: 1, gain: 0.45, rpmFade: 0.35 },
+      { type: "square", mult: 0.5, gain: 0.4 + this.mean * 0.3, rpmFade: 0 },   // sub growl: stays
+      { type: "sawtooth", mult: 2, gain: 0.08 + this.mean * 0.22, detune: 9, rpmFade: 0.75 },
+      { type: "sawtooth", mult: 3, gain: this.mean * 0.15, detune: -13, rpmFade: 0.9 },
+      { type: "square", mult: 0.25, gain: Math.max(0, this.mean - 0.55) * 0.9, rpmFade: 0 }, // top-fuel thump
     ];
     for (const s of spec) {
       const o = ctx.createOscillator(), g = ctx.createGain();
@@ -81,6 +87,8 @@ export class EngineSound {
       o.start();
       oscs.push(o); oscGains.push(g);
       o._mult = s.mult;
+      g._base = s.gain;
+      g._rpmFade = s.rpmFade;
     }
 
     // exhaust noise: looping noise buffer through an rpm-tracking bandpass
@@ -103,9 +111,9 @@ export class EngineSound {
     crackle.gain.value = 0;
     bp.connect(crackle).connect(master);
 
-    shaper.connect(lp).connect(master);
+    shaper.connect(lp).connect(lp2).connect(master);
     master.connect(ctx.destination);
-    this._nodes = { master, shaper, lp, oscs, oscGains, bp, crackle };
+    this._nodes = { master, shaper, lp, lp2, oscs, oscGains, bp, crackle, nGain };
   }
 
   update(dt, { entity }) {
@@ -130,17 +138,29 @@ export class EngineSound {
     const wantRpm = this.redline * Math.max(idleN, rpmN * Math.max(0.35, Math.abs(body.throttle)) + (1 - Math.abs(body.throttle)) * rpmN * 0.8);
     this.rpm += (wantRpm - this.rpm) * (1 - Math.exp(-dt * 8));
 
-    // ---- firing frequency drives the stack --------------------------------
-    const fire = (this.rpm / 60) * (this.cylinders / 2);
-    for (const o of n.oscs) if (o._mult) o.frequency.value = fire * o._mult;
-    n.bp.frequency.value = 180 + fire * 2.2;
+    // ---- firing frequency drives the stack (one octave down: warm, not
+    // whiney — pitch still tracks rpm, just in a listenable register) -------
+    const revN = this.rpm / this.redline;
+    const fire = (this.rpm / 60) * (this.cylinders / 2) * 0.5;
+    for (let i = 0; i < n.oscs.length; i++) {
+      const o = n.oscs[i];
+      if (!o._mult) continue;
+      o.frequency.value = fire * o._mult;
+      const g = n.oscGains[i];
+      if (g?._base !== undefined)          // upper harmonics fade as revs rise
+        g.gain.value = g._base * (1 - g._rpmFade * revN);
+    }
+    n.bp.frequency.value = 140 + fire * 1.6;
+    // roar takes over from tone at high rpm — loud but not piercing
+    n.nGain.gain.value = (0.05 + this.mean * 0.28) * (0.45 + 0.9 * revN);
 
-    // ---- throttle: loudness + brightness ----------------------------------
+    // ---- throttle: loudness + a MUCH tamer brightness curve ---------------
     const t = Math.abs(body.throttle);
     const load = 0.25 + t * 0.75;
-    n.lp.frequency.value = 260 + this.mean * 900 + t * (900 + this.mean * 2600);
-    const vol = (0.05 + 0.1 * this.mean) * load * this.volume *
-                (0.65 + 0.35 * (this.rpm / this.redline));
+    const cutoff = 240 + this.mean * 420 + t * 520 + revN * 260;   // caps ~1.4k
+    n.lp.frequency.value = cutoff;
+    n.lp2.frequency.value = cutoff * 1.6;
+    const vol = (0.05 + 0.1 * this.mean) * load * this.volume * (0.65 + 0.35 * revN);
     n.master.gain.value += (vol - n.master.gain.value) * (1 - Math.exp(-dt * 10));
 
     // ---- misfire crackle: top-fuel idle/lift-off chaos --------------------

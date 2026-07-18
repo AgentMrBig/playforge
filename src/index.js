@@ -14,5 +14,6 @@ export { EngineSound } from "./enginesound.js";
 export { Animator, buildHumanoid } from "./animation.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { SkidMarks } from "./skidmarks.js";
+export { loadModel, loadCarModel } from "./assets.js";
 export { noise2, fbm, ridged, mulberry } from "./noise.js";
 export * as THREE from "three";
