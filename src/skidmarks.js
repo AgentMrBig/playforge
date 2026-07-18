@@ -46,7 +46,18 @@ export class SkidMarks {
     this.mesh.renderOrder = 1;
   }
 
-  init(entity, world) { world.scene.add(this.mesh); }
+  init(entity, world) {
+    world.scene.add(this.mesh);
+    // auto-size marks from the vehicle's real tire geometry when available
+    const body = entity.get(VehicleBody) ??
+      entity.components.find((c) => c.suspension || c.steerMax !== undefined);
+    const s = body?.suspension;
+    if (s) {
+      if (s.wheelWidth) this.width = s.wheelWidth * 0.5;   // ribbon = one tire wide
+      if (s.track) this.track = s.track * 0.5;             // ribbons at the rear tires
+      if (s.rearOffset) this.rearOffset = s.rearOffset;
+    }
+  }
   dispose() { this.mesh.parent?.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
 
   _groundY(world, x, z) {

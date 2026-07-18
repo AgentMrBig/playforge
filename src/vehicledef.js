@@ -150,6 +150,7 @@ export async function loadVehicle(url, {
       if (sub === "rear") { parts.wheels.rl = pivot; parts.wheels.rr = pivot; }
       else parts.wheels[sub] = pivot;
       parts._wheelR = (mx.y - mn.y) / 2;              // model-space radius
+      if (sub === "fl" || sub === "fr") parts._wheelW = mx.x - mn.x; // tire width (axle extent)
     } else if (role === "door" && sub) {
       // hinge at the door's FRONT edge (+Z), vertical axis
       const hinge = new THREE.Vector3(c.x, c.y, mx.z);
@@ -215,9 +216,11 @@ export async function loadVehicle(url, {
     suspension = {
       bodyRoot: root, wheelRoot, scale: S,
       wheelRadius: (parts._wheelR ?? 0.32) * scale,
+      wheelWidth: (parts._wheelW ?? 0.4) * scale,   // real tire width (meters)
       baseBodyY: root.position.y, corners, wheels: parts.wheels,
       track: Math.abs((corners.fl?.ox ?? 0.7) - (corners.fr?.ox ?? -0.7)) || 1.4,
       wheelbase: Math.abs((corners.fl?.oz ?? 1.4) - (corners.rl?.oz ?? -1.4)) || 2.6,
+      rearOffset: Math.abs(corners.rl?.oz ?? 1.3),   // rear axle behind center
     };
   }
 
