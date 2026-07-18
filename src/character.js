@@ -93,6 +93,34 @@ export async function loadCharacter(url, {
   // ---- normalize. UE exports lie through node transforms (Z-up, cm bones,
   // unposed geometry bounds) — measure by SKINNED VERTICES when skinned: the
   // same ground truth the renderer uses.
+  // The pack FBX is internally inconsistent: bindMatrix places the MESH at its
+  // editor-world spot (~180m out) while the bind skeleton sits at the origin.
+  // The bind pose still assembles (the offsets cancel), but every vertex then
+  // sits ~180 body-lengths from its bone in bone space — the moment a clip
+  // rotates anything, body parts swing around that lever and scatter across
+  // the map. Measure the skin-space mismatch and translate the vertices onto
+  // their own skeleton, where they ride their bones with cm-scale levers.
+  root.updateWorldMatrix(true, true);
+  root.traverse((o) => {
+    if (!o.isSkinnedMesh) return;
+    const posA = o.geometry.attributes.position;
+    const bmv = new THREE.Vector3();
+    const meshBox = new THREE.Box3();
+    const st = Math.max(1, Math.floor(posA.count / 2000));
+    for (let i = 0; i < posA.count; i += st) {
+      meshBox.expandByPoint(bmv.fromBufferAttribute(posA, i).applyMatrix4(o.bindMatrix));
+    }
+    const boneBox = new THREE.Box3();
+    const m = new THREE.Matrix4(), bp = new THREE.Vector3();
+    for (const bi of o.skeleton.boneInverses) {
+      boneBox.expandByPoint(bp.setFromMatrixPosition(m.copy(bi).invert()));
+    }
+    const D = meshBox.getCenter(new THREE.Vector3()).sub(boneBox.getCenter(new THREE.Vector3()));
+    if (D.length() < 1) return;                          // healthy rig — leave it be
+    const inv = new THREE.Matrix4().copy(o.bindMatrix).invert();
+    const dLocal = D.applyMatrix3(new THREE.Matrix3().setFromMatrix4(inv));
+    o.geometry.translate(-dLocal.x, -dLocal.y, -dLocal.z);
+  });
   const skinnedBounds = () => {
     root.updateWorldMatrix(true, true);
     const bb = new THREE.Box3();

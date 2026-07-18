@@ -342,7 +342,7 @@ const player = world.spawn("player")
 // the OFFICIAL character (Erik): an Assetsville citizen, with the Mixamo
 // animation pack retargeted onto the pack's UE skeleton at load
 loadCharacter("models/fabpack/SK_citizen_male_28.fbx", {
-  textureDir: "models/fabpack", texture: "T_colorPalette2048.PNG", flipY: false,
+  textureDir: "models/fabpack", texture: "T_colorPalette2048.PNG", flipY: true,
   targetHeight: 1.8,
   retargetFrom: "models/character/humanoid_male.fbx",
   animations: [
