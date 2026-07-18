@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlayForge — road network test</title>
+<style>
+  html, body { margin: 0; background: #1a1e24; color: #cfd6de; font-family: system-ui, sans-serif; }
+  #wrap { display: flex; gap: 16px; padding: 14px; align-items: flex-start; }
+  canvas { background: #10141a; border-radius: 8px; }
+  #log { font-size: 13px; white-space: pre-wrap; max-width: 360px; line-height: 1.5; }
+  b { color: #ffd75e; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="map" width="720" height="720"></canvas>
+  <div id="log"></div>
+</div>
+<script type="module">
+  import { generateRoads, RoadGraph, fbm } from "./src/index.js";
+
+  // ---- a fake island matching the game's shape family ----
+  const R = 1500, SEA = 0, seed = 7777;
+  const heightAt = (x, z) => {
+    const nx = x / R, nz = z / R, d = Math.hypot(nx, nz);
+    const falloff = Math.max(0, 1 - d * d * 1.05);
+    const base = fbm(nx * 2.6 + 10, nz * 2.6 + 10, { octaves: 5, seed }) * 0.5 + 0.5;
+    return -8 + falloff * (11 + base * 26);
+  };
+  // scatter a few coastal/inland settlements on land
+  const settlements = [
+    { x: 300, z: 120, r: 150 }, { x: -420, z: -260, r: 90 }, { x: 80, z: 560, r: 90 },
+    { x: -560, z: 300, r: 90 }, { x: 520, z: -420, r: 150 },
+  ].filter((s) => heightAt(s.x, s.z) > SEA + 1);
+  const runway = { x0: 700, z: 40, len: 260 };
+
+  const { roads, graph } = generateRoads({ settlements, heightAt, islandR: R, sea: SEA, runway, seed });
+  window.__roads = roads; window.__graph = graph;
+
+  // ---- draw top-down ----
+  const cv = document.getElementById("map"), ctx = cv.getContext("2d"), S = cv.width;
+  const VIEW = 1700; // world half-extent shown
+  const W2S = (x, z) => [S / 2 + (x / (VIEW * 2)) * S, S / 2 + (z / (VIEW * 2)) * S];
+  // terrain
+  const N = 240, step = (VIEW * 2) / N;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const wx = -VIEW + i * step, wz = -VIEW + j * step, h = heightAt(wx, wz);
+    ctx.fillStyle = h < SEA ? "#2e5c8a" : h < SEA + 1.8 ? "#bcae78" : `rgb(${70 + Math.min(1,h/40)*30},${120 - Math.min(1,h/40)*20},66)`;
+    ctx.fillRect((i / N) * S, (j / N) * S, S / N + 1, S / N + 1);
+  }
+  // settlements
+  for (const s of settlements) { const [px, py] = W2S(s.x, s.z); ctx.beginPath(); ctx.arc(px, py, Math.max(3, s.r / VIEW * S), 0, 7); ctx.fillStyle = "rgba(230,220,180,.5)"; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.stroke(); }
+  // runway
+  { const [ax, ay] = W2S(runway.x0, runway.z), [bx, by] = W2S(runway.x0 + runway.len, runway.z); ctx.strokeStyle = "#333"; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); }
+  // roads
+  const col = { artery: "#e8c838", connector: "#ff8c3b", spur: "#5affa2" };
+  for (const r of roads) {
+    ctx.beginPath();
+    r.points.forEach((p, i) => { const [px, py] = W2S(p[0], p[1]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.strokeStyle = col[r.kind] || "#fff"; ctx.lineWidth = Math.max(2, r.width / VIEW * S); ctx.lineCap = "round"; ctx.stroke();
+  }
+
+  // ---- graph sanity: snap a test point + draw its lane target ----
+  const tp = [200, 200];
+  const near = graph.nearestOnRoad(tp[0], tp[1]);
+  const tgt = graph.laneTarget(tp[0], tp[1], 30);
+  if (near) { const [px, py] = W2S(...near.point); ctx.fillStyle = "#f0f"; ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill(); }
+  if (tgt) { const [px, py] = W2S(...tgt); ctx.fillStyle = "#0ff"; ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill(); }
+
+  // ---- report ----
+  let roadPts = roads.reduce((s, r) => s + r.points.length, 0);
+  let anyWater = roads.some((r) => r.points.some((p) => heightAt(p[0], p[1]) < SEA));
+  document.getElementById("log").innerHTML =
+    `<b>Road network generated</b>\n` +
+    `settlements on land: ${settlements.length}\n` +
+    `roads: ${roads.length} (${roads.map(r=>r.kind).join(", ")})\n` +
+    `total polyline points: ${roadPts}\n` +
+    `graph roads: ${graph.roads.length}, samples: ${graph.roads.reduce((s,r)=>s+r.samples.length,0)}\n` +
+    `any road point under water: <b>${anyWater ? "YES ⚠" : "no ✓"}</b>\n` +
+    `test snap @${tp}: onRoad=${near?.onRoad}, dist=${near?.dist?.toFixed(0)}m (magenta)\n` +
+    `lane target 30m ahead: [${tgt?.map(v=>v.toFixed(0)).join(", ")}] (cyan)\n\n` +
+    `yellow=artery · orange=connector · green=spur`;
+  window.__report = { roads: roads.length, anyWater, near, tgt };
+</script>
+</body>
+</html>
