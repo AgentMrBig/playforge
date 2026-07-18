@@ -7,7 +7,7 @@ import {
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody,
-  fbm, ridged, mulberry, THREE, HUD,
+  fbm, ridged, mulberry, THREE, HUD, Minimap,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -556,6 +556,24 @@ world.spawn("speedo").add({ update() {
   // FIXED gauge max from the car's top speed (+12% headroom), rounded to a tidy 20 —
   // so the dial never grows when you peg it (Erik 2026-07-18); needle just pins at top.
   if (rb) speedo.render({ kmh: rb.kmh ?? 0, topKmh: Math.ceil(((rb.topSpeed ?? 38) * 3.6 * 1.12) / 20) * 20, onGround: true });
+} });
+
+// MINIMAP (General, #179 HUD lane): top-right north-up radar of the island — land/water
+// from heightAt, player heading arrow, fleet (yellow) + settlements (grey). Reads only.
+const minimap = new Minimap({ corner: "tr", range: 450 }).mount();
+const _mmFwd = new THREE.Vector3();
+world.spawn("minimap").add({ update() {
+  const who = drivingCar ?? player;
+  who.object3d.getWorldDirection(_mmFwd);
+  minimap.render({
+    x: who.position.x, z: who.position.z,
+    heading: Math.atan2(_mmFwd.x, -_mmFwd.z),
+    sampleHeight: heightAt, sea: SEA,
+    points: [
+      ...settlements.map((s) => ({ x: s.x, z: s.z, color: "#c9c4bb", r: 3.5 })),
+      ...cars.filter((c) => c !== drivingCar).map((c) => ({ x: c.position.x, z: c.position.z, color: "#ffd75e", r: 3 })),
+    ],
+  });
 } });
 
 engine.start();
