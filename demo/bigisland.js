@@ -3,10 +3,10 @@
 // the mocap character on foot, the textured fleet to drive, and a crash-test
 // runway with a brick wall for the live-damage direction.
 import {
-  Engine, World, ThirdPersonRig, Audio, Body, Collider, StreamedTerrain,
+  Engine, World, ThirdPersonRig, Audio, Collider, StreamedTerrain,
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
-  initRapier, Physics, RapierVehicle,
+  initRapier, Physics, RapierVehicle, CharacterBody,
   fbm, ridged, mulberry, THREE, HUD,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -132,13 +132,40 @@ const BLD_MATS = [0x8a8f96, 0x9a6a4f, 0x5e7d94, 0xa89a7d].map((c) => {
   const m = new THREE.MeshStandardMaterial({ color: c }); m._shared = true; return m;
 });
 const ROOF_MAT = new THREE.MeshStandardMaterial({ color: 0x8a4a3a }); ROOF_MAT._shared = true;
-// grass sprig = two crossed quads, instanced by the hundred per tile
+// grass sprig = two crossed quads with a real blade texture (plain quads
+// read as "weird green cards" — Erik). Blades are drawn near-white so the
+// per-instance color supplies the green.
+const GRASS_TEX = (() => {
+  const cv = document.createElement("canvas"); cv.width = 64; cv.height = 64;
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, 64, 64);
+  for (let i = 0; i < 9; i++) {
+    const bx = 6 + i * 6 + (i % 3) * 1.5;              // blade root x
+    const lean = (i - 4) * 2.2;                         // fan out from center
+    const h = 40 + (i % 4) * 6;                         // blade height
+    const grad = g.createLinearGradient(0, 64, 0, 64 - h);
+    grad.addColorStop(0, "rgba(210,225,190,1)");
+    grad.addColorStop(1, "rgba(245,250,235,0.9)");
+    g.strokeStyle = grad;
+    g.lineWidth = 2.6;
+    g.beginPath();
+    g.moveTo(bx, 64);
+    g.quadraticCurveTo(bx + lean * 0.4, 64 - h * 0.6, bx + lean, 64 - h);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
 const GRASS_GEO = (() => {
-  const g1 = new THREE.PlaneGeometry(0.45, 0.38, 1, 1); g1.translate(0, 0.18, 0);
+  const g1 = new THREE.PlaneGeometry(0.5, 0.44, 1, 1); g1.translate(0, 0.21, 0);
   const g2 = g1.clone().rotateY(Math.PI / 2);
   return mergeGeometries([g1, g2]);
 })();
-const GRASS_MAT = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 1 });
+const GRASS_MAT = new THREE.MeshStandardMaterial({
+  map: GRASS_TEX, alphaTest: 0.4, transparent: false,
+  side: THREE.DoubleSide, roughness: 1,
+});
 GRASS_MAT._shared = true;
 
 function decorate(tile, group) {
@@ -272,7 +299,8 @@ sea.add({ update(dt, { engine }) {
 // ============================================================================
 class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
-    const body = entity.get(Body);
+    const body = entity.components.find((c) => c.velocity && c.onGround !== undefined);
+    if (!body) return;
     if (drivingCar) { body.velocity.x = 0; body.velocity.z = 0; return; }
     const cam = world.camera;
     const f = new THREE.Vector3(); cam.getWorldDirection(f); f.y = 0; f.normalize();
@@ -286,8 +314,13 @@ class PlayerMove {
     body.velocity.x = wish.x * run;
     body.velocity.z = wish.z * run;
     if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
-    if (wish.lengthSq() > 0.01)
-      entity.rotation.y = Math.atan2(body.velocity.x, body.velocity.z);
+    if (wish.lengthSq() > 0.01) {
+      // ease toward the movement direction — snapping reads robotic (Erik)
+      const want = Math.atan2(body.velocity.x, body.velocity.z);
+      let d = want - entity.rotation.y;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      entity.rotation.y += d * Math.min(1, dt * 9);
+    }
     const anim = entity.components.find((c) => c.play && c.mixer);
     if (anim) {
       const planar = Math.hypot(body.velocity.x, body.velocity.z);
@@ -301,7 +334,7 @@ class PlayerMove {
 
 const player = world.spawn("player")
   .at(RUN.x0 + 4, RUN.h + 1.5, RUN.z + RUN.w / 2 + 4)
-  .add(new Body({ size: [0.5, 1.7, 0.5], offset: [0, 0.85, 0] }))
+  .add(new CharacterBody({ radius: 0.32, height: 1.7 }))   // real capsule vs EVERYTHING
   .add(new PlayerMove());
 loadCharacter("models/character/humanoid_male.fbx", {
   textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,

@@ -398,6 +398,95 @@ export class RapierVehicle extends VehicleBody {
   }
 }
 
+/**
+ * CharacterBody — the walking player as a REAL physics capsule (Rapier
+ * kinematic character controller). Collides with everything: terrain tiles,
+ * buildings, cars, props — and shoves dynamic bodies out of the way.
+ * Standing policy per Erik: every new character/object gets physics.
+ *
+ * Drop-in for the old AABB Body in controllers: exposes `velocity` (set x/z
+ * to walk, set y to jump) and `onGround`. Entity origin stays at the FEET.
+ */
+export class CharacterBody {
+  constructor({ radius = 0.32, height = 1.7, gravity = -20 } = {}) {
+    Object.assign(this, { radius, height, gravity });
+    this.velocity = new THREE.Vector3();
+    this.onGround = true;
+    this.phys = null; this.rb = null; this.col = null; this.ctrl = null;
+    this._lastSynced = new THREE.Vector3(NaN, NaN, NaN);
+  }
+
+  init(entity, world) {
+    this._entity = entity;
+    for (const e of world.entities)
+      for (const c of e.components)
+        if (c instanceof Physics) this.phys = c;
+    // Physics may still be booting (WASM init) — retry from the update hook
+    if (this.phys?.world) this._create(entity);
+  }
+
+  _create(entity) {
+    const P = this.phys, p = entity.position, half = this.height / 2;
+    this.rb = P.world.createRigidBody(
+      R.RigidBodyDesc.kinematicPositionBased().setTranslation(p.x, p.y + half, p.z));
+    this.col = P.world.createCollider(
+      R.ColliderDesc.capsule(Math.max(0.05, half - this.radius), this.radius), this.rb);
+    this.ctrl = P.world.createCharacterController(0.06);
+    this.ctrl.enableAutostep(0.5, 0.3, true);           // curbs, stairs
+    this.ctrl.enableSnapToGround(0.45);                 // stick on downslopes
+    this.ctrl.setApplyImpulsesToDynamicBodies(true);    // shove cones/crates/cars
+    P._handleEnt.set(this.col.handle, entity);
+    this._lastSynced.copy(p);
+    this._preHook = (dt) => this._move(dt);
+    P._pre.push(this._preHook);
+  }
+
+  fixedUpdate(dt, { world }) {
+    // Physics spawns async (WASM boot) — keep looking until it exists
+    if (!this.phys) {
+      for (const e of world.entities)
+        for (const c of e.components)
+          if (c instanceof Physics) this.phys = c;
+    }
+    if (!this.rb && this.phys?.world) this._create(this._entity);
+  }
+
+  _move(dt) {
+    const entity = this._entity, half = this.height / 2;
+    // external teleport (exiting a car sets entity.position directly)
+    if (entity.position.distanceToSquared(this._lastSynced) > 1) {
+      const p = entity.position;
+      this.rb.setNextKinematicTranslation({ x: p.x, y: p.y + half, z: p.z });
+      this._lastSynced.copy(p);
+      this.velocity.y = 0;
+      return;
+    }
+    this.velocity.y += this.gravity * dt;
+    const desired = {
+      x: this.velocity.x * dt,
+      y: this.velocity.y * dt,
+      z: this.velocity.z * dt,
+    };
+    this.ctrl.computeColliderMovement(this.col, desired);
+    const mv = this.ctrl.computedMovement();
+    const t = this.rb.translation();
+    const nx = t.x + mv.x, ny = t.y + mv.y, nz = t.z + mv.z;
+    this.rb.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+    this.onGround = this.ctrl.computedGrounded();
+    if (this.onGround && this.velocity.y < 0) this.velocity.y = 0;
+    entity.position.set(nx, ny - half, nz);
+    this._lastSynced.copy(entity.position);
+  }
+
+  dispose() {
+    if (this.phys) {
+      this.phys._pre = this.phys._pre.filter((h) => h !== this._preHook);
+      if (this.ctrl) this.phys.world.removeCharacterController(this.ctrl);
+      if (this.rb) this.phys.world.removeRigidBody(this.rb);
+    }
+  }
+}
+
 // rough box inertia for a car-shaped body
 function principalInertia(m, w, h, l) {
   return {

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlayForge — minimap test</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+  #scene { position: fixed; inset: 0; background: #5f7f52; }
+  #hint { position: fixed; top: 12px; left: 14px; color: #fff; opacity: .85; font-size: 13px;
+          text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <div id="hint"><b>Minimap test</b> — fake island; sliders pan the player · <code>window.__mm.render(...)</code></div>
+  <input id="px" type="range" min="-1200" max="1200" value="200" style="position:fixed;left:14px;bottom:44px;width:240px;">
+  <input id="hd" type="range" min="0" max="628" value="80" style="position:fixed;left:14px;bottom:18px;width:240px;">
+  <script type="module">
+    import { Minimap, fbm } from "./src/index.js";
+    // a fake island height function (radial falloff + noise), same shape family as the game
+    const R = 1500;
+    const sampleHeight = (x, z) => {
+      const d = Math.hypot(x / R, z / R);
+      const falloff = Math.max(0, 1 - d * d * 1.05);
+      const base = fbm(x / R * 2.6 + 10, z / R * 2.6 + 10, { octaves: 4, seed: 7777 }) * 0.5 + 0.5;
+      return -8 + falloff * (11 + base * 26);
+    };
+    const settlements = [{ x: 300, z: 120 }, { x: -420, z: -260 }, { x: 60, z: 520 }];
+    const cars = [{ x: 240, z: 60 }, { x: 180, z: 140 }, { x: -80, z: -40 }];
+    const mm = new Minimap({ corner: "tr", range: 700 }).mount();
+    window.__mm = mm;
+    function draw() {
+      const x = +document.getElementById("px").value, heading = +document.getElementById("hd").value / 100;
+      mm.render({
+        x, z: 0, heading, sampleHeight, sea: 0,
+        points: [
+          ...settlements.map((s) => ({ x: s.x, z: s.z, color: "#c9c4bb", r: 3.5 })),
+          ...cars.map((cc) => ({ x: cc.x, z: cc.z, color: "#ffd75e", r: 3 })),
+        ],
+      });
+    }
+    document.getElementById("px").addEventListener("input", draw);
+    document.getElementById("hd").addEventListener("input", draw);
+    draw();
+  </script>
+</body>
+</html>
