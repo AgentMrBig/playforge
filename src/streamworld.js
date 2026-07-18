@@ -145,6 +145,7 @@ export class StreamedTerrain {
       key, ix, iz, res, group,
       x0, z0, size,
       colliders: [],
+      cleanup: [],                 // fns run when the tile is disposed
       building: false,
       addCollider: null,
     };
@@ -156,6 +157,9 @@ export class StreamedTerrain {
       };
       this._decorate(tile, group);
     }
+    // physics/streaming hook: onTile(tile, mesh) — push undo fns to
+    // tile.cleanup (e.g. remove the tile's Rapier collider when it unloads)
+    if (this.onTile) this.onTile(tile, mesh);
 
     // replace-on-ready: retire the old LOD only after the new tile is built
     if (old) this._dispose(world, key, old);
@@ -167,6 +171,8 @@ export class StreamedTerrain {
   _dispose(world, key, tileOverride = null) {
     const t = tileOverride ?? this._tiles.get(key);
     if (!t) return;
+    t.dead = true;
+    for (const f of t.cleanup ?? []) f();
     t.group.parent?.remove(t.group);
     t.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();

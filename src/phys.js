@@ -112,15 +112,18 @@ export class Physics {
    * plow through (cones, crates, obstacles). Entity origin becomes the body
    * CENTER; existing children are shifted down half-height to compensate.
    */
-  addDynamicProp(entity, { half = [0.3, 0.45, 0.3], mass = 4, friction = 0.7, restitution = 0.3 } = {}) {
+  addDynamicProp(entity, { half = [0.3, 0.45, 0.3], mass = 4, friction = 0.7, restitution = 0.3, shape = "box" } = {}) {
     const p = entity.position;
-    for (const child of entity.object3d.children) child.position.y -= half[1];
+    const lift = shape === "ball" ? (half.r ?? half[0]) : half[1];
+    for (const child of entity.object3d.children) child.position.y -= lift;
     const rb = this.world.createRigidBody(
-      R.RigidBodyDesc.dynamic().setTranslation(p.x, p.y + half[1], p.z)
+      R.RigidBodyDesc.dynamic().setTranslation(p.x, p.y + lift, p.z)
         .setRotation(quatY(entity.rotation?.y ?? 0)).setCanSleep(true));
+    const desc = shape === "ball"
+      ? R.ColliderDesc.ball(half.r ?? half[0])
+      : R.ColliderDesc.cuboid(half[0], half[1], half[2]);
     const col = this.world.createCollider(
-      R.ColliderDesc.cuboid(half[0], half[1], half[2]).setMass(mass)
-        .setFriction(friction).setRestitution(restitution), rb);
+      desc.setMass(mass).setFriction(friction).setRestitution(restitution), rb);
     this._handleEnt.set(col.handle, entity);
     this._post.push(() => {
       if (rb.isSleeping()) return;
@@ -161,14 +164,17 @@ export class RapierVehicle extends VehicleBody {
       suspComp = 2.6,         // compression damping
       suspRelax = 3.4,        // rebound damping
       frictionSlip = 11.5,    // tire longitudinal traction
-      sideFriction = 1.0,     // tire lateral grip multiplier
+      sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
+      steerGrip = 13,         // m/s² lateral-G that full steering may demand
       driftSideFriction = 0.4,// rear lateral grip while handbraking (drift!)
       restitution = 0.25,     // chassis bounciness (that NFS2 elasticity)
-      linDamp = 0.06, angDamp = 0.7,
+      // low damping: a flipping car must KEEP its momentum and tumble
+      // (0.7 angular was strangling flips mid-rotation — Erik felt it)
+      linDamp = 0.03, angDamp = 0.22,
     } = opts;
     Object.assign(this, {
       suspRest, suspStiff, suspComp, suspRelax, frictionSlip,
-      sideFriction, driftSideFriction, restitution, linDamp, angDamp,
+      sideFriction, driftSideFriction, restitution, linDamp, angDamp, steerGrip,
     });
     this.rb = null; this.ctrl = null; this.phys = null;
     this._wheelKeys = ["fl", "fr", "rl", "rr"];
@@ -251,10 +257,15 @@ export class RapierVehicle extends VehicleBody {
     const t = THREE.MathUtils.clamp(this.throttle, -1, 1);
     const fwdSpeed = this.speed;
 
-    // speed-sensitive steering like before
-    const speedFactor = 1 / (1 + Math.abs(fwdSpeed) * 0.032);
-    const target = this.steerInput * this.steerMax * speedFactor;
-    const dS = THREE.MathUtils.clamp(target - this.steer, -this.steerSpeed * dt, this.steerSpeed * dt);
+    // speed-sensitive steering — full lock only when parking; at speed the
+    // wheel angle is capped so full input demands ~steerGrip m/s² lateral,
+    // δ_cap = atan(L·a/v²) (how real steering feels: you don't crank 15°
+    // at 90 km/h). Input shaping only — the tires still do the physics.
+    const v2 = Math.max(fwdSpeed * fwdSpeed, 1);
+    const cap = Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2));
+    const target = this.steerInput * cap;
+    const rate = this.steerSpeed * (this.steerInput === 0 ? 1.6 : 0.65); // ease in, snap back
+    const dS = THREE.MathUtils.clamp(target - this.steer, -rate * dt, rate * dt);
     this.steer += dS;
     // + = left, matching PlayForge's convention (verified by real heading
     // delta, NOT rotation.y — euler Y wraps at ±π/2 and lies about yaw)

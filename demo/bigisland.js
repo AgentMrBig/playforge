@@ -1,15 +1,18 @@
-// PLAYFORGE — BIG ISLAND: a massive streamed world with cities and towns.
-// ~3km island, mountain ranges, forests, deterministic settlements. The
-// terrain streams in LOD tiles around you; physics runs on pure math.
+// PLAYFORGE — THE MAP. A massive streamed island on REAL physics:
+// Rapier rigid bodies everywhere (terrain tiles, buildings, obstacles, cars),
+// the mocap character on foot, the textured fleet to drive, and a crash-test
+// runway with a brick wall for the live-damage direction.
 import {
   Engine, World, ThirdPersonRig, Audio, Body, Collider, StreamedTerrain,
-  VehicleBody, PlayerVehicleControls, EngineSound, Animator, buildHumanoid,
-  SkidMarks, fbm, ridged, mulberry, THREE,
+  PlayerVehicleControls, EngineSound, SkidMarks, Animator,
+  loadVehicle, VehicleRig, loadCharacter, CarCollisions,
+  initRapier, Physics, RapierVehicle,
+  fbm, ridged, mulberry, THREE,
 } from "../src/index.js";
-import { muscle } from "./carmodels.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
-document.getElementById("seed").textContent = seed;
+const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
 
 const engine = new Engine(document.getElementById("game"), { clearColor: 0x8fb9dc });
 const world = new World();
@@ -32,11 +35,9 @@ world.spawn("sun").mesh((() => {
 // ============================================================================
 const ISLAND_R = 1500, SEA = 0;
 
-// settlements: hash a coarse grid, keep cells that land on viable ground
 const SETTLE_CELL = 420;
 const settlements = [];
 {
-  const r = mulberry(seed ^ 0x5E77);
   for (let gz = -3; gz <= 3; gz++)
     for (let gx = -3; gx <= 3; gx++) {
       const h = mulberry((seed ^ (gx * 73856093) ^ (gz * 19349663)) >>> 0);
@@ -48,7 +49,7 @@ const settlements = [];
       const big = h() < 0.3;
       settlements.push({
         x: cx, z: cz, h: base,
-        r: big ? 150 : 70,                            // pad radius
+        r: big ? 150 : 70,
         type: big ? "city" : "town",
         seed: Math.floor(h() * 1e9),
       });
@@ -60,7 +61,6 @@ function rawHeight(x, z) {
   const d = Math.hypot(nx, nz);
   const falloff = Math.max(0, 1 - d * d * 1.05);
   const base = fbm(nx * 2.6 + 10, nz * 2.6 + 10, { octaves: 5, seed }) * 0.5 + 0.5;
-  // two mountain belts: ridged noise gated by a low-freq band mask
   const belt = fbm(nx * 1.3 + 40, nz * 1.3 + 40, { octaves: 2, seed: seed + 13 });
   const mtn = ridged(nx * 5, nz * 5, { octaves: 4, seed: seed + 7 });
   const inland = Math.max(0, falloff - 0.25) / 0.75;
@@ -68,16 +68,37 @@ function rawHeight(x, z) {
          inland * Math.max(0, belt) * mtn * 85;
 }
 
-function heightAt(x, z) {
+function settleHeight(x, z) {
   let h = rawHeight(x, z);
-  // settlements flatten the land into building pads
   for (const s of settlements) {
     const d = Math.hypot(x - s.x, z - s.z);
     if (d < s.r * 1.5) {
       const t = 1 - Math.min(d / (s.r * 1.5), 1);
-      const pad = t * t * (3 - 2 * t);               // smoothstep
+      const pad = t * t * (3 - 2 * t);
       h = h + (s.h - h) * Math.min(1, pad * 1.6);
     }
+  }
+  return h;
+}
+
+// ---- crash-test runway: long flat strip ending in a brick wall -------------
+const start = settlements[0] ?? { x: ISLAND_R * 0.55, z: 0, r: 40 };
+const RUN = { x0: start.x + (start.r ?? 40) * 0.8, z: start.z, len: 260, w: 16 };
+RUN.h = Math.max(settleHeight(RUN.x0 + RUN.len / 2, RUN.z), SEA + 2.5);
+
+const inRunway = (x, z, pad = 0) =>
+  x > RUN.x0 - pad && x < RUN.x0 + RUN.len + pad && Math.abs(z - RUN.z) < RUN.w / 2 + pad;
+
+function heightAt(x, z) {
+  let h = settleHeight(x, z);
+  // runway flattens the land like a settlement pad, but rectangular
+  const dx = Math.max(RUN.x0 - x, x - (RUN.x0 + RUN.len), 0);
+  const dz = Math.max(Math.abs(z - RUN.z) - RUN.w / 2, 0);
+  const d = Math.hypot(dx, dz);
+  const m = 22;                                        // blend margin
+  if (d < m) {
+    const t = 1 - d / m, s = t * t * (3 - 2 * t);
+    h = h + (RUN.h - h) * s;
   }
   return h;
 }
@@ -88,8 +109,10 @@ const forestNoise = (x, z) => fbm(x / 260 + 99, z / 260 + 99, { octaves: 3, seed
 const SAND = new THREE.Color(0xd9c58a), GRASS = new THREE.Color(0x4c8a45);
 const DRY = new THREE.Color(0x7a9b4e), ROCK = new THREE.Color(0x7b7671);
 const SNOW = new THREE.Color(0xf2f4f7), PAVE = new THREE.Color(0x9a978f);
+const TARMAC = new THREE.Color(0x34383e);
 function colorAt(x, z, h, slope, out) {
-  for (const s of settlements) {                      // paved pads
+  if (inRunway(x, z, 1)) { out.copy(TARMAC); return; }
+  for (const s of settlements) {
     if (Math.hypot(x - s.x, z - s.z) < s.r) { out.copy(PAVE); return; }
   }
   if (h < SEA + 1.6) out.copy(SAND);
@@ -98,7 +121,9 @@ function colorAt(x, z, h, slope, out) {
   else out.copy(GRASS).lerp(DRY, Math.max(0, forestNoise(x, z)) * 0.9);
 }
 
-// ---- per-tile content: trees + settlement buildings ------------------------
+// ============================================================================
+// per-tile content: trees, buildings, GRASS SPRIGS (speed perception!)
+// ============================================================================
 const TREE_GEO = new THREE.ConeGeometry(1.3, 3.4, 6);
 const TREE_MAT = new THREE.MeshStandardMaterial({ color: 0x2e6e32 }); TREE_MAT._shared = true;
 const TRUNK_GEO = new THREE.CylinderGeometry(0.18, 0.28, 1.5, 5);
@@ -107,12 +132,21 @@ const BLD_MATS = [0x8a8f96, 0x9a6a4f, 0x5e7d94, 0xa89a7d].map((c) => {
   const m = new THREE.MeshStandardMaterial({ color: c }); m._shared = true; return m;
 });
 const ROOF_MAT = new THREE.MeshStandardMaterial({ color: 0x8a4a3a }); ROOF_MAT._shared = true;
+// grass sprig = two crossed quads, instanced by the hundred per tile
+const GRASS_GEO = (() => {
+  const g1 = new THREE.PlaneGeometry(0.45, 0.38, 1, 1); g1.translate(0, 0.18, 0);
+  const g2 = g1.clone().rotateY(Math.PI / 2);
+  return mergeGeometries([g1, g2]);
+})();
+const GRASS_MAT = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 1 });
+GRASS_MAT._shared = true;
 
 function decorate(tile, group) {
   const { x0, z0, size } = tile;
   const r = mulberry((seed ^ (tile.ix * 668265263) ^ (tile.iz * 374761393)) >>> 0);
+  tile.physBoxes = [];                                 // → Rapier statics in onTile
 
-  // ---- forests (instanced per tile, skip low LOD far tiles) ---------------
+  // ---- forests ------------------------------------------------------------
   if (tile.res >= 24) {
     const spots = [];
     for (let t = 0; t < 60; t++) {
@@ -120,6 +154,7 @@ function decorate(tile, group) {
       if (forestNoise(x, z) < 0.12) continue;
       const h = heightAt(x, z);
       if (h < SEA + 2 || h > 34) continue;
+      if (inRunway(x, z, 8)) continue;
       if (settlements.some((s) => Math.hypot(x - s.x, z - s.z) < s.r * 1.15)) continue;
       spots.push([x, h, z, 0.7 + r() * 0.9]);
     }
@@ -132,20 +167,46 @@ function decorate(tile, group) {
         crowns.setMatrixAt(i, m);
         m.identity().setPosition(x, h + 0.7 * sc, z); m.scale(s3.set(sc, sc, sc));
         trunks.setMatrixAt(i, m);
+        tile.physBoxes.push({ half: [0.35 * sc, 2.2 * sc, 0.35 * sc], center: [x, h + 2.2 * sc, z] });
       });
       group.add(crowns, trunks);
     }
   }
 
-  // ---- settlement buildings inside this tile ------------------------------
+  // ---- grass sprigs: the ground finally rushes past you -------------------
+  if (tile.res >= 24) {
+    const want = tile.res >= 48 ? 560 : 170;
+    const pts = [];
+    for (let t = 0; t < want; t++) {
+      const x = x0 + r() * size, z = z0 + r() * size;
+      const h = heightAt(x, z);
+      if (h < SEA + 1.8 || h > 34) continue;
+      if (Math.abs(heightAt(x + 1.5, z) - h) > 1.1) continue;   // too steep
+      if (inRunway(x, z, 2)) continue;
+      if (settlements.some((s) => Math.hypot(x - s.x, z - s.z) < s.r)) continue;
+      pts.push([x, h, z, 0.7 + r() * 0.7, r() * Math.PI, 0.28 + r() * 0.07, 0.28 + r() * 0.14]);
+    }
+    if (pts.length) {
+      const im = new THREE.InstancedMesh(GRASS_GEO, GRASS_MAT, pts.length);
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s3 = new THREE.Vector3();
+      const e = new THREE.Euler(), p3 = new THREE.Vector3(), col = new THREE.Color();
+      pts.forEach(([x, h, z, sc, rot, hue, li], i) => {
+        q.setFromEuler(e.set(0, rot, 0));
+        m.compose(p3.set(x, h, z), q, s3.set(sc, sc, sc));
+        im.setMatrixAt(i, m);
+        im.setColorAt(i, col.setHSL(hue, 0.5, li));
+      });
+      group.add(im);
+    }
+  }
+
+  // ---- settlement buildings ------------------------------------------------
   for (const s of settlements) {
-    // quick reject: settlement circle vs tile rect
     const nx = Math.max(x0, Math.min(s.x, x0 + size)), nz = Math.max(z0, Math.min(s.z, z0 + size));
     if (Math.hypot(s.x - nx, s.z - nz) > s.r) continue;
     const sr = mulberry(s.seed);
     const lots = s.type === "city" ? 26 : 9;
     for (let i = 0; i < lots; i++) {
-      // deterministic ring/grid placement per settlement (same every visit)
       const a = (i / lots) * Math.PI * 2 + sr() * 0.5;
       const d = (s.type === "city" ? 0.25 + 0.65 * sr() : 0.3 + 0.55 * sr()) * s.r;
       const bx = s.x + Math.cos(a) * d, bz = s.z + Math.sin(a) * d;
@@ -159,39 +220,56 @@ function decorate(tile, group) {
       bld.position.set(bx, gy + hgt / 2, bz);
       bld.castShadow = tile.res >= 24;
       group.add(bld);
-      if (!big) { // gable roof for houses
+      if (!big) {
         const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, dep) * 0.75, 1.8, 4), ROOF_MAT);
         roof.position.set(bx, gy + hgt + 0.9, bz);
         roof.rotation.y = Math.PI / 4;
         group.add(roof);
       }
-      tile.addCollider(new Collider({ size: [w, hgt, dep], offset: [bx, gy + hgt / 2, bz] }));
+      tile.addCollider(new Collider({ size: [w, hgt, dep], offset: [bx, gy + hgt / 2, bz] })); // walking player
+      tile.physBoxes.push({ half: [w / 2, hgt / 2, dep / 2], center: [bx, gy + hgt / 2, bz] }); // cars
     }
   }
 }
 
 // ============================================================================
-// scene wiring
+// scene wiring: streamed terrain with per-tile Rapier colliders
 // ============================================================================
+let drivingCar = null;
 const terrain = new StreamedTerrain({
   heightAt, colorAt, decorate,
   tileSize: 128,
   rings: [[1, 48], [2, 24], [5, 12]],
-  anchor: () => player.position,
+  anchor: () => (drivingCar ?? player).position,
 });
+const phys = new Physics({ gravity: -20 });
+const pendingTiles = [];
+terrain.onTile = (tile, mesh) => {
+  if (!phys.world) { pendingTiles.push([tile, mesh]); return; }
+  attachTilePhysics(tile, mesh);
+};
+function attachTilePhysics(tile, mesh) {
+  if (tile.dead) return;
+  const cols = phys.addMeshCollider(mesh);             // the tile mesh IS the collider
+  for (const b of tile.physBoxes ?? []) cols.push(phys.addBox(b.half, b.center));
+  tile.cleanup.push(() => cols.forEach((c) => phys.removeCollider(c)));
+}
 world.spawn("terrain").add(terrain);
 
-// sea + seafloor follow the player (the illusion of an infinite ocean)
+// sea + catch-all follow the action
 const sea = world.spawn("sea").mesh(new THREE.Mesh(
   new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2),
   new THREE.MeshStandardMaterial({ color: 0x2e6d9e, transparent: true, opacity: 0.8, roughness: 0.3 }),
 )).at(0, SEA, 0);
 sea.add({ update(dt, { engine }) {
-  sea.position.x = player.position.x; sea.position.z = player.position.z;
+  const a = (drivingCar ?? player).position;
+  sea.position.x = a.x; sea.position.z = a.z;
   sea.position.y = SEA + Math.sin(engine.time * 0.7) * 0.1;
 } });
 
-// ---- player ----------------------------------------------------------------
+// ============================================================================
+// PLAYER — the real mocap character (block guy is gone)
+// ============================================================================
 class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
     const body = entity.get(Body);
@@ -210,7 +288,7 @@ class PlayerMove {
     if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
     if (wish.lengthSq() > 0.01)
       entity.rotation.y = Math.atan2(body.velocity.x, body.velocity.z);
-    const anim = entity.get(Animator);
+    const anim = entity.components.find((c) => c.play && c.mixer);
     if (anim) {
       const planar = Math.hypot(body.velocity.x, body.velocity.z);
       if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
@@ -221,67 +299,184 @@ class PlayerMove {
   }
 }
 
-// spawn on the first town's edge (or the beach if no settlements rolled)
-const start = settlements[0] ?? { x: ISLAND_R * 0.55, z: 0 };
-const rigHuman = buildHumanoid({ shirt: 0xff7a3c });
 const player = world.spawn("player")
-  .mesh(rigHuman.root)
-  .at(start.x, heightAt(start.x, start.z) + 2, start.z + (start.r ?? 40) * 0.7)
-  .add(new Body({ size: [0.6, 1.55, 0.6], offset: [0, 0.78, 0] }))
-  .add(new Animator(rigHuman.root, rigHuman.clips))
+  .at(RUN.x0 + 4, RUN.h + 1.5, RUN.z + RUN.w / 2 + 4)
+  .add(new Body({ size: [0.5, 1.7, 0.5], offset: [0, 0.85, 0] }))
   .add(new PlayerMove());
-player.get(Animator).play("idle");
+loadCharacter("models/character/humanoid_male.fbx", {
+  textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+  animations: [
+    { name: "idle", url: "models/character/anims/idle.fbx" },
+    { name: "walk", url: "models/character/anims/walking.fbx" },
+    { name: "run", url: "models/character/anims/running.fbx" },
+    { name: "jump", url: "models/character/anims/jumping up.fbx" },
+  ],
+}).then((ch) => {
+  player.mesh(ch.visual).add(ch.animator);
+  ch.animator.play("idle");
+  window.__ch = ch;
+}).catch((e) => console.warn("character:", e.message));
 
-// ---- a car to explore with (Muscle spec + engine sound) --------------------
-let drivingCar = null;
-const carBits = muscle(0xc23b3b);
-const car = world.spawn("drivable")
-  .mesh(carBits.visual)
-  .at(player.position.x + 4, heightAt(player.position.x + 4, player.position.z), player.position.z)
-  .add(new VehicleBody({ chassis: carBits.chassis, wheels: carBits.wheels, enginePower: 12, topSpeed: 42, maxLatAccel: 10 }))
-  .add(new PlayerVehicleControls({ enabled: () => drivingCar === car }))
-  .add(new EngineSound(audio, { hp: 450 }))
-  .add(new SkidMarks({ rearOffset: 1.45, track: 0.8 }));
-car.specName = "Muscle"; car.specHp = 450;
+// ============================================================================
+// PHYSICS BOOTSTRAP + crash-test props
+// ============================================================================
+const props = [];                                       // [entity, opts] queued for physReady
+function prop(mesh, x, y, z, opts) {
+  const e = world.spawn("prop").mesh(mesh).at(x, y, z);
+  props.push([e, opts]);
+  return e;
+}
 
-// camera + enter/exit + HUD
-engine.input.enablePointerLock();
-const rig = new ThirdPersonRig(player, {
-  distance: 6.5,
-  isSprinting: () => engine.input.down("ShiftLeft"),
+// runway visual: centerline dashes + start numerals keep it readable
+{
+  const dashMat = new THREE.MeshStandardMaterial({ color: 0xe8e4d8, roughness: 1 });
+  for (let x = RUN.x0 + 6; x < RUN.x0 + RUN.len - 6; x += 12) {
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(4, 0.4).rotateX(-Math.PI / 2), dashMat);
+    dash.position.set(x, RUN.h + 0.03, RUN.z);
+    world.scene.add(dash);
+  }
+}
+// the BRICK WALL at the end of the runway
+const WALL = { x: RUN.x0 + RUN.len + 8, half: [0.5, 1.7, RUN.w / 2 + 3] };
+{
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(WALL.half[0] * 2, WALL.half[1] * 2, WALL.half[2] * 2),
+    new THREE.MeshStandardMaterial({ color: 0x9c4a36, roughness: 0.95 }));
+  wall.position.set(WALL.x, RUN.h + WALL.half[1], RUN.z);
+  wall.castShadow = true;
+  world.scene.add(wall);
+}
+// obstacle lane beside the runway: crates, cones, barriers, ramp, big ball
+const LANE = RUN.z + RUN.w / 2 + 10;
+const crateGeo = new THREE.BoxGeometry(0.85, 0.85, 0.85);
+const crateMat = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.9 });
+for (let row = 0; row < 3; row++)                        // crate pyramid
+  for (let i = 0; i < 3 - row; i++)
+    prop(new THREE.Mesh(crateGeo, crateMat).clone(),
+      RUN.x0 + 80 + i * 0.9 + row * 0.45, RUN.h + row * 0.86, LANE,
+      { half: [0.425, 0.425, 0.425], mass: 25, restitution: 0.2 });
+const coneGeo = new THREE.ConeGeometry(0.35, 0.9, 10);
+const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a1a });
+for (let i = 0; i < 7; i++) {                            // cone slalom
+  const g = new THREE.Group();
+  const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.45; c.castShadow = true;
+  g.add(c);
+  prop(g, RUN.x0 + 120 + i * 10, RUN.h, LANE, { half: [0.28, 0.42, 0.28], mass: 3.5, restitution: 0.35 });
+}
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1.4, 20, 14),
+  new THREE.MeshStandardMaterial({ color: 0xc03a70, roughness: 0.6 }));
+ballMesh.castShadow = true;
+prop(ballMesh, RUN.x0 + 205, RUN.h, LANE, { half: { r: 1.4 }, mass: 120, shape: "ball", restitution: 0.55 });
+// static concrete barriers
+const BARRIERS = [];
+for (let i = 0; i < 3; i++) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.0, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0xb9b6ae, roughness: 1 }));
+  const bx = RUN.x0 + 40 + i * 9, bz = LANE + (i % 2 ? 2.2 : -2.2);
+  b.position.set(bx, RUN.h + 0.5, bz); b.castShadow = true;
+  world.scene.add(b);
+  BARRIERS.push({ half: [1.3, 0.5, 0.3], center: [bx, RUN.h + 0.5, bz] });
+}
+// a jump ramp on the far side of the runway
+const rampMesh = (() => {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0); shape.lineTo(15, 0); shape.lineTo(15, 3.8); shape.lineTo(0, 0);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: 10, bevelEnabled: false });
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x9a5a2e, roughness: 1 }));
+  mesh.position.set(RUN.x0 + 150, RUN.h, RUN.z - RUN.w / 2 - 16);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  world.scene.add(mesh);
+  return mesh;
+})();
+
+const physReady = initRapier().then(() => {
+  world.spawn("physics").add(phys);
+  phys.addGroundPlane(SEA - 6);
+  for (const [t, m] of pendingTiles) attachTilePhysics(t, m);
+  pendingTiles.length = 0;
+  phys.addBox(WALL.half, [WALL.x, RUN.h + WALL.half[1], RUN.z]);   // the wall
+  for (const b of BARRIERS) phys.addBox(b.half, b.center);
+  phys.addMeshCollider(rampMesh);
+  for (const [e, opts] of props) phys.addDynamicProp(e, opts);
 });
+
+// ============================================================================
+// THE FLEET — textured pack cars on real physics
+// ============================================================================
+world.spawn("carCollisions").add(new CarCollisions({ audio }));  // Ember's damage/sparks lane
+const FLEET = [
+  { name: "Classic", file: "models/sedanpack/Assets/Car.fbx",    dz: -5, hp: 300, ep: 13, top: 52, siren: 0, paint: 0xcc2222 },
+  { name: "Police",  file: "models/sedanpack/Assets/Police.fbx", dz: 0,  hp: 360, ep: 14, top: 55, siren: 6 },
+  { name: "Taxi",    file: "models/sedanpack/Assets/Taxi.fbx",   dz: 5,  hp: 260, ep: 12, top: 48, siren: 0 },
+];
+const cars = [];
+for (const spec of FLEET) {
+  Promise.all([physReady, loadVehicle(spec.file, { targetLength: 4.7, textureDir: "models/sedanpack/Texture" })])
+    .then(([, rig]) => {
+      if (spec.paint) rig.setPaint(spec.paint);
+      const e = world.spawn("drivable").mesh(rig.visual)
+        .at(RUN.x0 + 10, RUN.h + 0.4, RUN.z + spec.dz);
+      e.rotation.y = Math.PI / 2;                       // face down the runway (+X)
+      e.add(new RapierVehicle({
+        suspension: rig.suspension, wheelRadius: rig.wheelRadius,
+        enginePower: spec.ep, topSpeed: spec.top,
+      }))
+        .add(new VehicleRig(rig, { sirenHz: spec.siren }))
+        .add(new EngineSound(audio, { hp: spec.hp }))
+        .add(new SkidMarks());
+      const self = e;
+      e.add(new PlayerVehicleControls({ enabled: () => drivingCar === self }));
+      e.specName = spec.name; e.rig = rig;
+      cars.push(e);
+    }).catch((err) => console.warn(spec.name, err.message));
+}
+
+// ============================================================================
+// camera + controls + HUD
+// ============================================================================
+engine.input.enablePointerLock();
+const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft") });
 world.spawn("camera").add(rig);
 
 window.addEventListener("keydown", (e) => {
-  if (e.code === "KeyR") location.search = "?seed=" + Math.floor(Math.random() * 100000);
+  if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
   if (e.code === "KeyE") {
     if (drivingCar) {
       drivingCar.components.find((c) => c.rpm !== undefined)?.stop();
-      const yaw = drivingCar.rotation.y;
-      player.at(drivingCar.position.x + Math.cos(yaw) * 2.4, drivingCar.position.y + 0.5,
-                drivingCar.position.z - Math.sin(yaw) * 2.4);
-      player.object3d.visible = true;
-      rig.target = player; rig.distance = 6.5;
-      drivingCar = null;
-    } else if (car.position.distanceTo(player.position) < 4) {
-      drivingCar = car;
-      player.object3d.visible = false;
-      audio.play("click");
-      car.components.find((c) => c.rpm !== undefined)?.start();
-      rig.target = car; rig.distance = 10;
+      const q = drivingCar.object3d.quaternion;
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+      const yaw = Math.atan2(fwd.x, fwd.z);
+      player.at(drivingCar.position.x + Math.cos(yaw) * 2.6, drivingCar.position.y + 0.4,
+                drivingCar.position.z - Math.sin(yaw) * 2.6);
+      player.object3d.visible = true; rig.target = player; rig.distance = 6.5; drivingCar = null;
+    } else {
+      let best = null, d = 4.5;
+      for (const c of cars) { const dd = c.position.distanceTo(player.position); if (dd < d) { best = c; d = dd; } }
+      if (best) {
+        drivingCar = best; player.object3d.visible = false; audio.play("click");
+        best.components.find((c) => c.rpm !== undefined)?.start();
+        rig.target = best; rig.distance = 9.5;
+      }
     }
   }
+  const target = drivingCar ?? (() => { let b = null, d = 5; for (const c of cars) { const dd = c.position.distanceTo(player.position); if (dd < d) { b = c; d = dd; } } return b; })();
+  if (e.code === "KeyF" && target) target.components.find((c) => c.rb)?.recover(target, world);
+  const vr = target?.components.find((c) => c.openAll);
+  if (!vr) return;
+  if (e.code === "KeyO") vr.rig.openParts.some((p) => p.target > 0.5) ? vr.closeAll() : vr.openAll();
+  if (e.code === "KeyL") vr.headlights = !vr.headlights;
+  if (e.code === "KeyC") { const pal = [0xcc2222, 0x2255cc, 0x111418, 0xe0e0e0, 0x1f9d55, 0xe0a020];
+    vr._pi = ((vr._pi ?? -1) + 1) % pal.length; vr.rig.setPaint(pal[vr._pi]); }
+  const map = { Digit1: "door_fl", Digit2: "door_fr", Digit3: "door_bl", Digit4: "door_br", Digit5: "hood", Digit6: "trunk" };
+  if (map[e.code]) vr.toggle(map[e.code]);
 });
 
-world.spawn("hud").add({
-  update() {
-    const el = document.getElementById("stats");
-    if (el) el.textContent =
-      "tiles " + terrain.tileCount +
-      " · settlements " + settlements.length +
-      (drivingCar ? " · " + Math.round(drivingCar.get(VehicleBody).kmh) + " km/h" : "");
-  },
-});
+world.spawn("hud").add({ update() {
+  const el = document.getElementById("stats"); if (!el) return;
+  el.textContent = drivingCar
+    ? `${drivingCar.specName} · ${Math.round(drivingCar.components.find((c) => c.rb)?.kmh ?? 0)} km/h · [O]panels [C]paint [L]lights [F]recover`
+    : `${cars.length}/3 cars · tiles ${terrain.tileCount} · runway → brick wall dead ahead · [E] near a car to drive`;
+} });
 
 engine.start();
-window.__pf = { engine, world, audio, player, car, terrain, settlements, heightAt };
+window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, get drivingCar() { return drivingCar; } };

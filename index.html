@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>PLAYFORGE — Island Proving Ground</title>
+<title>PLAYFORGE — Big Island</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #93bfe0; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb9dc; }
   canvas { width: 100%; height: 100%; display: block; touch-action: none; }
   #hud { position: fixed; left: 12px; top: 10px; color: #fff; font: 13px/1.5 system-ui, sans-serif;
          user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
@@ -14,9 +14,9 @@
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="hud"><b>PLAYFORGE</b> — Island Proving Ground<br>
-click to look · WASD move · <b>E</b> enter/exit car · Shift run · Space jump/handbrake · <b>O</b> panels · <b>C</b> paint · <b>L</b> lights · <b>F</b> recover car<br>
+<div id="hud"><b>PLAYFORGE</b> — Big Island · seed <span id="seed"></span><br>
+click to look · WASD move · <b>E</b> enter/exit car · Shift run · Space jump/handbrake · <b>F</b> recover car · <b>O</b> panels · <b>C</b> paint · <b>L</b> lights · <b>R</b> new island<br>
 <span id="stats"></span></div>
-<script type="module" src="/demo/world.js"></script>
+<script type="module" src="/demo/bigisland.js"></script>
 </body>
 </html>
