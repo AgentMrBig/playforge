@@ -12,6 +12,7 @@
 // drag = orbit · wheel = zoom · panel picks the state/weapon. Firing clicks are
 // disabled so the mouse is free for the camera.
 
+import * as THREE from "three";
 import { solveTwoBone, limbChain } from "./ik.js";
 
 export class TestMode {
@@ -32,7 +33,25 @@ export class TestMode {
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
     this._buildUI();
     window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); });
+    // middle-mouse = orbit, always (Erik) — input.js only tracks L/R, so track MMB here
+    this._mmb = false;
+    window.addEventListener("pointerdown", (e) => { if (e.button === 1) { this._mmb = true; if (this.active) e.preventDefault(); } });
+    window.addEventListener("pointerup", (e) => { if (e.button === 1) this._mmb = false; });
+    window.addEventListener("mousedown", (e) => { if (e.button === 1 && this.active) e.preventDefault(); });  // kill autoscroll
     if (typeof window !== "undefined") window.__pfTest = this;
+  }
+
+  /** glowing marker on the grabbed limb's target — the visual feedback for the pose editor */
+  _marker() {
+    if (!this._markerMesh) {
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 12, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffa53b, depthTest: false, transparent: true, opacity: 0.95 }));
+      m.renderOrder = 999; m.visible = false;
+      this.world.scene?.add(m);
+      this._markerMesh = m;
+    }
+    return this._markerMesh;
   }
 
   toggle(on = !this.active) {
@@ -90,25 +109,31 @@ export class TestMode {
       { let skel = null; this.player.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose(); }
     const p = this.player.position;
     const ptr = this.input?.pointer;
-    // an effector is selected: drag moves the LIMB (camera-plane), not the camera
+    const marker = this._marker();
+    // MMB always orbits (Erik); LMB orbits when no limb is grabbed, moves the limb when one is
+    if (ptr) {
+      if (this._mmb && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
+      if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
+    }
     if (this.limb && ptr) {
       const chain = limbChain(this.player.object3d, this.limb);
       if (chain) {
-        if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new (this.world.camera.position.constructor)());
-        if (ptr.down && (ptr.dx || ptr.dy)) {
+        if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new THREE.Vector3());
+        if (!this._mmb && ptr.down && (ptr.dx || ptr.dy)) {
           const cam = this.world.camera;
-          const right = new (cam.position.constructor)(1, 0, 0).applyQuaternion(cam.quaternion);
-          const up = new (cam.position.constructor)(0, 1, 0).applyQuaternion(cam.quaternion);
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+          const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
           const k = 0.0022 * this.dist;
           this._ikTarget.addScaledVector(right, ptr.dx * k).addScaledVector(up, -ptr.dy * k);
         }
         this.ikError = solveTwoBone({ ...chain, target: this._ikTarget });
+        marker.visible = true; marker.position.copy(this._ikTarget);
       }
-      if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
-    } else if (ptr) {
-      // drag orbits, wheel zooms (reads the engine's own pointer deltas)
-      if (ptr.down) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
-      if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
+    } else {
+      marker.visible = false;
+      if (ptr && !this._mmb && ptr.down && (ptr.dx || ptr.dy)) {
+        this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
+      }
     }
     const cam = this.world.camera;
     const cy = Math.cos(this.pitch), h = 1.05;
@@ -176,7 +201,7 @@ export class TestMode {
       </div>
       <h4>Physics</h4>
       <button data-act="ragdoll">💥 ragdoll (B)</button>
-      <div class="pf-test-hint">drag = orbit · wheel = zoom<br>grip: 1cm / 5° per tap<br>T toggles test mode</div>`;
+      <div class="pf-test-hint">🖱️ MMB-drag = orbit · wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
@@ -186,7 +211,10 @@ export class TestMode {
     this.panel.querySelector('[data-act="posecap"]').addEventListener("click", () => {
       const n = this.capturePose(); this._gripReadout(n ? `📸 ${n}` : "no skeleton");
     });
-    this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => { window.__pfCombat?.cycle(1); setTimeout(() => this._gripReadout(), 300); });
+    this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => {
+      if (this.anim === "tpose") { this.set("idle"); this.setPaused(true); }   // tpose hides gear — show the swap on a still idle
+      window.__pfCombat?.cycle(1); setTimeout(() => this._gripReadout(), 400);
+    });
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
     // grip editor: nudge the held weapon 1cm / 5° per tap, capture persists it per-weapon
