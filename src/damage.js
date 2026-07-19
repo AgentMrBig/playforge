@@ -81,6 +81,29 @@ export class CarCollisions {
       else setTimeout(hook, 200);
     };
     hook();
+    // expose the shot handler so the combat lane can route onHitCar into damage
+    if (typeof window !== "undefined") window.__pfDamage = this;
+  }
+
+  /** combat SHOT handler (Erik: "shoot a tire → it goes flat"). Route General's
+   *  onHitCar here — it applies body damage AND, if the bullet landed on a wheel,
+   *  flattens that tire via Ninja's setWheelFlat (corner sags + drags + squishes). */
+  shotHit(entity, amount, point, dir) {
+    if (!entity) return;
+    entity.damage = (entity.damage || 0) + (amount || 0);
+    const vb = this._carVehicle(entity);
+    if (vb && point && typeof vb.setWheelFlat === "function") {
+      const keys = vb._wheelKeys ?? ["fl", "fr", "rl", "rr"];
+      const S = vb.suspension;
+      for (let i = 0; i < 4; i++) {
+        const w = S?.wheels?.[keys[i]] ?? vb.wheels?.[keys[i]];
+        if (!w) continue;
+        w.getWorldPosition(this._wpos);
+        if (this._wpos.distanceTo(point) < this.wheelHitRadius && !(vb._flat && vb._flat[i]))
+          vb.setWheelFlat(i, true);            // shot a tire → flat
+      }
+    }
+    entity.onCarHit?.(amount, dir);
   }
 
   // world-space smoke pool (normal blend, so it can go dark unlike the additive
