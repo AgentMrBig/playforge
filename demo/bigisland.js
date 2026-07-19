@@ -712,6 +712,7 @@ try {
     targets: () => cars,
     loadProp,
     player,
+    scene: world.scene,
     onHitCar: (e, amt, _point, dir) => { e.damage = (e.damage || 0) + amt; e.onCarHit?.(amt, dir); combatHud.flashHit(); },
   });
   combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test

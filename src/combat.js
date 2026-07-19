@@ -66,9 +66,10 @@ export class CombatSystem {
    * @param {(kind,point,dir)=>void} [o.effect]  spawn muzzle/impact FX
    * @param {(name)=>void} [o.sound]
    */
-  constructor({ camera, input, targets, loadProp, player = null, onHitCar, effect, sound }) {
+  constructor({ camera, input, targets, loadProp, player = null, scene = null, onHitCar, effect, sound }) {
     this.camera = camera; this.input = input; this.targets = targets; this.loadProp = loadProp;
-    this.player = player; this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
+    this.player = player; this.scene = scene; this._fx = [];
+    this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
     this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, 0] };   // in-hand grip (live-tunable via setHold)
@@ -112,6 +113,7 @@ export class CombatSystem {
   cycle(dir = 1) { this.idx = (this.idx + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length; return this.equip(WEAPON_ORDER[this.idx]); }
 
   update(dt) {
+    this._updateFX(dt);                 // FX fade runs even while driving/disabled
     if (!this.enabled) return;
     this._cool = Math.max(0, this._cool - dt);
     if (this.input.pressed?.("nextWeapon")) this.cycle(1);
@@ -126,14 +128,18 @@ export class CombatSystem {
     // ranged: raycast from the camera, one ray per pellet with spread
     const origin = new THREE.Vector3(); this.camera.getWorldPosition(origin);
     const base = new THREE.Vector3(); this.camera.getWorldDirection(base);
+    // tracer/flash start at the weapon muzzle if we have a model, else just ahead of the camera
+    const muzzleWorld = this._model ? this._model.getWorldPosition(new THREE.Vector3()) : origin.clone().addScaledVector(base, w.muzzle);
     for (let p = 0; p < (w.pellets || 1); p++) {
       const dir = base.clone();
       dir.x += (Math.random() - 0.5) * 2 * w.spread; dir.y += (Math.random() - 0.5) * 2 * w.spread; dir.z += (Math.random() - 0.5) * 2 * w.spread;
       dir.normalize();
       const hit = rayHit(new THREE.Ray(origin, dir), this.targets(), w.range);
-      if (hit) { this.onHitCar(hit.entity, w.damage, hit.point, dir, w.damage * 0.15); this.effect("impact", hit.point, dir); }
+      const end = hit ? hit.point : origin.clone().addScaledVector(dir, w.range);
+      this._tracer(muzzleWorld, end);
+      if (hit) { this.onHitCar(hit.entity, w.damage, hit.point, dir, w.damage * 0.15); this._impact(hit.point); this.effect("impact", hit.point, dir); }
     }
-    this.effect("muzzle", origin.addScaledVector(base, w.muzzle), base); this.sound("shot");
+    this._muzzleFlash(muzzleWorld); this.effect("muzzle", muzzleWorld, base); this.sound("shot");
   }
 
   _melee(w) {
@@ -142,5 +148,35 @@ export class CombatSystem {
     const hits = meleeHits(from, fwd, w.range, w.arc, this.targets());
     for (const h of hits) this.onHitCar(h.entity, w.damage, (h.entity.object3d || h.entity).position, h.dir, w.knockback);
     this.effect("swing", from, fwd); this.sound(hits.length ? "melee_hit" : "swing");
+  }
+
+  // ---- FX: self-managed additive bursts, faded + auto-removed in _updateFX ----
+  _push(obj, ttl) { if (!this.scene) return; this.scene.add(obj); this._fx.push({ obj, ttl, max: ttl }); }
+  _flash(pos, color, r, ttl) {
+    if (!this.scene) return;
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 6, 6),
+      new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.position.copy(pos); this._push(m, ttl);
+  }
+  _muzzleFlash(pos) { this._flash(pos, 0xfff2a0, 0.12, 0.06); }
+  _impact(pos) { this._flash(pos, 0xffa040, 0.16, 0.14); }
+  _tracer(a, b) {
+    if (!this.scene) return;
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]),
+      new THREE.LineBasicMaterial({ color: 0xffd060, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this._push(l, 0.05);
+  }
+  _updateFX(dt) {
+    for (let i = this._fx.length - 1; i >= 0; i--) {
+      const f = this._fx[i]; f.ttl -= dt;
+      const k = Math.max(0, f.ttl / f.max);
+      if (f.obj.material) f.obj.material.opacity = k;
+      if (f.obj.geometry?.type === "SphereGeometry") f.obj.scale.setScalar(0.6 + (1 - k) * 1.6);  // burst outward as it fades
+      if (f.ttl <= 0) {
+        this.scene?.remove(f.obj);
+        f.obj.geometry?.dispose?.(); f.obj.material?.dispose?.();
+        this._fx.splice(i, 1);
+      }
+    }
   }
 }
