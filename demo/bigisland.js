@@ -373,7 +373,9 @@ loadCharacter("models/character/humanoid_male.fbx", {
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
   // (muscle tone pulls toward whatever the Animator is playing — no scripts)
   physReady.then(() => {
-    const rag = new Ragdoll(ch.bones, phys, { tone: 1.1 });
+    // tone 1.6: a person who just got hit still has muscle — 1.1 read as a
+    // wet noodle (Erik: "waaaay too floppy")
+    const rag = new Ragdoll(ch.bones, phys, { tone: 1.6 });
     window.__rag = rag;
     const cb = () => player.components.find((c) => c.ctrl && c.velocity);
     player.add({

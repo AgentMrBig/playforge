@@ -42,16 +42,18 @@ const JOINTS = [
   //                                             anatomical range; Erik: "limit
   //                                             the damage so they wont go all
   //                                             weird")
-  ["pelvis",    "chest",     "Spine1",        0.55],
-  ["chest",     "head",      "Head",          0.85],
-  ["chest",     "upperArmL", "LeftArm",       1.55],
-  ["upperArmL", "forearmL",  "LeftForeArm",   1.45],
-  ["chest",     "upperArmR", "RightArm",      1.55],
-  ["upperArmR", "forearmR",  "RightForeArm",  1.45],
-  ["pelvis",    "thighL",    "LeftUpLeg",     1.25],
-  ["thighL",    "shinL",     "LeftLeg",       1.35],
-  ["pelvis",    "thighR",    "RightUpLeg",    1.25],
-  ["thighR",    "shinR",     "RightLeg",      1.35],
+  // tightened 2026-07-19: Erik read the wide ranges as "floppy" — these are
+  // closer to true human ROM measured from a standing bind
+  ["pelvis",    "chest",     "Spine1",        0.38],
+  ["chest",     "head",      "Head",          0.6],
+  ["chest",     "upperArmL", "LeftArm",       1.2],
+  ["upperArmL", "forearmL",  "LeftForeArm",   1.3],
+  ["chest",     "upperArmR", "RightArm",      1.2],
+  ["upperArmR", "forearmR",  "RightForeArm",  1.3],
+  ["pelvis",    "thighL",    "LeftUpLeg",     1.0],
+  ["thighL",    "shinL",     "LeftLeg",       1.25],
+  ["pelvis",    "thighR",    "RightUpLeg",    1.0],
+  ["thighR",    "shinR",     "RightLeg",      1.25],
 ];
 // ragdoll parts collide with everything INCLUDING each other — limbs must
 // not pass through limbs (Erik). Adjacent jointed segments don't fight
@@ -233,6 +235,20 @@ export class Ragdoll {
     // backward). Same inertia-scaled discipline as the muscles.
     for (const L of this._joints) {
       if (!L.limit) continue;
+      // TENDON DAMPING — always on, not just past the limit. Real joints
+      // resist rotation RATE everywhere (passive muscle, tendons, skin);
+      // without it every joint is a free pendulum = "waaaay too floppy"
+      // (Erik). Pure dissipation, capped per step, so it cannot blow up.
+      {
+        const wp0 = L.p.body.angvel(), wc0 = L.c.body.angvel();
+        const rx = wc0.x - wp0.x, ry = wc0.y - wp0.y, rz = wc0.z - wp0.z;
+        const rl = Math.hypot(rx, ry, rz);
+        if (rl > 0.5) {
+          const dmag = Math.min(14 * rl, 500) * L.c.inertia * dt / rl;
+          L.c.body.applyTorqueImpulse({ x: -rx * dmag, y: -ry * dmag, z: -rz * dmag }, true);
+          L.p.body.applyTorqueImpulse({ x: rx * dmag, y: ry * dmag, z: rz * dmag }, true);
+        }
+      }
       const qp = L.p.body.rotation(), qc = L.c.body.rotation();
       const parentQ = T.q1.set(qp.x, qp.y, qp.z, qp.w);
       const rel = T.q2.copy(parentQ).invert().multiply(T.q3.set(qc.x, qc.y, qc.z, qc.w));
