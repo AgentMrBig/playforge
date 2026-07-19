@@ -11,7 +11,7 @@ import * as THREE from "three";
 // footprints/feel are first-pass; tune with Erik. url = loadProp path (pack has 21 weapons).
 export const WEAPONS = {
   pistol:     { name: "Pistol",      url: "models/fabpack/weapons/SM_Pistol_01.FBX",     kind: "ranged", damage: 8,  range: 120, cooldown: 0.28, auto: false, spread: 0.010, pellets: 1, ammo: 12,  muzzle: 0.35 },
-  shotgun:    { name: "Shotgun",     url: "models/fabpack/weapons/SM_Shotgun_01.FBX",    kind: "ranged", damage: 5,  range: 45,  cooldown: 0.75, auto: false, spread: 0.070, pellets: 8, ammo: 6,   muzzle: 0.60 },
+  shotgun:    { name: "Shotgun",     url: "models/fabpack/weapons/SM_Shotgun_01.FBX",    kind: "ranged", damage: 5,  range: 45,  cooldown: 0.75, auto: false, spread: 0.070, pellets: 8, ammo: 6,   muzzle: 0.60, snd: "shotgun" },
   smg:        { name: "SMG",         url: "models/fabpack/weapons/SM_Smg_01.FBX",        kind: "ranged", damage: 5,  range: 90,  cooldown: 0.08, auto: true,  spread: 0.028, pellets: 1, ammo: 30,  muzzle: 0.40 },
   rifle:      { name: "Rifle",       url: "models/fabpack/weapons/SM_Rifle_01.FBX",      kind: "ranged", damage: 14, range: 220, cooldown: 0.5,  auto: false, spread: 0.004, pellets: 1, ammo: 20,  muzzle: 0.55 },
   machinegun: { name: "Machine Gun", url: "models/fabpack/weapons/SM_MachineGun_01.FBX", kind: "ranged", damage: 9,  range: 160, cooldown: 0.06, auto: true,  spread: 0.045, pellets: 1, ammo: 100, muzzle: 0.65 },
@@ -142,7 +142,7 @@ export class CombatSystem {
       this._tracer(muzzleWorld, end);
       if (hit) { this.onHitCar(hit.entity, w.damage, hit.point, dir, w.damage * 0.15); this._impact(hit.point); this.effect("impact", hit.point, dir); }
     }
-    this._muzzleFlash(muzzleWorld); this.effect("muzzle", muzzleWorld, base); this.sound("shot");
+    this._muzzleFlash(muzzleWorld); this.effect("muzzle", muzzleWorld, base); this.sound(w.snd || "shot");
   }
 
   _melee(w) {

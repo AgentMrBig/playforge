@@ -365,7 +365,8 @@ loadCharacter("models/character/humanoid_male.fbx", {
   // with the arms when armed, crouch on Ctrl/C. Live-tunable at window.__pfAnim.p.
   player.add(new CharacterAim(ch.bones, {
     camera: world.camera,
-    isArmed: () => !!(window.__pfCombat && window.__pfCombat.enabled),
+    // grounded gate: don't pitch the spine mid-jump (was rotating the head through the chest)
+    isArmed: () => !!(window.__pfCombat && window.__pfCombat.enabled) && (player.components.find((c) => c.onGround !== undefined)?.onGround ?? true),
     isCrouch: () => engine.input.down("ControlLeft") || engine.input.down("KeyC"),
   }));
 
@@ -720,6 +721,7 @@ world.spawn("roads").add(roadNet);
 try {
   audio.loadSfx({                                    // Erik's weapon audio (public/sfx/)
     gunshot: ["sfx/gunshot_1.mp3", "sfx/gunshot_2.mp3"],
+    shotgun: ["sfx/shotgun_1.mp3"],
     chainsaw: ["sfx/chainsaw_1.mp3", "sfx/chainsaw_2.mp3", "sfx/chainsaw_3.mp3"],
   });
   const combatHud = new CombatHUD();
@@ -732,6 +734,7 @@ try {
     scene: world.scene,
     sound: (name) => {
       if (name === "shot") audio.playSfx("gunshot", { volume: 0.85, pitch: 0.9 + Math.random() * 0.2 });
+      else if (name === "shotgun") audio.playSfx("shotgun", { volume: 0.9, pitch: 0.95 + Math.random() * 0.1 });
       else if (name === "chainsaw") audio.playSfx("chainsaw", { volume: 0.75, pitch: 0.95 + Math.random() * 0.1 });
     },
     onHitCar: (e, amt, point, dir) => {
