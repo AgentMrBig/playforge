@@ -715,6 +715,17 @@ const { roads: _roadLayout, graph: roadGraph } = generateRoads({ settlements, he
 _roadLayout.forEach((r) => roadNet.addRoad(r.points, { width: r.width }));
 world.spawn("roads").add(roadNet);
 
+// TOWN CENTER (General): drop the pack author's example town (the tileset layout Erik
+// gave, staged at models/fabpack/Demonstration.fbx) into the world so you can walk +
+// drive it. Additive + defensive — never breaks the game. Relocate live via
+// window.__town.position.set(x, y, z). Procedural towns from the tileset come next.
+loadProp("models/fabpack/Demonstration.fbx").then(({ group }) => {
+  const site = settlements[0] || { x: 0, z: 0 };
+  group.position.set(site.x, heightAt(site.x, site.z), site.z);
+  world.scene.add(group);
+  window.__town = group;
+}).catch((e) => console.warn("[town] load failed (game continues):", e.message));
+
 // COMBAT (General slice, first pass): equip a weapon + shoot. Ranged raycasts from the
 // camera (crosshair = screen center); hits feed damage into Ember's car lane (entity.damage
 // → wreck smoke). On-foot only for now. Defensive: combat must NEVER break the game boot.
