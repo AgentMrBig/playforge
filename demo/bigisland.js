@@ -676,7 +676,7 @@ world.spawn("camera").add(rig);
 // TEST MODE (Erik): free orbit camera + a menu to force any character state.
 // Spawned AFTER the camera rig so its per-frame camera override wins while active.
 const testMode = new TestMode({ world, player, input: engine.input });
-world.spawn("testmode").add({ update() { testMode.update(); } });
+world.spawn("testmode").add({ update(dt) { testMode.update(dt); } });
 
 // VEHICLE TEST MODE (Erik, Ember's lane): 🚗/V — orbit a car + drive the real
 // damage pipeline (crash sides, wheel states, smoke, reset) from a panel.

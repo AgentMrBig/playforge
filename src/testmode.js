@@ -14,6 +14,7 @@
 
 import * as THREE from "three";
 import { solveTwoBone, limbChain } from "./ik.js";
+import { BehaviorTimeline } from "./animtimeline.js";
 
 export class TestMode {
   /**
@@ -102,12 +103,29 @@ export class TestMode {
     return name;
   }
 
+  /** open/close the behavior timeline (Maya-Trax-style NLA editor) */
+  toggleTimeline(on) {
+    const anim = window.__ch && window.__ch.animator;
+    if (!anim) return;
+    if (!this.timeline) { this.timeline = new BehaviorTimeline(anim, this.player.object3d); window.__pfTimeline = this.timeline; this._buildTimelineUI(); }
+    const open = on ?? this.bar.style.display === "none";
+    this.bar.style.display = open ? "" : "none";
+    if (open) {
+      this.anim = "__timeline__";                 // game anim-select no-ops on this; timeline owns the mixer
+      this.timeline.setBase(this.timeline.base || (this.anims.includes("rifleIdle") ? "rifleIdle" : this.anims[0]), true);
+      this._tlSync();
+    } else { this.timeline.close(); this.anim = null; }
+    this.panel.querySelector('[data-act="timeline"]')?.classList.toggle("pf-sel", open);
+  }
+
   /** per-frame: orbit camera around the character (runs after the rig → wins) */
-  update() {
+  update(dt = 0.016) {
     if (!this.active || !this.player) return;
     // cursor must stay VISIBLE + clickable in test mode (Erik) — break pointer lock the
     // instant anything re-grabs it (same treatment Ember gave the vehicle rig)
     if (typeof document !== "undefined" && document.pointerLockElement) document.exitPointerLock();
+    // behavior timeline drives the skeleton first; live IK drags layer on top
+    if (this.timeline && this.anim === "__timeline__") { this.timeline.evaluate(dt); this._tlSync(false); }
     if (this.anim === "tpose")                  // hold the bind pose absolutely still, every frame,
       { let skel = null; this.player.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose(); }
     const p = this.player.position;
@@ -214,6 +232,8 @@ export class TestMode {
         <button data-act="capture">📸 capture grip</button>
         <button data-act="gripreset">↩ reset grip</button>
       </div>
+      <h4>Behavior editor</h4>
+      <button data-act="timeline">🎞 timeline (NLA)</button>
       <h4>Physics</h4>
       <button data-act="ragdoll">💥 ragdoll (B)</button>
       <div class="pf-test-hint">🖱️ MMB-drag = orbit · wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
@@ -232,6 +252,7 @@ export class TestMode {
     });
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
+    this.panel.querySelector('[data-act="timeline"]').addEventListener("click", () => this.toggleTimeline());
     // grip editor: nudge the held weapon 1cm / 5° per tap, capture persists it per-weapon
     const STEP_P = 0.01, STEP_R = Math.PI / 36;
     this.panel.querySelectorAll(".pf-grip b").forEach((b) => b.addEventListener("click", () => {
@@ -253,5 +274,73 @@ export class TestMode {
   _gripReadout(note) {
     const el = this.panel?.querySelector(".pf-grip-vals"); const cs = window.__pfCombat;
     if (el && cs) el.textContent = `${cs.weaponId}: p[${cs.hold.pos.map((v) => v.toFixed(2)).join(",")}] r[${cs.hold.rot.map((v) => v.toFixed(2)).join(",")}]${note ? " · " + note : ""}`;
+  }
+
+  _buildTimelineUI() {
+    const s = document.createElement("style");
+    s.textContent = `
+      .pf-tl { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 46; width: min(760px, 92vw);
+        background: rgba(16,20,26,.92); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
+        padding: 9px 12px; font: 12px system-ui; color: #dfe6ec; }
+      .pf-tl-row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
+      .pf-tl select, .pf-tl input[type=text] { background: rgba(255,255,255,.1); color: #eef2f6; border: 0; border-radius: 6px; padding: 4px 6px; font: 12px system-ui; }
+      .pf-tl button { border: 0; border-radius: 7px; background: rgba(255,255,255,.1); color: #eef2f6; padding: 5px 9px; cursor: pointer; font: 12px system-ui; }
+      .pf-tl button:hover { background: rgba(90,170,255,.4); }
+      .pf-tl input[type=range] { flex: 1; }
+      .pf-tl-track { position: relative; height: 12px; margin: 1px 2px 2px; }
+      .pf-tl-track i { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%;
+        background: #ffa53b; cursor: pointer; opacity: .65; }
+      .pf-tl-track i.pf-sel-m { opacity: 1; box-shadow: 0 0 0 2px #fff; }
+      .pf-tl-time { min-width: 84px; text-align: right; opacity: .8; }`;
+    document.head.appendChild(s);
+    this.bar = document.createElement("div");
+    this.bar.className = "pf-tl"; this.bar.style.display = "none";
+    this.bar.innerHTML = `
+      <div class="pf-tl-row">
+        <select class="pf-tl-clip">${this.anims.map((a) => `<option>${a}</option>`).join("")}</select>
+        <button data-tl="play">▶ play</button>
+        <button data-tl="marker">+ marker</button>
+        <button data-tl="setpose">📸 set pose</button>
+        <button data-tl="delmarker">✕ marker</button>
+        <span class="pf-tl-time">0.00 / 0.00s</span>
+      </div>
+      <div class="pf-tl-row"><input type="range" class="pf-tl-scrub" min="0" max="1" step="0.005" value="0"></div>
+      <div class="pf-tl-track"></div>
+      <div class="pf-tl-row">
+        <input type="text" class="pf-tl-name" placeholder="behavior name" style="flex:1">
+        <button data-tl="save">💾 save</button>
+        <select class="pf-tl-load"><option value="">load…</option></select>
+      </div>`;
+    document.body.appendChild(this.bar);
+    this.bar.addEventListener("pointerdown", (e) => e.stopPropagation());
+    const tl = this.timeline;
+    const q = (sel) => this.bar.querySelector(sel);
+    q(".pf-tl-clip").addEventListener("change", (e) => { tl.setBase(e.target.value); this._tlSync(); });
+    q(".pf-tl-scrub").addEventListener("input", (e) => { tl.pause(); tl.scrub(+e.target.value * tl.duration()); this._tlSync(false); });
+    q('[data-tl="play"]').addEventListener("click", () => { tl.playing ? tl.pause() : tl.play(); });
+    q('[data-tl="marker"]').addEventListener("click", () => { tl.addMarker(); this._tlSync(); });
+    q('[data-tl="setpose"]').addEventListener("click", () => { q('[data-tl="setpose"]').textContent = tl.capturePoseToMarker() ? "📸 saved!" : "select a marker"; setTimeout(() => q('[data-tl="setpose"]').textContent = "📸 set pose", 900); });
+    q('[data-tl="delmarker"]').addEventListener("click", () => { tl.deleteMarker(); this._tlSync(); });
+    q('[data-tl="save"]').addEventListener("click", () => { const n = q(".pf-tl-name").value.trim() || "behavior1"; tl.save(n); this._tlRefreshLoad(); });
+    q(".pf-tl-load").addEventListener("change", (e) => { if (e.target.value) { tl.load(e.target.value); q(".pf-tl-clip").value = tl.base; q(".pf-tl-name").value = e.target.value; this._tlSync(); } });
+    this._tlRefreshLoad();
+  }
+
+  _tlRefreshLoad() {
+    const sel = this.bar.querySelector(".pf-tl-load");
+    sel.innerHTML = `<option value="">load…</option>` + BehaviorTimeline.list().map((n) => `<option>${n}</option>`).join("");
+  }
+
+  /** refresh the bar from timeline state; full=true also rebuilds marker dots */
+  _tlSync(full = true) {
+    const tl = this.timeline; if (!tl || !this.bar) return;
+    const dur = tl.duration() || 1;
+    this.bar.querySelector(".pf-tl-time").textContent = `${tl.time.toFixed(2)} / ${dur.toFixed(2)}s`;
+    if (!this._scrubbing) this.bar.querySelector(".pf-tl-scrub").value = String(tl.time / dur);
+    this.bar.querySelector('[data-tl="play"]').textContent = tl.playing ? "⏸ pause" : "▶ play";
+    if (!full) return;
+    const track = this.bar.querySelector(".pf-tl-track");
+    track.innerHTML = tl.markers.map((m, i) => `<i style="left:${(m.t / dur * 100).toFixed(1)}%" data-mi="${i}" class="${i === tl.selected ? "pf-sel-m" : ""}"></i>`).join("");
+    track.querySelectorAll("i").forEach((dot) => dot.addEventListener("click", () => { tl.selected = +dot.dataset.mi; tl.pause(); tl.scrub(tl.markers[tl.selected].t); this._tlSync(); }));
   }
 }
