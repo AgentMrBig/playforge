@@ -32,4 +32,5 @@ export { CombatHUD } from "./combathud.js";
 export { HUD } from "./hud.js";
 export { Minimap } from "./minimap.js";
 export { TouchControls } from "./touchcontrols.js";
+export { TestMode } from "./testmode.js";
 export * as THREE from "three";

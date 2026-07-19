@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -341,7 +341,9 @@ class PlayerMove {
       // pose by weapon family (Erik): long guns (rifle/shotgun/AR/MG) share the rifle
       // hold; handgun-style (pistol, uzi) use the pistol hold
       const idleClip = armed ? (cs.weaponId === "pistol" || cs.weaponId === "smg" ? "pistolIdle" : "rifleIdle") : "idle";
-      if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
+      const forced = window.__pfTest && window.__pfTest.active && window.__pfTest.anim;   // TEST MODE menu overrides
+      if (forced) anim.play(forced, { fade: 0.2 });
+      else if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
       else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
       else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
       else anim.play(idleClip, { fade: 0.3 });
@@ -651,6 +653,11 @@ engine.input.enablePointerLock();
 const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft") });
 world.spawn("camera").add(rig);
 
+// TEST MODE (Erik): free orbit camera + a menu to force any character state.
+// Spawned AFTER the camera rig so its per-frame camera override wins while active.
+const testMode = new TestMode({ world, player, input: engine.input });
+world.spawn("testmode").add({ update() { testMode.update(); } });
+
 // phones/tablets get the full on-screen control overlay (Erik) — WASD d-pad
 // (walk + drive) plus E enter/exit, Space jump/handbrake, F flip. Each button
 // fires a synthetic key on window, so behavior is identical to keyboard.
@@ -777,7 +784,7 @@ try {
   combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test
   world.spawn("combat").add({
     update(dt) {
-      combat.enabled = !drivingCar;                                // on-foot only for now
+      combat.enabled = !drivingCar && !(window.__pfTest && window.__pfTest.active);  // on foot, and not in test mode (mouse = camera there)
       combat.update(dt);
       combatHud.update({ name: combat.weapon.name, ammo: combat.ammo, maxAmmo: combat.weapon.ammo, kind: combat.weapon.kind });
     },
