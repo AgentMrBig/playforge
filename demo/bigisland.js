@@ -7,7 +7,7 @@ import {
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
-  fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads,
+  fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -618,19 +618,10 @@ engine.input.enablePointerLock();
 const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft") });
 world.spawn("camera").add(rig);
 
-// phones get an on-screen ENTER/EXIT button (Erik) — it feeds the same KeyE
-// path, so behavior stays identical to keyboard
-if (navigator.maxTouchPoints > 0 || "ontouchstart" in window) {
-  const b = document.createElement("button");
-  b.textContent = "ENTER / EXIT";
-  b.style.cssText = "position:fixed;right:18px;bottom:96px;z-index:40;padding:14px 22px;" +
-    "border-radius:12px;border:0;background:#ffffffcc;font:700 15px system-ui;opacity:.85;touch-action:none";
-  b.addEventListener("touchstart", (ev) => {
-    ev.preventDefault();
-    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE" }));
-  });
-  document.body.appendChild(b);
-}
+// phones/tablets get the full on-screen control overlay (Erik) — WASD d-pad
+// (walk + drive) plus E enter/exit, Space jump/handbrake, F flip. Each button
+// fires a synthetic key on window, so behavior is identical to keyboard.
+new TouchControls();
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
