@@ -77,8 +77,18 @@ export class DayNight {
 
   setHour(h) { this.hour = ((h % 24) + 24) % 24; }
 
+  // freeze the clock while a test rig is open (Erik: "while testing I want the
+  // time of day frozen" — no sun creeping across the sky mid-pose). Decoupled:
+  // just checks whether either test panel (🧪 character / 🚗 vehicle) is shown,
+  // so it works for both rigs without importing either. setHour() still jumps.
+  _testing() {
+    if (typeof document === "undefined") return false;
+    return document.querySelector(".pf-test-panel")?.style.display === "block"
+        || document.querySelector(".pf-vtest-panel")?.style.display === "block";
+  }
+
   update(dt) {
-    if (!this.frozen) this.setHour(this.hour + (dt / this.daySeconds) * 24);
+    if (!this.frozen && !this._testing()) this.setHour(this.hour + (dt / this.daySeconds) * 24);
     const t = this.hour;
     // real solar arc: elevation peaks at noon (~68°), below horizon at night;
     // azimuth sweeps the full circle once per day
