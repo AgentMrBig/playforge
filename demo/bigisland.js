@@ -557,25 +557,34 @@ audio.loadSfx({
 // THE FLEET — textured pack cars on real physics
 // ============================================================================
 world.spawn("carCollisions").add(new CarCollisions({ audio }));  // Ember's damage/sparks lane
+// Erik: ONLY the official Assetsville set — the sedan-pack trio is retired.
+// Every entry is a skeletal UE rig, de-skinned at load. UE material-instance
+// paint doesn't survive FBX export — re-applied per spec where it matters.
+const AV = (len) => ({ targetLength: len, textureDir: "models/fabpack", textureFlipY: false,
+  textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } });
 const FLEET = [
-  { name: "Classic", file: "models/sedanpack/Assets/Car.fbx",    dz: -5, hp: 300, ep: 13, top: 52, siren: 0, paint: 0xcc2222 },
-  { name: "Police",  file: "models/sedanpack/Assets/Police.fbx", dz: 0,  hp: 360, ep: 14, top: 55, siren: 6 },
-  { name: "Taxi",    file: "models/sedanpack/Assets/Taxi.fbx",   dz: 5,  hp: 260, ep: 12, top: 48, siren: 0 },
-  // Erik's Assetsville exports — skeletal UE rigs, de-skinned at load
-  { name: "AVPolice", file: "models/fabpack/Ph_veh_PoliceCarSedan_01.fbx", dz: 10, hp: 380, ep: 14, top: 58, siren: 0,
-    opts: { targetLength: 5.0, textureDir: "models/fabpack", textureFlipY: false,
-      textureMap: { palette: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } } },
-  // UE material-instance paint doesn't survive FBX export — re-applied here
-  { name: "Hearse", file: "models/fabpack/SK_veh_Hearse.fbx", dz: 15, hp: 300, ep: 13, top: 52, siren: 0, paint: 0x23262c,
-    opts: { targetLength: 5.6, textureDir: "models/fabpack", textureFlipY: false,
-      textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
-  { name: "CargoTruck", file: "models/fabpack/SK_veh_CargoTruckOld.fbx", dz: 20, hp: 260, ep: 10, top: 40, siren: 0, mass: 2600, paint: 0x55804a,
-    opts: { targetLength: 7.0, textureDir: "models/fabpack", textureFlipY: false,
-      textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } } },
+  { name: "Sedan",         file: "models/fabpack/SK_veh_Sedan_01.fbx",           dz: -40, hp: 280, ep: 12, top: 50, siren: 0, opts: AV(4.9) },
+  { name: "Muscle",        file: "models/fabpack/SK_veh_Muscle_01.fbx",          dz: -35, hp: 450, ep: 16, top: 62, siren: 0, opts: AV(5.0) },
+  { name: "SportClassic",  file: "models/fabpack/SK_veh_SportClassic_01.fbx",    dz: -30, hp: 400, ep: 15, top: 60, siren: 0, opts: AV(4.6) },
+  { name: "SportClassicA", file: "models/fabpack/SK_veh_SportClassic_01a.fbx",   dz: -25, hp: 400, ep: 15, top: 60, siren: 0, opts: AV(4.6) },
+  { name: "SportClassic2", file: "models/fabpack/SK_veh_SportClassic_02.fbx",    dz: -20, hp: 420, ep: 15, top: 61, siren: 0, opts: AV(4.7) },
+  { name: "SUV",           file: "models/fabpack/SK_veh_SUV_01.fbx",             dz: -15, hp: 320, ep: 12, top: 50, siren: 0, mass: 1900, opts: AV(5.1) },
+  { name: "Offroad",       file: "models/fabpack/SK_veh_Offroad_01.fbx",         dz: -10, hp: 340, ep: 13, top: 48, siren: 0, mass: 1900, opts: AV(4.8) },
+  { name: "Pickup",        file: "models/fabpack/SK_veh_Pickup_01.fbx",          dz: -5,  hp: 300, ep: 12, top: 48, siren: 0, mass: 2000, opts: AV(5.4) },
+  { name: "PickupOld",     file: "models/fabpack/SK_veh_PickupOld_01.fbx",       dz: 0,   hp: 220, ep: 10, top: 42, siren: 0, mass: 2000, opts: AV(5.2) },
+  { name: "Van",           file: "models/fabpack/SK_veh_Van_01.fbx",             dz: 5,   hp: 240, ep: 11, top: 45, siren: 0, mass: 2100, opts: AV(5.4) },
+  { name: "Police",        file: "models/fabpack/SK_veh_PoliceCarSedan_01.fbx",  dz: 10,  hp: 380, ep: 14, top: 58, siren: 6, opts: AV(5.0) },
+  { name: "PoliceSUV",     file: "models/fabpack/SK_veh_PoliceCarSUV_01.fbx",    dz: 15,  hp: 360, ep: 13, top: 54, siren: 6, mass: 1950, opts: AV(5.2) },
+  { name: "Hearse",        file: "models/fabpack/SK_veh_Hearse.fbx",             dz: 20,  hp: 300, ep: 13, top: 52, siren: 0, paint: 0x23262c, opts: AV(5.6) },
+  { name: "Truck",         file: "models/fabpack/SK_veh_Truck_01.fbx",           dz: 25,  hp: 300, ep: 10, top: 40, siren: 0, mass: 3200, opts: AV(7.5) },
+  { name: "TowTruck",      file: "models/fabpack/SK_veh_TruckTow.fbx",           dz: 30,  hp: 280, ep: 10, top: 40, siren: 0, mass: 3000, opts: AV(6.8) },
+  { name: "SemiTruck",     file: "models/fabpack/SK_veh_TruckTrailer_01.fbx",    dz: 36,  hp: 500, ep: 9,  top: 38, siren: 0, mass: 4200, opts: AV(9.5) },
+  { name: "VeggieTruck",   file: "models/fabpack/SK_veh_VegetableTruck.fbx",     dz: 43,  hp: 240, ep: 10, top: 40, siren: 0, mass: 2600, opts: AV(6.5) },
+  { name: "CargoTruck",    file: "models/fabpack/SK_veh_CargoTruckOld.fbx",      dz: 49,  hp: 260, ep: 10, top: 40, siren: 0, mass: 2600, paint: 0x55804a, opts: AV(7.0) },
 ];
 const cars = [];
 for (const spec of FLEET) {
-  Promise.all([physReady, loadVehicle(spec.file, spec.opts ?? { targetLength: 4.7, textureDir: "models/sedanpack/Texture" })])
+  Promise.all([physReady, loadVehicle(spec.file, spec.opts)])
     .then(([, rig]) => {
       if (spec.paint) rig.setPaint(spec.paint);
       const e = world.spawn("drivable").mesh(rig.visual)
