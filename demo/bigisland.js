@@ -734,7 +734,13 @@ try {
       if (name === "shot") audio.playSfx("gunshot", { volume: 0.85, pitch: 0.9 + Math.random() * 0.2 });
       else if (name === "chainsaw") audio.playSfx("chainsaw", { volume: 0.75, pitch: 0.95 + Math.random() * 0.1 });
     },
-    onHitCar: (e, amt, _point, dir) => { e.damage = (e.damage || 0) + amt; e.onCarHit?.(amt, dir); combatHud.flashHit(); },
+    onHitCar: (e, amt, point, dir) => {
+      // route through Ember's damage system (body damage + onCarHit + flatten a shot tire);
+      // fall back to a plain damage bump if it isn't up yet
+      if (window.__pfDamage?.shotHit) window.__pfDamage.shotHit(e, amt, point, dir);
+      else { e.damage = (e.damage || 0) + amt; e.onCarHit?.(amt, dir); }
+      combatHud.flashHit();
+    },
   });
   combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test
   world.spawn("combat").add({
