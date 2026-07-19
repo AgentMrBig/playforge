@@ -82,6 +82,10 @@ export class VehicleTestMode {
   /** per-frame: orbit the camera around the car (runs after the rig → wins) */
   update() {
     if (!this.active) return;
+    // the game re-grabs pointer lock on canvas click (Erik: "if it captures my
+    // cursor, I can't click anything") — while the test rig is open, the cursor
+    // must ALWAYS stay visible, so break the lock the moment it re-engages
+    if (document.pointerLockElement) document.exitPointerLock?.();
     const c = this.car; if (!c?.position) return;
     const cam = this.world.camera;
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
