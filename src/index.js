@@ -15,6 +15,7 @@ export { Ragdoll } from "./ragdoll.js";
 export { EngineSound } from "./enginesound.js";
 export { Animator, buildHumanoid } from "./animation.js";
 export { loadCharacter, CharacterController } from "./character.js";
+export { CharacterAim } from "./charanim.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { generateRoads, RoadGraph } from "./roadgen.js";

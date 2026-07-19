@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp,
+  CombatSystem, CombatHUD, loadProp, CharacterAim,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -355,6 +355,14 @@ loadCharacter("models/character/humanoid_male.fbx", {
   player.mesh(ch.visual).add(ch.animator);
   ch.animator.play("idle");
   window.__ch = ch;
+
+  // PROCEDURAL AIM/CROUCH (General): layers over the clips — hold the weapon + aim
+  // with the arms when armed, crouch on Ctrl/C. Live-tunable at window.__pfAnim.p.
+  player.add(new CharacterAim(ch.bones, {
+    camera: world.camera,
+    isArmed: () => !!(window.__pfCombat && window.__pfCombat.enabled),
+    isCrouch: () => engine.input.down("ControlLeft") || engine.input.down("KeyC"),
+  }));
 
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
   // (muscle tone pulls toward whatever the Animator is playing — no scripts)
