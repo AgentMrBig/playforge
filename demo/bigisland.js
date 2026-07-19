@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -414,6 +414,7 @@ loadCharacter("models/character/humanoid_male.fbx", {
   const bPlayer = new BehaviorPlayer(ch.animator, ch.visual);
   window.__pfBPlayer = bPlayer;
   window.__pfPlayBehavior = (n) => bPlayer.play(n);
+  new BehaviorTriggers(bPlayer);   // key-bound behaviors fire in normal gameplay
   world.spawn("behaviorplayer").add({ update(dt) { bPlayer.update(dt); } });
 
   const footPlant = new FootPlant({ playerObj: ch.visual, player, heightAt });

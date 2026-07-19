@@ -754,6 +754,7 @@ export class TestMode {
         <input type="text" class="pf-tl-name" placeholder="behavior name" style="flex:1">
         <button data-tl="save">💾 save</button>
         <select class="pf-tl-load"><option value="">load…</option></select>
+        <button data-tl="bind" title="bind this behavior to a key — press it in-game to play">⌨ bind</button>
       </div>`;
     document.body.appendChild(this.bar);
     this.bar.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -767,6 +768,21 @@ export class TestMode {
     q('[data-tl="delmarker"]').addEventListener("click", () => { tl.deleteMarker(); this._tlSync(); });
     q('[data-tl="save"]').addEventListener("click", () => { const n = q(".pf-tl-name").value.trim() || "behavior1"; tl.save(n); this._tlRefreshLoad(); });
     q(".pf-tl-load").addEventListener("change", (e) => { if (e.target.value) { tl.load(e.target.value); q(".pf-tl-clip").value = tl.base; q(".pf-tl-name").value = e.target.value; this._tlSync(); } });
+    // ⌨ bind: save the behavior, then the NEXT key pressed becomes its in-game trigger
+    q('[data-tl="bind"]').addEventListener("click", () => {
+      const n = q(".pf-tl-name").value.trim() || "behavior1";
+      tl.save(n); this._tlRefreshLoad();
+      const b = q('[data-tl="bind"]');
+      b.textContent = "press a key…";
+      const once = (e) => {
+        e.preventDefault(); e.stopImmediatePropagation();
+        window.removeEventListener("keydown", once, true);
+        if (window.__pfTriggers) window.__pfTriggers.bind(e.code, n);
+        b.textContent = `⌨ ${e.code.replace("Key", "").replace("Digit", "")} → ${n}`;
+        setTimeout(() => (b.textContent = "⌨ bind"), 2200);
+      };
+      window.addEventListener("keydown", once, true);
+    });
     this._tlRefreshLoad();
   }
 

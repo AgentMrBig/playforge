@@ -132,6 +132,28 @@ export class BehaviorTimeline {
   close() { this.playing = false; this.base = null; this.animator.current = null; }
 }
 
+/** BehaviorTriggers — bind saved behaviors to KEYS so they fire in normal gameplay
+ * (author in the workshop → press the key in-game → the behavior plays). Bindings
+ * persist in localStorage `pf.behavior.triggers` as { KeyCode: behaviorName }. */
+export class BehaviorTriggers {
+  constructor(player) {
+    this.player = player;           // a BehaviorPlayer
+    this.load();
+    if (typeof window === "undefined") return;
+    window.__pfTriggers = this;
+    window.addEventListener("keydown", (e) => {
+      if (e.repeat || /input|textarea|select/i.test(e.target?.tagName)) return;
+      if (window.__pfTest && window.__pfTest.active) return;   // workshop owns keys there
+      const name = this.map[e.code];
+      if (name && !this.player.active) this.player.play(name);
+    });
+  }
+  load() { try { this.map = JSON.parse(localStorage.getItem("pf.behavior.triggers") || "{}"); } catch { this.map = {}; } }
+  _save() { try { localStorage.setItem("pf.behavior.triggers", JSON.stringify(this.map)); } catch {} }
+  bind(code, name) { this.map[code] = name; this._save(); }
+  unbind(code) { delete this.map[code]; this._save(); }
+}
+
 /** BehaviorPlayer — run a SAVED behavior in the LIVE game (author in the workshop,
  * play in gameplay). While active the game's anim-select yields; when the behavior
  * finishes, control returns automatically. `window.__pfPlayBehavior("name")` anywhere. */
