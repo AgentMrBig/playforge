@@ -73,7 +73,7 @@ export class CombatSystem {
     this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
-    this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, 0] };   // in-hand grip (live-tunable via setHold)
+    this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, Math.PI / 2] };   // barrel fwd + rolled upright (verified headless — was sideways). Live-tune via setHold
     this.muzzleEnd = 1;   // which end of the barrel axis is the muzzle (+1/-1); flipMuzzle() toggles
     this._swing = null;                                            // active melee swing animation
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
