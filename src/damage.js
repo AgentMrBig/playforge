@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { Physics } from "./phys.js";
+import { Physics, CharacterBody } from "./phys.js";
 import { VehicleBody } from "./vehicle.js";
 import { Emitter } from "./particles.js";
 
@@ -122,8 +122,12 @@ export class CarCollisions {
     // of the shell is untouched (Erik: don't crush sides that weren't hit).
     const wp = point ? this._tmpB.set(point.x, point.y, point.z) : null;
     for (const [me, other] of [[entityA, entityB], [entityB, entityA]]) {
-      const vb = this._carVehicle(me);
+      // deform CARS and PEOPLE (Erik loves the squished-character look) — a car
+      // is a VehicleBody, a person a CharacterBody. People crumple LESS + never
+      // smoke/spark (not metal); smoke is gated to cars in update() separately.
+      const vb = me?.components?.find((c) => c.rb && (c instanceof VehicleBody || c instanceof CharacterBody));
       if (!vb) continue;
+      const isCar = vb instanceof VehicleBody;
       const last = this._lastHit.get(me) ?? 0;
       if (now - last < this.debounceMs) continue;
       this._lastHit.set(me, now);
@@ -147,13 +151,16 @@ export class CarCollisions {
       // localized crumple: verts within `radius` of the contact fold along `dir`
       // by `depth`, both in WORLD meters and scaling with severity. A semi's huge
       // force = deep + wide crush zone; repeated hits total the car realistically.
-      const depth = Math.min(0.6, 0.06 + 0.18 * severity);   // m
-      const radius = 0.45 + 0.3 * Math.min(4, severity);     // m
+      // People get a SMALL, capped crumple so they squish funny but don't explode
+      // (Erik: "limit the damage for the characters so they wont go all weird").
+      const depth = isCar ? Math.min(0.6, 0.06 + 0.18 * severity) : Math.min(0.12, 0.04 + 0.05 * severity);
+      const radius = isCar ? 0.45 + 0.3 * Math.min(4, severity) : 0.22 + 0.06 * Math.min(3, severity);
       this._dentCar(me, cp, dir, depth, radius);
 
-      const pt = this._rel.copy(cp); pt.y += 0.1;
-      this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
-
+      if (isCar) {                                  // sparks are metal-on-metal only
+        const pt = this._rel.copy(cp); pt.y += 0.1;
+        this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
+      }
       me.damage = (me.damage ?? 0) + severity;
       me.onCarHit?.(severity, dir.clone());
     }
