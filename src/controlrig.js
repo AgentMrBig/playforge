@@ -67,6 +67,7 @@ export class ControlRig {
         new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
       picker.userData.rigId = id;
       g.add(picker);
+      g.traverse((o) => { o.userData.rigId = id; });   // clicks on the visible curves pick too
       g.visible = false;
       scene.add(g);
       this._handles[id] = { mesh: g, picker, kind, ...opts };
@@ -155,10 +156,13 @@ export class ControlRig {
   pick(nx, ny, camera) {
     if (!this.visible) return null;
     this._ray.setFromCamera({ x: nx, y: ny }, camera);
-    this._ray.params.Points = this._ray.params.Points || {};
-    const pickers = Object.values(this._handles).map((h) => h.picker);
-    for (const h of Object.values(this._handles)) h.mesh.updateMatrixWorld(true);   // GROUP matrices (parent of pickers) may predate the next render
-    const hit = this._ray.intersectObjects(pickers, false)[0];
+    this._ray.params.Line = { threshold: 0.05 };   // the visible curves ARE pickable (Erik: "I still can't select the control shapes" — hips ring r=0.3 extended past its picker sphere)
+    const targets = [];
+    for (const h of Object.values(this._handles)) {
+      h.mesh.updateMatrixWorld(true);   // GROUP matrices (parent of pickers) may predate the next render
+      h.mesh.traverse((o) => { if (o.isLine || o === h.picker) targets.push(o); });
+    }
+    const hit = this._ray.intersectObjects(targets, false)[0];
     return hit ? hit.object.userData.rigId : null;
   }
 

@@ -68,7 +68,10 @@ export class TestMode {
       // limb drag with the rig hidden (panel-selected limb) still needs an undo snapshot
       if (this.active && e.button === 0 && !this._uiDrag && this.limb && !(this.rig && this.rig.visible)) this.pushUndo();
     }, true);
-    window.addEventListener("pointerup", (e) => { if (e.button === 1) this._mmb = false; this._uiDrag = false; });
+    window.addEventListener("pointerup", (e) => {
+      if (e.button === 1) this._mmb = false; this._uiDrag = false;
+      if (this._pendingDetach) { if (!this._gizmoDragging) this.attachGizmo(null); this._pendingDetach = false; }
+    });
     window.addEventListener("mousedown", (e) => { if (e.button === 1 && this.active) e.preventDefault(); });  // kill autoscroll
     if (typeof window !== "undefined") window.__pfTest = this;
   }
@@ -236,7 +239,10 @@ export class TestMode {
         const id = this.rig.pick(nx, ny, this.world.camera);
         if (id !== null || this.limb) this.pushUndo();   // gesture may edit the pose — snapshot first
         this.rigControl = null;
-        if (id === null) { if (this.limb) this.selectLimb(this.limb); this.attachGizmo(null); return; }   // empty space → release
+        // empty space: DON'T detach yet — a drag that starts on a thin gizmo ring picks
+        // nothing here but IS a gizmo drag (killed rotation entirely). Detach on pointerup
+        // only if no gizmo drag started (Erik: "it wouldn't rotate on any axis")
+        if (id === null) { if (this.limb) this.selectLimb(this.limb); this._pendingDetach = true; return; }
         const h = this.rig._handles[id];
         if (h.limb) { if (this.limb !== h.limb) this.selectLimb(h.limb); }        // hands/feet → the IK grab
         else if (h.aimFor) {
@@ -274,7 +280,7 @@ export class TestMode {
     this._tcPrevQ = new THREE.Quaternion();
     tc.addEventListener("dragging-changed", (e) => {
       this._gizmoDragging = e.value;
-      if (e.value) { this.pushUndo(); this._tcPrevQ.copy(this._tcProxy.quaternion); }
+      if (e.value) { this._pendingDetach = false; this.pushUndo(); this._tcPrevQ.copy(this._tcProxy.quaternion); }
     });
     tc.addEventListener("objectChange", () => this._onGizmoChange());
     this._tc = tc;
@@ -287,9 +293,13 @@ export class TestMode {
     if (!id) { tc.detach(); return; }
     const h = this.rig._handles[id];
     this._tcProxy.position.copy(h.mesh.position);
-    this._tcProxy.quaternion.identity();
+    // the gizmo wears the BONE's orientation (Erik: "oriented with the bone so that
+    // rotations happen correctly") — rotate mode runs in local space off this frame
+    const bone = !h.aimFor && (h.limb ? h.bone : h.bone);
+    if (bone) bone.getWorldQuaternion(this._tcProxy.quaternion);
+    else this._tcProxy.quaternion.identity();
     this._tcProxy.scale.set(1, 1, 1);
-    this._tcPrevQ.identity();
+    this._tcPrevQ.copy(this._tcProxy.quaternion);
     this._tcPrevS = this._tcPrevS || new THREE.Vector3();
     this._tcPrevS.set(1, 1, 1);
     tc.attach(this._tcProxy);
@@ -297,6 +307,7 @@ export class TestMode {
 
   setGizmoMode(m) {
     this._gizmo().setMode(m);
+    this._gizmo().setSpace(m === "rotate" ? "local" : "world");   // rings ride the bone; arrows stay world-true
     this.panel.querySelectorAll("[data-gmode]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.gmode === m));
   }
 
@@ -378,8 +389,11 @@ export class TestMode {
     if (this.rig && this.rig.visible) {
       this.rig.update(limbChain, (l) => this.polePos(l));
       this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
-      if (this._gizmoTarget && !this._gizmoDragging && this._tcProxy)
-        this._tcProxy.position.copy(this.rig._handles[this._gizmoTarget].mesh.position);   // follow the anim when idle
+      if (this._gizmoTarget && !this._gizmoDragging && this._tcProxy) {
+        const gh = this.rig._handles[this._gizmoTarget];
+        this._tcProxy.position.copy(gh.mesh.position);                      // follow the anim when idle
+        if (gh.bone && !gh.aimFor) gh.bone.getWorldQuaternion(this._tcProxy.quaternion);   // stay bone-oriented
+      }
       if (this.rigControl && ptr && !this._mmb && !this._uiDrag && !this._gizmoDragging && ptr.down && (ptr.dx || ptr.dy)) {
         const k = 0.0022 * this.dist;
         const hc = this.rig._handles[this.rigControl];
