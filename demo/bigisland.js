@@ -338,7 +338,9 @@ class PlayerMove {
       const running = input.down("ShiftLeft");
       const cs = window.__pfCombat;
       const armed = cs && cs.enabled && cs.weapon && cs.weapon.kind === "ranged" && !drivingCar;
-      const idleClip = armed ? (cs.weaponId === "pistol" ? "pistolIdle" : "rifleIdle") : "idle";
+      // pose by weapon family (Erik): long guns (rifle/shotgun/AR/MG) share the rifle
+      // hold; handgun-style (pistol, uzi) use the pistol hold
+      const idleClip = armed ? (cs.weaponId === "pistol" || cs.weaponId === "smg" ? "pistolIdle" : "rifleIdle") : "idle";
       if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
       else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
       else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
@@ -615,8 +617,12 @@ const FLEET = [
   { name: "VeggieTruck",   file: "models/fabpack/SK_veh_VegetableTruck.fbx",     dz: 43,  hp: 240, ep: 10, top: 40, siren: 0, mass: 2600, opts: AV(6.5) },
   { name: "CargoTruck",    file: "models/fabpack/SK_veh_CargoTruckOld.fbx",      dz: 49,  hp: 260, ep: 10, top: 40, siren: 0, mass: 2600, paint: 0x55804a, opts: AV(7.0) },
 ];
+// TEST MODE (Erik): only spawn a truck + a sports car — 18 cars slow the reload.
+// Full fleet back with ?cars=all (each spec stays intact above).
+const wantCars = new URLSearchParams(location.search).get("cars");
+const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) => s.name === "Pickup" || s.name === "SportClassic");
 const cars = [];
-for (const spec of FLEET) {
+for (const spec of SPAWN) {
   Promise.all([physReady, loadVehicle(spec.file, spec.opts)])
     .then(([, rig]) => {
       if (spec.paint) rig.setPaint(spec.paint);

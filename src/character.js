@@ -41,7 +41,7 @@ export async function loadCharacter(url, {
         const clips = (anim.animations && anim.animations.length ? anim.animations : (anim.scene ?? anim).animations) || [];
         // a file may hold ONE clip (individual export) or MANY (motion pack)
         clips.forEach((clip, i) => {
-          if (a.name) clip.name = clips.length > 1 ? `${a.name}_${i}` : a.name;
+          if (a.name) { clip.name = clips.length > 1 ? `${a.name}_${i}` : a.name; clip._explicitName = true; }
           for (const tr of clip.tracks) tr.name = tr.name.replace(/mixamorig:?/i, "");
           // strip root-motion position tracks: Mixamo bakes them in CENTIMETER
           // scale (teleports a meter-scale rig into the void), and our
@@ -179,9 +179,13 @@ export async function loadCharacter(url, {
   }
 
   // ---- clips: embedded, else procedural -----------------------------------
+  // Explicitly-named clips (from the animations list) keep their EXACT name — the
+  // classifier is only for guessing embedded/unnamed clips. Without this, names like
+  // "pistolIdle"/"rifleIdle" all classify to "idle" and silently overwrite each other
+  // (the bug behind "he plays the pistol anim at load and the rifle pose never shows").
   const clips = {};
   if (embeddedClips.length) {
-    for (const c2 of embeddedClips) clips[classifyClip(c2.name)] = c2;
+    for (const c2 of embeddedClips) clips[c2._explicitName ? c2.name : classifyClip(c2.name)] = c2;
   } else {
     Object.assign(clips, buildHumanoidClips(bones));
   }
