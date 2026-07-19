@@ -309,7 +309,8 @@ export class RapierVehicle extends VehicleBody {
       this.ctrl.setWheelMaxSuspensionTravel(i, 0.3);
       this.ctrl.setWheelMaxSuspensionForce(i, this.mass * 40);
       this.ctrl.setWheelFrictionSlip(i, this.frictionSlip);
-      this.ctrl.setWheelSideFrictionStiffness(i, this.sideFriction);
+      // lateral channel OFF — real tire forces come from _tireForces (task #60)
+      this.ctrl.setWheelSideFrictionStiffness(i, 0);
     }
 
     // shift the visual so its ground-origin hangs below the chassis center
@@ -372,81 +373,24 @@ export class RapierVehicle extends VehicleBody {
     // drags them), and CRUCIALLY the momentum keeps ruling because the
     // fronts alone can't bend the path much. Friction params only.
     const hb = this.handbrake;
-    // SLIP-BASED rear grip — no recovery timers (Erik: releasing the ebrake
-    // must not re-hook mid-slide; the slide is held by throttle/brake).
-    // 1) kinetic < static: an axle sliding sideways holds less rubber, and
-    //    grip only returns as the slip angle itself decays. Low grip keeps
-    //    the slide alive keeps grip low — the hysteresis Erik wants IS this
-    //    feedback loop, no clock needed.
-    const slipA = Math.abs(this.slipRear ?? 0);
-    // deep kinetic drop. NOTE the stiffness semantics: it behaves as a
-    // per-STEP lateral-velocity kill fraction — at 60Hz even 0.11 drains a
-    // slide in ~0.3s (that's why every shallower curve "released fine" in the
-    // math but snapped straight on the road). A riding slide needs ~0.05/step.
-    // range sits BELOW a real flick's release angle (~0.16 rad) and above
-    // grip-driving slip (measured ≤0.05 even in hard corners)
-    const kin = 1 - 0.94 * THREE.MathUtils.smoothstep(slipA, 0.04, 0.15);
-    // 2) friction circle: longitudinal demand (throttle spin or brake drag)
-    //    spends the same contact patch — flooring it mid-slide keeps the
-    //    rear loose, lifting off lets it hook back up. Normalized against
-    //    the powertrain's own launch force so it bites on genuine saturation
-    //    (burnout, panic brake), not on ordinary full-throttle cruising.
-    const longDemand = Math.min(1,
-      Math.abs(engine) / (this.mass * this.enginePower) * 1.15 +
-      brake / (this.mass * this.brakePower) * 0.8);
-    const circle = Math.sqrt(Math.max(0.06, 1 - longDemand * longDemand));
-    const rearTarget = hb ? this.driftSideFriction : this.sideFriction * kin * circle;
-    this._rearGrip = this._rearGrip ?? this.sideFriction;
-    if (rearTarget < this._rearGrip) this._rearGrip = rearTarget;             // loss: instant
-    // the one time constant left is physical: locked rubber spinning back up
-    // to ROAD SPEED — which takes longer the faster the road is moving under
-    // it. At 8 m/s that's ~0.25s; at 27 m/s closer to a second (Erik: release
-    // re-hooked "the split second you release", because the old rate ignored
-    // speed entirely).
-    else {
-      const spinUp = this.sideFriction * 4 * (6 / Math.max(6, Math.abs(fwdSpeed)));
-      this._rearGrip = Math.min(rearTarget, this._rearGrip + spinUp * dt);
-    }
-    const rearSide = this._rearGrip;
-    // FRONT TIRES LET GO IN A SLIDE (Erik x3: "the front miraculously gets
-    // its turn speed multiplied"). Measured why: in a slide the front axle
-    // becomes the PIVOT — its own lateral velocity is near zero, so rapier's
-    // stiffness-based side friction acts as a pivot CONSTRAINT with whatever
-    // force it takes (telemetry: yaw wound 0.5 -> 7 rad/s while the front
-    // slip stayed under 0.12 rad, so a front-slip fade never engages). The
-    // real physics: once the BODY slides across its path, all four contact
-    // patches are scrubbing — the front cannot anchor a pivot. Fade front
-    // grip on the body slide state, same kinetic curve as the rear.
-    // ...and the front rides the SAME kinetic curve as the rear WITH the same
-    // ratchet: loss instant, recovery at rubber-spin-up speed. Anything
-    // instantaneous re-grips through the feedback loop in 3 frames (slip dips
-    // -> formula grants grip -> grip kills slip) = the "regains traction the
-    // split second you release" Erik kept feeling. A floor keeps steering
-    // alive mid-slide.
-    const frontTarget = this.sideFriction * Math.max(0.08, kin) * (hb ? 0.85 : 1);
-    this._frontGrip = this._frontGrip ?? this.sideFriction;
-    if (frontTarget < this._frontGrip) this._frontGrip = frontTarget;
-    else {
-      const fSpin = this.sideFriction * 4 * (6 / Math.max(6, Math.abs(fwdSpeed)));
-      this._frontGrip = Math.min(frontTarget, this._frontGrip + fSpin * dt);
-    }
-    const frontSide = this._frontGrip;
-    this.ctrl.setWheelSideFrictionStiffness(0, frontSide);
-    this.ctrl.setWheelSideFrictionStiffness(1, frontSide);
-    this.ctrl.setWheelSideFrictionStiffness(2, rearSide);
-    this.ctrl.setWheelSideFrictionStiffness(3, rearSide);
+    // REAL TIRES (task #60): rapier's side "friction" is a per-STEP velocity
+    // -kill fraction, not a force — the same parameter that pumps a slide
+    // erases it on release, and six tuning rounds proved no curve escapes
+    // that loop. The controller's lateral channel is OFF (stiffness 0 at
+    // build); _tireForces() applies actual saturated tire-force impulses at
+    // each contact patch after the controller step. Longitudinal stays with
+    // the controller (engine/brake/suspension are honest there).
     this.ctrl.setWheelFrictionSlip(2, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
     this.ctrl.setWheelFrictionSlip(3, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
-    // locked rears DRAG — kinetic friction opposing the velocity is what
-    // bleeds speed in a real ebrake slide (broken traction, not a turn boost)
+    // locked rears DRAG — kinetic friction is what bleeds speed in an ebrake
+    // slide (broken traction, not a turn boost)
     if (hb) { this.ctrl.setWheelBrake(2, this.mass * 0.013); this.ctrl.setWheelBrake(3, this.mass * 0.013); }
 
     // Ember's damage lane: wrecked non-round wheels lock solid and drag —
-    // no spin, engine force gone, carcass scrubs sideways
+    // no spin, engine force gone; their kinetic scrub lives in _tireForces
     if (this._locked) for (let i = 0; i < 4; i++) if (this._locked[i]) {
       this.ctrl.setWheelEngineForce(i, 0);
       this.ctrl.setWheelBrake(i, this.mass * 0.03);
-      this.ctrl.setWheelSideFrictionStiffness(i, (i < 2 ? frontSide : rearSide) * 0.45);
     }
     // detached wheels stay GONE — this loop re-sets frictions every step, so
     // the guard has to stand every step too
@@ -460,6 +404,103 @@ export class RapierVehicle extends VehicleBody {
     }
 
     this.ctrl.updateVehicle(dt);
+    this._tireForces(dt, hb, engine, brake);
+  }
+
+  /**
+   * REAL lateral tire forces (task #60). Per grounded wheel, per step:
+   *   - patch velocity  = body velocity at the contact point (v + ω×r)
+   *   - slip angle      = angle between where the wheel POINTS and where the
+   *                       patch MOVES
+   *   - vertical load   = this wheel's share of weight, read off the actual
+   *                       suspension compression (weight transfer is real)
+   *   - available force = μ·load, saturated by a brush curve that peaks at
+   *                       αPeak and falls to a kinetic plateau past it, and
+   *                       shrunk by the friction circle for the longitudinal
+   *                       force this wheel is already transmitting
+   * The force is applied as an impulse at the patch. Slides, burnouts,
+   * ebrake drifts and wrecked wheels all fall out of the same rubber.
+   */
+  _tireForces(dt, hb, engine, brake) {
+    const rb = this.rb;
+    const T = this._tt = this._tt ?? {
+      q: new THREE.Quaternion(), fwd: new THREE.Vector3(), up: new THREE.Vector3(),
+      wdir: new THREE.Vector3(), lat: new THREE.Vector3(), r: new THREE.Vector3(),
+      v: new THREE.Vector3(), imp: new THREE.Vector3(),
+    };
+    const q = rb.rotation(); T.q.set(q.x, q.y, q.z, q.w);
+    T.fwd.set(0, 0, 1).applyQuaternion(T.q);
+    T.up.set(0, 1, 0).applyQuaternion(T.q);
+    if (T.up.y < 0.25) return;                       // rolled over: body friction rules
+    const lv = rb.linvel(), av = rb.angvel(), tr = rb.translation();
+    const mu = this.tireMu ?? 0.95;
+    const aPeak = this.tireAlphaPeak ?? 0.12;
+    // per-wheel load: share of weight by actual spring compression
+    const comps = [0, 0, 0, 0];
+    let compSum = 0, grounded = 0;
+    for (let i = 0; i < 4; i++) {
+      if (this._detached?.[i] || !this.ctrl.wheelIsInContact(i)) continue;
+      const len = this.ctrl.wheelSuspensionLength(i) ?? this.suspRest;
+      comps[i] = Math.max(0.02, this.suspRest - len + 0.04);
+      compSum += comps[i]; grounded++;
+    }
+    if (!grounded) return;
+    const W = this.mass * 9.81;
+    for (let i = 0; i < 4; i++) {
+      if (!comps[i]) continue;
+      const load = W * (comps[i] / compSum);
+      const cp = this.ctrl.wheelContactPoint(i);
+      // where the wheel points (fronts add steer about the body up axis)
+      T.wdir.copy(T.fwd);
+      if (i < 2 && this.steer) T.wdir.applyAxisAngle(T.up, this.steer);
+      T.lat.crossVectors(T.up, T.wdir).normalize();
+      // patch velocity = v + ω×r
+      T.r.set(cp.x - tr.x, cp.y - tr.y, cp.z - tr.z);
+      T.v.set(
+        lv.x + av.y * T.r.z - av.z * T.r.y,
+        lv.y + av.z * T.r.x - av.x * T.r.z,
+        lv.z + av.x * T.r.y - av.y * T.r.x);
+      const vLat = T.v.dot(T.lat);
+      const vFwd = T.v.dot(T.wdir);
+      const alpha = Math.atan2(Math.abs(vLat), Math.max(0.6, Math.abs(vFwd)));
+      // brush curve: linear to the peak, kinetic plateau past it. A locked or
+      // wrecked wheel is ALWAYS kinetic — sliding rubber, no static peak.
+      // (wheelspin does NOT force kinetic here — the friction circle already
+      // spends the patch on launch; forcing it made every launch a fishtail)
+      const kineticWheel = (hb && i >= 2) || this._locked?.[i];
+      let sat;
+      if (kineticWheel) sat = 0.55;
+      else if (alpha < aPeak) sat = alpha / aPeak;
+      else sat = Math.max(0.62, 1 - (alpha - aPeak) * 1.4);   // falloff to plateau
+      // friction circle: subtract what the longitudinal channel TRANSMITS —
+      // demand can exceed the whole patch at low speed (launch), but the tire
+      // only ever passes μ·load of it; uncapped demand zeroed rear lateral
+      // grip under any throttle and spun the car in ordinary corners.
+      // Axle bias: fronts hold a little LESS than rears — the stock
+      // understeer balance every road car ships with; without it every
+      // vehicle was tail-happy at ordinary corner inputs
+      const cap = mu * load * (i < 2 ? 0.88 : 1.12);
+      let longF = brake / 4;
+      if (i >= 2) longF += Math.abs(engine) / 2;
+      longF = Math.min(longF, cap * 0.85);
+      const latCap = Math.sqrt(Math.max(0.07 * cap * cap, cap * cap - longF * longF));
+      // tires build slip force with ROLLING — near standstill the saturated
+      // curve flip-flopped sign and fishtailed heavy trucks at walking pace.
+      // Fade the CURVE only; the sub-critical damper below stays full
+      // strength so a crawling truck still gets straightened.
+      const rollFade = Math.min(1, (Math.abs(vFwd) + Math.abs(vLat)) / 2.5);
+      let F = latCap * sat * rollFade;
+      // sub-critical impulse clamp: never remove more than ~60% of this
+      // patch's share of the lateral velocity in one step — an overshooting
+      // impulse is the 60Hz chatter that wrecked the ragdoll ligaments
+      const mShare = this.mass * (comps[i] / compSum);
+      F = Math.min(F, 0.6 * mShare * Math.abs(vLat) / dt);
+      if (F < 1) continue;
+      const s = -Math.sign(vLat) * F * dt;
+      T.imp.copy(T.lat).multiplyScalar(s);
+      rb.applyImpulseAtPoint({ x: T.imp.x, y: T.imp.y, z: T.imp.z },
+        { x: cp.x, y: cp.y, z: cp.z }, true);
+    }
   }
 
   /** Ember: lock a wrecked wheel solid (no spin, drags). setWheelLocked(i, false) frees it. */
@@ -485,7 +526,7 @@ export class RapierVehicle extends VehicleBody {
       this.ctrl.setWheelSuspensionStiffness(i, this.suspStiff);
       this.ctrl.setWheelMaxSuspensionForce(i, this.mass * 40);
       this.ctrl.setWheelFrictionSlip(i, this.frictionSlip);
-      this.ctrl.setWheelSideFrictionStiffness(i, this.sideFriction);
+      this.ctrl.setWheelSideFrictionStiffness(i, 0);   // lateral = _tireForces
     }
     const key = this._wheelKeys[i];
     const wc = this.wheelContacts?.[key];
