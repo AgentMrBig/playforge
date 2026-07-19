@@ -53,9 +53,10 @@ const JOINTS = [
   ["pelvis",    "thighR",    "RightUpLeg",    1.25],
   ["thighR",    "shinR",     "RightLeg",      1.35],
 ];
-// ragdoll parts share a collision group that ignores itself (limbs would
-// otherwise fight their neighbors) but hits everything else
-const RAGDOLL_GROUPS = (0x0002 << 16) | (0xffff & ~0x0002);
+// ragdoll parts collide with everything INCLUDING each other — limbs must
+// not pass through limbs (Erik). Adjacent jointed segments don't fight
+// because each joint disables contacts between its own pair.
+const RAGDOLL_GROUPS = (0x0002 << 16) | 0xffff;
 
 export class Ragdoll {
   constructor(bones, phys, { totalMass = 75, tone = 1.2 } = {}) {
@@ -135,6 +136,9 @@ export class Ragdoll {
       const j = P.world.createImpulseJoint(
         R.JointData.spherical({ x: a1.x, y: a1.y, z: a1.z }, { x: a2.x, y: a2.y, z: a2.z }),
         p.body, c.body, true);
+      // connected pair: joint holds them, contacts would only fight it —
+      // but NON-adjacent limbs now collide for real (groups include self)
+      j.setContactsEnabled?.(false);
       // bind-pose relative orientation — the ligament limit is measured from here
       const qp = p.body.rotation(), qc = c.body.rotation();
       const rel0 = new THREE.Quaternion(qp.x, qp.y, qp.z, qp.w).invert()
