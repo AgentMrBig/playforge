@@ -47,6 +47,11 @@ export class TestMode {
       if (!this.active || e.repeat) return;
       const t = e.target && e.target.tagName;
       if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
+      if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey) && e.shiftKey) { this.redo(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey)) { this.undo(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (e.code === "KeyY" && (e.ctrlKey || e.metaKey)) { this.redo(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (e.code === "KeyZ" && e.shiftKey) { this.redo(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (e.code === "KeyZ") { this.undo(); e.preventDefault(); e.stopImmediatePropagation(); return; }   // Maya plain-Z undo
       const mode = { KeyW: "translate", KeyE: "rotate", KeyR: "scale" }[e.code];
       if (!mode) return;
       this.setGizmoMode(mode);
@@ -60,6 +65,8 @@ export class TestMode {
       // drags that START on UI (timeline scrubber, panels, buttons) must never orbit or
       // move limbs (Erik: "can't control the time slider — my mouse still rotates the camera")
       this._uiDrag = !!(e.target && e.target.closest && e.target.closest(".pf-tl, .pf-test-panel, .pf-test-btn, .pf-touch, button, input, select"));
+      // limb drag with the rig hidden (panel-selected limb) still needs an undo snapshot
+      if (this.active && e.button === 0 && !this._uiDrag && this.limb && !(this.rig && this.rig.visible)) this.pushUndo();
     }, true);
     window.addEventListener("pointerup", (e) => { if (e.button === 1) this._mmb = false; this._uiDrag = false; });
     window.addEventListener("mousedown", (e) => { if (e.button === 1 && this.active) e.preventDefault(); });  // kill autoscroll
@@ -128,6 +135,47 @@ export class TestMode {
     lkB.classList.toggle("pf-sel", !!(l && this.limbLocks[l]));
   }
 
+  /** ↩︎ undo/redo (Erik: "moved his leg, it didn't move the way I wanted") — snapshot
+   * of every bone (pos/rot/scale) + locks + aim overrides, pushed at gesture START */
+  _snapshotPose() {
+    const bones = []; this.player.object3d.traverse((o) => { if (o.isBone) bones.push(o); });
+    return {
+      b: bones.map((o) => [o.position.toArray(), o.quaternion.toArray(), o.scale.toArray()]),
+      locks: Object.fromEntries(Object.entries(this.limbLocks).map(([k, v]) => [k, v.clone()])),
+      poles: Object.fromEntries(Object.entries(this.poleOverrides).map(([k, v]) => [k, v.clone()])),
+      ikTarget: this._ikTarget ? this._ikTarget.clone() : null,
+    };
+  }
+  _applyPose(s) {
+    const bones = []; this.player.object3d.traverse((o) => { if (o.isBone) bones.push(o); });
+    for (let i = 0; i < bones.length && i < s.b.length; i++) {
+      bones[i].position.fromArray(s.b[i][0]); bones[i].quaternion.fromArray(s.b[i][1]); bones[i].scale.fromArray(s.b[i][2]);
+    }
+    this.limbLocks = Object.fromEntries(Object.entries(s.locks).map(([k, v]) => [k, v.clone()]));
+    this.poleOverrides = Object.fromEntries(Object.entries(s.poles).map(([k, v]) => [k, v.clone()]));
+    this._ikTarget = s.ikTarget ? s.ikTarget.clone() : null;
+    this._modeSync();
+  }
+  pushUndo() {
+    if (this._lastPush && performance.now() - this._lastPush < 150) return;   // one push per gesture
+    this._lastPush = performance.now();
+    (this._undoStack = this._undoStack || []).push(this._snapshotPose());
+    if (this._undoStack.length > 50) this._undoStack.shift();
+    this._redoStack = [];
+  }
+  undo() {
+    if (!this._undoStack || !this._undoStack.length) return;
+    (this._redoStack = this._redoStack || []).push(this._snapshotPose());
+    this._lastPush = 0;
+    this._applyPose(this._undoStack.pop());
+  }
+  redo() {
+    if (!this._redoStack || !this._redoStack.length) return;
+    (this._undoStack = this._undoStack || []).push(this._snapshotPose());
+    this._lastPush = 0;
+    this._applyPose(this._redoStack.pop());
+  }
+
   /** a limb's pole position: the aim-control override if the animator placed one,
    * else the natural default (elbows back+down, knees forward+up) */
   polePos(limb) {
@@ -163,6 +211,7 @@ export class TestMode {
         if (this._tc && this._tc.axis) return;                                    // click is ON the gizmo — let it drive
         const nx = (e.clientX / window.innerWidth) * 2 - 1, ny = -(e.clientY / window.innerHeight) * 2 + 1;
         const id = this.rig.pick(nx, ny, this.world.camera);
+        if (id !== null || this.limb) this.pushUndo();   // gesture may edit the pose — snapshot first
         this.rigControl = null;
         if (id === null) { if (this.limb) this.selectLimb(this.limb); this.attachGizmo(null); return; }   // empty space → release
         const h = this.rig._handles[id];
@@ -202,7 +251,7 @@ export class TestMode {
     this._tcPrevQ = new THREE.Quaternion();
     tc.addEventListener("dragging-changed", (e) => {
       this._gizmoDragging = e.value;
-      if (e.value) this._tcPrevQ.copy(this._tcProxy.quaternion);
+      if (e.value) { this.pushUndo(); this._tcPrevQ.copy(this._tcProxy.quaternion); }
     });
     tc.addEventListener("objectChange", () => this._onGizmoChange());
     this._tc = tc;
@@ -467,7 +516,8 @@ export class TestMode {
           <div class="pf-grip-row"><span>grab</span>
             <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
           <div class="pf-grip-row"><span>gizmo</span>
-        <b data-gmode="translate" class="pf-sel" title="W">↔ move</b><b data-gmode="rotate" title="E">⟳ rotate</b><b data-gmode="scale" title="R">⤢ scale</b></div>
+        <b data-gmode="translate" class="pf-sel" title="W">↔ move</b><b data-gmode="rotate" title="E">⟳ rotate</b><b data-gmode="scale" title="R">⤢ scale</b>
+        <b data-act="undo" title="Z">↩ undo</b><b data-act="redo" title="Shift+Z">↪ redo</b></div>
       <div class="pf-grip-row"><span>mode</span>
             <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
             <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
@@ -511,6 +561,8 @@ export class TestMode {
       if (this.limb) { this.fkLimbs[this.limb] = !this.fkLimbs[this.limb]; this._ikTarget = null; this._modeSync(); }
     });
     this.panel.querySelectorAll('[data-gmode]').forEach((b) => b.addEventListener('click', () => this.setGizmoMode(b.dataset.gmode)));
+    this.panel.querySelector('[data-act="undo"]').addEventListener('click', () => this.undo());
+    this.panel.querySelector('[data-act="redo"]').addEventListener('click', () => this.redo());
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;
       if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];
