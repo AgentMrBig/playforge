@@ -165,6 +165,14 @@ export class TestMode {
     // MMB always orbits (Erik); LMB orbits when no limb is grabbed, moves the limb when one is
     if (ptr) {
       if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
+      if (ptr.rightDown && !this._uiDrag && (ptr.dx || ptr.dy)) {
+        // RMB drag = PAN (Erik) — grab-the-world
+        const cam = this.world.camera;
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+        const k = 0.0016 * this.dist;
+        this.pan.addScaledVector(right, -ptr.dx * k).addScaledVector(up, ptr.dy * k);
+      }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
     // control rig: keep handles glued to bones; route drags on hips/chest/head
@@ -207,12 +215,8 @@ export class TestMode {
     } else {
       marker.visible = false;
       if (ptr && !this._mmb && !this._uiDrag && !this.rigControl && ptr.down && (ptr.dx || ptr.dy)) {
-        // LMB = PAN (Erik) — grab-the-world: the scene follows the cursor. MMB orbits.
-        const cam = this.world.camera;
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
-        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
-        const k = 0.0016 * this.dist;
-        this.pan.addScaledVector(right, -ptr.dx * k).addScaledVector(up, ptr.dy * k);
+        // LMB untouched = orbit (Erik's corrected spec: RMB pans, MMB orbits, LMB stays)
+        this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
       }
     }
     const cam = this.world.camera;
@@ -287,7 +291,7 @@ export class TestMode {
       <button data-act="timeline">🎞 timeline (NLA)</button>
       <h4>Physics</h4>
       <button data-act="ragdoll">💥 ragdoll (B)</button>
-      <div class="pf-test-hint">🖱️ LMB = pan · MMB = orbit · wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
+      <div class="pf-test-hint">🖱️ LMB = orbit · RMB = pan · MMB = orbit<br>wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
