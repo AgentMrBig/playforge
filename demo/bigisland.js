@@ -705,6 +705,10 @@ world.spawn("roads").add(roadNet);
 // camera (crosshair = screen center); hits feed damage into Ember's car lane (entity.damage
 // → wreck smoke). On-foot only for now. Defensive: combat must NEVER break the game boot.
 try {
+  audio.loadSfx({                                    // Erik's weapon audio (public/sfx/)
+    gunshot: ["sfx/gunshot_1.mp3", "sfx/gunshot_2.mp3"],
+    chainsaw: ["sfx/chainsaw_1.mp3", "sfx/chainsaw_2.mp3", "sfx/chainsaw_3.mp3"],
+  });
   const combatHud = new CombatHUD();
   const combat = new CombatSystem({
     camera: world.camera,
@@ -713,6 +717,7 @@ try {
     loadProp,
     player,
     scene: world.scene,
+    sound: (name) => { if (name === "shot") audio.playSfx("gunshot", { volume: 0.85, pitch: 0.9 + Math.random() * 0.2 }); },
     onHitCar: (e, amt, _point, dir) => { e.damage = (e.damage || 0) + amt; e.onCarHit?.(amt, dir); combatHud.flashHit(); },
   });
   combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test
