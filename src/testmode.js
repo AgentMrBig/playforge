@@ -32,6 +32,7 @@ export class TestMode {
     this.limb = null;               // selected IK effector (handR/handL/footR/footL)
     this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
+    this.pan = new THREE.Vector3();                        // LMB drag = pan offset (Erik)
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
     this._buildUI();
     window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); });
@@ -63,6 +64,7 @@ export class TestMode {
 
   toggle(on = !this.active) {
     this.active = on;
+    if (on) this.pan.set(0, 0, 0);                   // start each session centered
     this.panel.style.display = on ? "" : "none";
     this.btn.classList.toggle("pf-on", on);
     if (!on) this.anim = null;                       // hand animation back to the game
@@ -205,16 +207,22 @@ export class TestMode {
     } else {
       marker.visible = false;
       if (ptr && !this._mmb && !this._uiDrag && !this.rigControl && ptr.down && (ptr.dx || ptr.dy)) {
-        this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
+        // LMB = PAN (Erik) — grab-the-world: the scene follows the cursor. MMB orbits.
+        const cam = this.world.camera;
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+        const k = 0.0016 * this.dist;
+        this.pan.addScaledVector(right, -ptr.dx * k).addScaledVector(up, ptr.dy * k);
       }
     }
     const cam = this.world.camera;
     const cy = Math.cos(this.pitch), h = 1.05;
+    const fx = p.x + this.pan.x, fy = p.y + h + this.pan.y, fz = p.z + this.pan.z;
     cam.position.set(
-      p.x + Math.sin(this.yaw) * cy * this.dist,
-      p.y + h + Math.sin(this.pitch) * this.dist,
-      p.z + Math.cos(this.yaw) * cy * this.dist);
-    cam.lookAt(p.x, p.y + h, p.z);
+      fx + Math.sin(this.yaw) * cy * this.dist,
+      fy + Math.sin(this.pitch) * this.dist,
+      fz + Math.cos(this.yaw) * cy * this.dist);
+    cam.lookAt(fx, fy, fz);
   }
 
   _buildUI() {
@@ -279,7 +287,7 @@ export class TestMode {
       <button data-act="timeline">🎞 timeline (NLA)</button>
       <h4>Physics</h4>
       <button data-act="ragdoll">💥 ragdoll (B)</button>
-      <div class="pf-test-hint">🖱️ MMB-drag = orbit · wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
+      <div class="pf-test-hint">🖱️ LMB = pan · MMB = orbit · wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
