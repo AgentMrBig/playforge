@@ -47,8 +47,11 @@ export class CarCollisions {
     this._scaleV = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     // ---- wreck smoke: world-space puff pool, driven by entity.damage -------
-    this.smokeStart = 2.5;             // damage value where wisps begin
-    this.smokeFull = 9;                // damage where it's a black wrecked plume
+    // Only a genuinely beat-up car smokes — a light tap (severity ~0.2-0.5) must
+    // NOT start it (Erik: "smoke shouldn't start until the car has taken some
+    // damage"). Needs several solid hits or one real wreck to cross smokeStart.
+    this.smokeStart = 9;               // damage value where the first wisps begin
+    this.smokeFull = 28;               // damage where it's a black wrecked plume
     this._smoke = null;                // THREE.Points pool (additive, fades to 0)
     this._sPos = null; this._sVel = null; this._sCol = null; this._sLife = null; this._sLife0 = null; this._sBase = null;
     this._sNext = 0; this._sCount = 240;
