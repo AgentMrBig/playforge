@@ -54,7 +54,13 @@ export class DayNight {
     this._shadowRig(this.moon);
     this.moon.castShadow = false;
     this.hemi = new THREE.HemisphereLight(0xbfd7f0, 0x8a7a5f, 0.75);
-    this.group.add(this.sun, this.sun.target, this.moon, this.moon.target, this.hemi);
+    // GI phase-3 candidate: sun BOUNCE fill — one shadowless directional from
+    // the sun's mirror direction, tinted by the lit ground, so shaded faces
+    // pick up warm reflected light instead of pure sky ambient. Cheapest
+    // convincing indirect-light term there is; __pfSky.bounce to inspect/tune.
+    this.bounce = new THREE.DirectionalLight(0xc9b08a, 0);
+    this.bounce.castShadow = false;
+    this.group.add(this.sun, this.sun.target, this.moon, this.moon.target, this.hemi, this.bounce, this.bounce.target);
     this._sky = new THREE.Color(); this._c = new THREE.Color();
     if (typeof window !== "undefined") window.__pfSky = this;
   }
@@ -108,12 +114,19 @@ export class DayNight {
     if (fog) fog.color.copy(this._sky);
     this.engine.renderer.toneMappingExposure = 0.9 + 0.25 * d;
 
-    // ---- both lights ride the camera (phase-1 follow box) ----
+    // ---- bounce: mirrors the sun from low on the opposite side, ground-tinted,
+    // strongest when the sun is high (more light hitting the ground to reflect)
+    this.bounce.intensity = 0.5 * d * Math.max(0, e);
+    this.bounce.color.copy(this.hemi.groundColor).lerp(this.sun.color, 0.35);
+
+    // ---- lights ride the camera (phase-1 follow box) ----
     const c = this.world.camera.position;
     this.sun.target.position.set(c.x, 0, c.z);
     this.sun.position.set(c.x + dirX * 220, Math.max(e, 0.06) * 220, c.z + dirZ * 220);
     this.moon.target.position.set(c.x, 0, c.z);
     // moon opposite the sun's azimuth, decently high
     this.moon.position.set(c.x - dirX * 220, 140, c.z - dirZ * 220);
+    this.bounce.target.position.set(c.x, 30, c.z);       // aims slightly UP at faces
+    this.bounce.position.set(c.x - dirX * 150, 8, c.z - dirZ * 150);
   }
 }
