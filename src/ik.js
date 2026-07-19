@@ -14,7 +14,7 @@ const _t1 = new THREE.Vector3(), _t2 = new THREE.Vector3(), _ax = new THREE.Vect
 const _q = new THREE.Quaternion(), _qp = new THREE.Quaternion(), _qw = new THREE.Quaternion();
 
 /** apply a WORLD-space delta rotation to a bone (keeps children attached) */
-function rotateWorld(bone, deltaQ) {
+export function rotateWorld(bone, deltaQ) {
   bone.parent.getWorldQuaternion(_qp);
   bone.getWorldQuaternion(_qw);
   _qw.premultiply(deltaQ);                      // new world orientation

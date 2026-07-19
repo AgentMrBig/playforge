@@ -15,6 +15,7 @@
 import * as THREE from "three";
 import { solveTwoBone, limbChain } from "./ik.js";
 import { BehaviorTimeline } from "./animtimeline.js";
+import { ControlRig } from "./controlrig.js";
 
 export class TestMode {
   /**
@@ -108,6 +109,29 @@ export class TestMode {
     return name;
   }
 
+  /** 🎛 control rig: clickable handles on the body (hands/feet = IK, hips = translate,
+   * chest/head = rotate). Click a handle to grab it; click empty space to orbit/release. */
+  toggleRig(on) {
+    if (!this.rig) {
+      this.rig = new ControlRig({ scene: this.world.scene, playerObj: this.player.object3d, player: this.player });
+      window.__pfRig = this.rig;
+      window.addEventListener("pointerdown", (e) => {
+        if (!this.rig.visible || this._uiDrag || e.button !== 0) return;
+        const nx = (e.clientX / window.innerWidth) * 2 - 1, ny = -(e.clientY / window.innerHeight) * 2 + 1;
+        const id = this.rig.pick(nx, ny, this.world.camera);
+        this.rigControl = null;
+        if (id === null) { if (this.limb) this.selectLimb(this.limb); return; }   // empty space → release, orbit
+        const h = this.rig._handles[id];
+        if (h.limb) { if (this.limb !== h.limb) this.selectLimb(h.limb); }        // hands/feet → the IK grab
+        else { if (this.limb) this.selectLimb(this.limb); this.rigControl = id; this.setPaused(true); }
+      }, true);
+    }
+    const vis = on ?? !this.rig.visible;
+    this.rig.setVisible(vis);
+    if (!vis) this.rigControl = null;
+    this.panel.querySelector('[data-act="rig"]')?.classList.toggle("pf-sel", vis);
+  }
+
   /** open/close the behavior timeline (Maya-Trax-style NLA editor) */
   toggleTimeline(on) {
     const anim = window.__ch && window.__ch.animator;
@@ -141,6 +165,14 @@ export class TestMode {
       if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
+    // control rig: keep handles glued to bones; route drags on hips/chest/head
+    if (this.rig && this.rig.visible) {
+      this.rig.update(limbChain);
+      if (this.rigControl && ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+        const k = 0.0022 * this.dist;
+        this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
+      }
+    }
     if (this.limb && ptr) {
       const chain = limbChain(this.player.object3d, this.limb);
       if (chain) {
@@ -172,7 +204,7 @@ export class TestMode {
       }
     } else {
       marker.visible = false;
-      if (ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+      if (ptr && !this._mmb && !this._uiDrag && !this.rigControl && ptr.down && (ptr.dx || ptr.dy)) {
         this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
       }
     }
@@ -229,6 +261,7 @@ export class TestMode {
       <h4>Weapon</h4>
       <button data-act="weapon">cycle weapon (Q)</button>
       <h4>Pose editor (IK)</h4>
+      <button data-act="rig">🎛 control rig</button>
       <div class="pf-grip-row"><span>grab</span>
         <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
       <button data-act="posecap">📸 capture pose</button>
@@ -263,6 +296,7 @@ export class TestMode {
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
     this.panel.querySelector('[data-act="timeline"]').addEventListener("click", () => this.toggleTimeline());
+    this.panel.querySelector('[data-act="rig"]').addEventListener("click", () => this.toggleRig());
     // grip editor: nudge the held weapon 1cm / 5° per tap, capture persists it per-weapon
     const STEP_P = 0.01, STEP_R = Math.PI / 36;
     this.panel.querySelectorAll(".pf-grip b").forEach((b) => b.addEventListener("click", () => {
