@@ -126,6 +126,16 @@ export class TestMode {
           const k = 0.0022 * this.dist;
           this._ikTarget.addScaledVector(right, ptr.dx * k).addScaledVector(up, -ptr.dy * k);
         }
+        // ★ the ball must never escape (Erik: "ends up on the ground, can never get it
+        // back") — clamp to the limb's reach sphere around the shoulder/hip + above ground
+        const anchor = chain.root.getWorldPosition(new THREE.Vector3());
+        const bpos = chain.mid.getWorldPosition(new THREE.Vector3());
+        const epos = chain.eff.getWorldPosition(new THREE.Vector3());
+        const maxR = (anchor.distanceTo(bpos) + bpos.distanceTo(epos)) * 1.02 + 0.02;
+        const off = this._ikTarget.clone().sub(anchor);
+        if (off.length() > maxR) this._ikTarget.copy(anchor).addScaledVector(off.normalize(), maxR);
+        const ground = window.__pf?.heightAt ? window.__pf.heightAt(this._ikTarget.x, this._ikTarget.z) : -Infinity;
+        if (this._ikTarget.y < ground + 0.06) this._ikTarget.y = ground + 0.06;
         this.ikError = solveTwoBone({ ...chain, target: this._ikTarget });
         marker.visible = true; marker.position.copy(this._ikTarget);
       }
