@@ -364,7 +364,14 @@ export class RapierVehicle extends VehicleBody {
     }
     this.ctrl.setWheelEngineForce(2, engine / 2);
     this.ctrl.setWheelEngineForce(3, engine / 2);
-    for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
+    // BRAKE FIX (Ember 2026-07-19, Erik's "can't stop them"): engine force is
+    // applied UNSCALED (Newtons) → ~10 m/s² accel, but the brake was scaled by
+    // *0.016 → ~0.2 m/s² (40x too weak). setWheelBrake is the same Newton-scale
+    // channel, so 0.016 was spurious. Grounded in real numbers (web baseline:
+    // dry-asphalt μ≈0.7-0.9 → real max braking ~7-9 m/s²): brake/4 unscaled would
+    // be ~13.5 m/s² (1.35g, unrealistic + lock-prone), so *0.6 targets ~0.8g —
+    // firm, realistic, under the μ·g grip cap. Dial with Erik's drive-test.
+    for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.6);
     // handbrake: LOCK the rears. Erik's spec (and physics): the handbrake
     // does NOT tighten the turn — it drops rear traction until the slide
     // STARTS, and the car carries on along its momentum while rotating.
