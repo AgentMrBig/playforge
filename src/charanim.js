@@ -46,10 +46,10 @@ export class CharacterAim {
     // (finicky) and crouch needs foot-IK — both deferred, kept at 0 until done right.
     this.p = {
       spinePitch: 0.45, spineAxis: "x",
-      // arm rifle-hold — axes MEASURED headless (probe_arm3, skeleton bones): right arm
-      // local x-neg raises the hand UP, z-pos brings it FORWARD. Additive on the clip so
-      // still tune to taste via __pfAnim.p.{armRaise,armFwd,foreBend}.
-      armRaise: 0.7, armFwd: 0.5, foreBend: 0.6,
+      // arm rifle-hold now comes from the ARMED ANIMATION CLIPS (Mixamo rifle/pistol idle),
+      // not procedural posing — so these are 0. Procedural stays a THIN layer: just the spine
+      // aim-pitch above. Re-enable via __pfAnim.p if we ever go clip-less.
+      armRaise: 0, armFwd: 0, foreBend: 0,
       crouchKnee: 0, crouchAxis: "x", blend: 10,
     };
     if (typeof window !== "undefined") window.__pfAnim = this;

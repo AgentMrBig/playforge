@@ -333,10 +333,14 @@ class PlayerMove {
     const anim = entity.components.find((c) => c.play && c.mixer);
     if (anim) {
       const planar = Math.hypot(body.velocity.x, body.velocity.z);
+      // armed = holding a ranged weapon on foot → the animator holds the gun (Mixamo armed clips)
+      const cs = window.__pfCombat;
+      const armed = cs && cs.enabled && cs.weapon && cs.weapon.kind === "ranged" && !drivingCar;
+      const idleClip = armed ? (cs.weaponId === "pistol" ? "pistolIdle" : "rifleIdle") : "idle";
       if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
       else if (planar > 8) anim.play("run", { fade: 0.15 });
       else if (planar > 0.5) anim.play("walk", { fade: 0.18, speed: planar / 4.4 });
-      else anim.play("idle", { fade: 0.3 });
+      else anim.play(idleClip, { fade: 0.3 });
     }
   }
 }
@@ -355,6 +359,10 @@ loadCharacter("models/character/humanoid_male.fbx", {
     { name: "walk", url: "models/character/anims/walking.fbx" },
     { name: "run", url: "models/character/anims/running.fbx" },
     { name: "jump", url: "models/character/anims/jumping up.fbx" },
+    // armed poses (Erik's Mixamo drop) — the animator holds the gun by design
+    { name: "rifleIdle", url: "models/character/anims/rifle_idle.fbx" },
+    { name: "pistolIdle", url: "models/character/anims/pistol_idle.fbx" },
+    { name: "firingRifle", url: "models/character/anims/firing_rifle.fbx" },
   ],
 }).then((ch) => {
   player.mesh(ch.visual).add(ch.animator);
