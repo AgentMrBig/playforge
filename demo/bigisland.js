@@ -318,11 +318,16 @@ class PlayerMove {
     body.velocity.x = wish.x * run;
     body.velocity.z = wish.z * run;
     if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
-    if (wish.lengthSq() > 0.01) {
-      // ease toward the movement direction — snapping reads robotic (Erik)
+    // ARMED: face where you're aiming (GTA-style). Else: ease toward movement dir.
+    const armed = !!(window.__pfCombat && window.__pfCombat.enabled);
+    if (armed) {
+      const cf = new THREE.Vector3(); world.camera.getWorldDirection(cf);
+      const want = Math.atan2(cf.x, cf.z);
+      let d = want - entity.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
+      entity.rotation.y += d * Math.min(1, dt * 12);
+    } else if (wish.lengthSq() > 0.01) {
       const want = Math.atan2(body.velocity.x, body.velocity.z);
-      let d = want - entity.rotation.y;
-      d = Math.atan2(Math.sin(d), Math.cos(d));
+      let d = want - entity.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
       entity.rotation.y += d * Math.min(1, dt * 9);
     }
     const anim = entity.components.find((c) => c.play && c.mixer);

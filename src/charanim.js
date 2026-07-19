@@ -41,8 +41,11 @@ export class CharacterAim {
     // Amounts default to 0 (character = pure mocap) until the correct bone axes are
     // determined headlessly (pose the skeleton, read hand/foot positions). Re-enable by
     // setting these live via window.__pfAnim.p once the axes are proven.
+    // Axes proven headless (pose skeleton, read tip world pos): Spine2.x leans the
+    // upper body fwd/back = aim pitch (sign already right). Arm rifle-hold needs 2 axes
+    // (finicky) and crouch needs foot-IK — both deferred, kept at 0 until done right.
     this.p = {
-      spinePitch: 0, armRaise: 0, foreBend: 0, armAxis: "x", spineAxis: "x",
+      spinePitch: 0.45, armRaise: 0, foreBend: 0, armAxis: "x", spineAxis: "x",
       crouchKnee: 0, crouchAxis: "x", blend: 10,
     };
     if (typeof window !== "undefined") window.__pfAnim = this;
