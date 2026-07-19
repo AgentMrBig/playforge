@@ -339,12 +339,11 @@ const player = world.spawn("player")
   .at(RUN.x0 + 4, RUN.h + 1.5, RUN.z + RUN.w / 2 + 4)
   .add(new CharacterBody({ radius: 0.32, height: 1.7 }))   // real capsule vs EVERYTHING
   .add(new PlayerMove());
-// the OFFICIAL character (Erik): an Assetsville citizen, with the Mixamo
-// animation pack retargeted onto the pack's UE skeleton at load
-loadCharacter("models/fabpack/SK_citizen_male_28.fbx", {
-  textureDir: "models/fabpack", texture: "T_colorPalette2048.PNG", flipY: true,
+// the player is the ORIGINAL guy again (Erik: "I kind of like him more").
+// The citizen + retarget pipeline stays for NPCs — swap the url + retargetFrom
+// back to models/fabpack/SK_citizen_male_28.fbx to flip.
+loadCharacter("models/character/humanoid_male.fbx", {
   targetHeight: 1.8,
-  retargetFrom: "models/character/humanoid_male.fbx",
   animations: [
     { name: "idle", url: "models/character/anims/idle.fbx" },
     { name: "walk", url: "models/character/anims/walking.fbx" },
@@ -618,6 +617,20 @@ for (const spec of FLEET) {
 engine.input.enablePointerLock();
 const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft") });
 world.spawn("camera").add(rig);
+
+// phones get an on-screen ENTER/EXIT button (Erik) — it feeds the same KeyE
+// path, so behavior stays identical to keyboard
+if (navigator.maxTouchPoints > 0 || "ontouchstart" in window) {
+  const b = document.createElement("button");
+  b.textContent = "ENTER / EXIT";
+  b.style.cssText = "position:fixed;right:18px;bottom:96px;z-index:40;padding:14px 22px;" +
+    "border-radius:12px;border:0;background:#ffffffcc;font:700 15px system-ui;opacity:.85;touch-action:none";
+  b.addEventListener("touchstart", (ev) => {
+    ev.preventDefault();
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE" }));
+  });
+  document.body.appendChild(b);
+}
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);

@@ -378,7 +378,13 @@ export class RapierVehicle extends VehicleBody {
     //    the slide alive keeps grip low — the hysteresis Erik wants IS this
     //    feedback loop, no clock needed.
     const slipA = Math.abs(this.slipRear ?? 0);
-    const kin = 1 - 0.8 * THREE.MathUtils.smoothstep(slipA, 0.06, 0.3);
+    // deep kinetic drop. NOTE the stiffness semantics: it behaves as a
+    // per-STEP lateral-velocity kill fraction — at 60Hz even 0.11 drains a
+    // slide in ~0.3s (that's why every shallower curve "released fine" in the
+    // math but snapped straight on the road). A riding slide needs ~0.05/step.
+    // range sits BELOW a real flick's release angle (~0.16 rad) and above
+    // grip-driving slip (measured ≤0.05 even in hard corners)
+    const kin = 1 - 0.94 * THREE.MathUtils.smoothstep(slipA, 0.04, 0.15);
     // 2) friction circle: longitudinal demand (throttle spin or brake drag)
     //    spends the same contact patch — flooring it mid-slide keeps the
     //    rear loose, lifting off lets it hook back up. Normalized against
@@ -391,9 +397,15 @@ export class RapierVehicle extends VehicleBody {
     const rearTarget = hb ? this.driftSideFriction : this.sideFriction * kin * circle;
     this._rearGrip = this._rearGrip ?? this.sideFriction;
     if (rearTarget < this._rearGrip) this._rearGrip = rearTarget;             // loss: instant
-    // the one time constant left is physical: locked rubber spinning back
-    // up to road speed (~0.25s), not a hand-tuned "recovery" clock
-    else this._rearGrip = Math.min(rearTarget, this._rearGrip + this.sideFriction * 4 * dt);
+    // the one time constant left is physical: locked rubber spinning back up
+    // to ROAD SPEED — which takes longer the faster the road is moving under
+    // it. At 8 m/s that's ~0.25s; at 27 m/s closer to a second (Erik: release
+    // re-hooked "the split second you release", because the old rate ignored
+    // speed entirely).
+    else {
+      const spinUp = this.sideFriction * 4 * (6 / Math.max(6, Math.abs(fwdSpeed)));
+      this._rearGrip = Math.min(rearTarget, this._rearGrip + spinUp * dt);
+    }
     const rearSide = this._rearGrip;
     // FRONT TIRES LET GO IN A SLIDE (Erik x3: "the front miraculously gets
     // its turn speed multiplied"). Measured why: in a slide the front axle
@@ -404,8 +416,20 @@ export class RapierVehicle extends VehicleBody {
     // real physics: once the BODY slides across its path, all four contact
     // patches are scrubbing — the front cannot anchor a pivot. Fade front
     // grip on the body slide state, same kinetic curve as the rear.
-    const fkin = 1 - 0.8 * THREE.MathUtils.smoothstep(slipA, 0.06, 0.35);
-    const frontSide = this.sideFriction * fkin * (hb ? 0.55 : 1);
+    // ...and the front rides the SAME kinetic curve as the rear WITH the same
+    // ratchet: loss instant, recovery at rubber-spin-up speed. Anything
+    // instantaneous re-grips through the feedback loop in 3 frames (slip dips
+    // -> formula grants grip -> grip kills slip) = the "regains traction the
+    // split second you release" Erik kept feeling. A floor keeps steering
+    // alive mid-slide.
+    const frontTarget = this.sideFriction * Math.max(0.08, kin) * (hb ? 0.85 : 1);
+    this._frontGrip = this._frontGrip ?? this.sideFriction;
+    if (frontTarget < this._frontGrip) this._frontGrip = frontTarget;
+    else {
+      const fSpin = this.sideFriction * 4 * (6 / Math.max(6, Math.abs(fwdSpeed)));
+      this._frontGrip = Math.min(frontTarget, this._frontGrip + fSpin * dt);
+    }
+    const frontSide = this._frontGrip;
     this.ctrl.setWheelSideFrictionStiffness(0, frontSide);
     this.ctrl.setWheelSideFrictionStiffness(1, frontSide);
     this.ctrl.setWheelSideFrictionStiffness(2, rearSide);
