@@ -222,6 +222,16 @@ export class RapierVehicle extends VehicleBody {
     // reverse tops out ~30 mph unless the car spec says otherwise
     this.reverseSpeed = opts.reverseSpeed ?? 13.4;
     this.justLanded = 0;
+    // REAR-GRIP tuning knob (Erik: "shoot 1 rear tire → PERFECT powerslide").
+    // A flat rear runs at half side-grip so the back steps out; this scales the
+    // rear side-friction for ALL 4 good tires so we can dial the same drift feel
+    // in without blowing a tire. 1 = stock (no change); lower = looser rear.
+    // Live: __pfRearGrip(0.7) in console while driving, then tell Ember the number.
+    this.rearGripMul = opts.rearGripMul ?? 1;
+    if (typeof window !== "undefined") {
+      (window.__pfVehicles = window.__pfVehicles || []).push(this);
+      window.__pfRearGrip = (m) => { window.__pfVehicles.forEach((v) => (v.rearGripMul = m)); return `rearGripMul = ${m}`; };
+    }
   }
 
   init(entity, world) {
@@ -420,7 +430,7 @@ export class RapierVehicle extends VehicleBody {
       const spinUp = this.sideFriction * 4 * (6 / Math.max(6, Math.abs(fwdSpeed)));
       this._rearGrip = Math.min(rearTarget, this._rearGrip + spinUp * dt);
     }
-    const rearSide = this._rearGrip;
+    const rearSide = this._rearGrip * this.rearGripMul;   // Erik's drift knob (1 = stock)
     // FRONT TIRES LET GO IN A SLIDE (Erik x3: "the front miraculously gets
     // its turn speed multiplied"). Measured why: in a slide the front axle
     // becomes the PIVOT — its own lateral velocity is near zero, so rapier's
