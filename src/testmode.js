@@ -182,12 +182,15 @@ export class TestMode {
     if (ptr) {
       if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
       if (ptr.rightDown && !this._uiDrag && (ptr.dx || ptr.dy)) {
-        // RMB drag = PAN (Erik) — grab-the-world
+        // RMB drag = PAN, STRICTLY screen axes (Erik: 'no forward/back at all — that's zoom').
+        // X = the camera's right flattened to horizontal, Y = pure world up — so a pitched
+        // camera can never leak drag into the view axis (that leak read as zooming).
         const cam = this.world.camera;
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
-        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+        right.y = 0; right.normalize();
         const k = 0.0016 * this.dist;
-        this.pan.addScaledVector(right, -ptr.dx * k).addScaledVector(up, ptr.dy * k);
+        this.pan.addScaledVector(right, -ptr.dx * k);
+        this.pan.y += ptr.dy * k;
       }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }

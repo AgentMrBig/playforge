@@ -37,13 +37,37 @@ export class ControlRig {
     this.visible = false;
     this._ray = new THREE.Raycaster();
     this._handles = {};                    // id → { mesh, kind, limb?, bone? }
+    // control CURVES (Maya-style, per Erik's reference): rings/boxes/ground circles,
+    // plus an invisible pick-sphere collider at each control (raycasting lines is flaky)
+    const lineMat = (kind) => new THREE.LineBasicMaterial({ color: COLORS[kind], depthTest: false, transparent: true, opacity: 0.9 });
+    const ring = (r, kind, flat = true) => {
+      const pts = []; for (let i = 0; i <= 32; i++) { const a = (i / 32) * Math.PI * 2;
+        pts.push(flat ? new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r) : new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r, 0)); }
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat(kind));
+      l.renderOrder = 998; return l;
+    };
+    const box = (w, h, d, kind) => {
+      const l = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), lineMat(kind));
+      l.renderOrder = 998; return l;
+    };
+    const SHAPES = {
+      hand: () => ring(0.09, "hand", false),
+      foot: () => { const g = new THREE.Group(); const r = ring(0.17, "foot"); r.position.y = -0.05; g.add(r); return g; },
+      hips: () => ring(0.3, "hips"),
+      chest: () => box(0.42, 0.28, 0.26, "chest"),
+      head: () => { const g = new THREE.Group(); const r = ring(0.16, "head"); r.position.y = 0.18; g.add(r); return g; },
+    };
     const add = (id, kind, opts = {}) => {
-      const m = new THREE.Mesh(
-        new THREE.SphereGeometry(kind === "hips" ? 0.06 : 0.045, 12, 10),
-        new THREE.MeshBasicMaterial({ color: COLORS[kind], depthTest: false, transparent: true, opacity: 0.85 }));
-      m.renderOrder = 998; m.visible = false; m.userData.rigId = id;
-      scene.add(m);
-      this._handles[id] = { mesh: m, kind, ...opts };
+      const g = new THREE.Group();
+      g.add(SHAPES[kind]());
+      const picker = new THREE.Mesh(
+        new THREE.SphereGeometry(kind === "hand" ? 0.1 : 0.16, 8, 6),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      picker.userData.rigId = id;
+      g.add(picker);
+      g.visible = false;
+      scene.add(g);
+      this._handles[id] = { mesh: g, picker, kind, ...opts };
     };
     add("handL", "hand", { limb: "handL" }); add("handR", "hand", { limb: "handR" });
     add("footL", "foot", { limb: "footL" }); add("footR", "foot", { limb: "footR" });
@@ -75,9 +99,9 @@ export class ControlRig {
     if (!this.visible) return null;
     this._ray.setFromCamera({ x: nx, y: ny }, camera);
     this._ray.params.Points = this._ray.params.Points || {};
-    const meshes = Object.values(this._handles).map((h) => h.mesh);
-    for (const m of meshes) m.updateMatrixWorld(true);   // handles move per-frame; matrices may predate the next render
-    const hit = this._ray.intersectObjects(meshes, false)[0];
+    const pickers = Object.values(this._handles).map((h) => h.picker);
+    for (const h of Object.values(this._handles)) h.mesh.updateMatrixWorld(true);   // GROUP matrices (parent of pickers) may predate the next render
+    const hit = this._ray.intersectObjects(pickers, false)[0];
     return hit ? hit.object.userData.rigId : null;
   }
 
