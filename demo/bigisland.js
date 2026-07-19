@@ -8,6 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
+  CombatSystem, CombatHUD, loadProp,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -699,6 +700,30 @@ const roadNet = new RoadNetwork({ ground: heightAt });
 const { roads: _roadLayout, graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
 _roadLayout.forEach((r) => roadNet.addRoad(r.points, { width: r.width }));
 world.spawn("roads").add(roadNet);
+
+// COMBAT (General slice, first pass): equip a weapon + shoot. Ranged raycasts from the
+// camera (crosshair = screen center); hits feed damage into Ember's car lane (entity.damage
+// → wreck smoke). On-foot only for now. Defensive: combat must NEVER break the game boot.
+try {
+  const combatHud = new CombatHUD();
+  const combat = new CombatSystem({
+    camera: world.camera,
+    input: engine.input,
+    targets: () => cars,
+    loadProp,
+    player,
+    onHitCar: (e, amt, _point, dir) => { e.damage = (e.damage || 0) + amt; e.onCarHit?.(amt, dir); combatHud.flashHit(); },
+  });
+  combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test
+  world.spawn("combat").add({
+    update(dt) {
+      combat.enabled = !drivingCar;                                // on-foot only for now
+      combat.update(dt);
+      combatHud.update({ name: combat.weapon.name, ammo: combat.ammo, maxAmmo: combat.weapon.ammo, kind: combat.weapon.kind });
+    },
+  });
+  window.__pfCombat = combat;
+} catch (e) { console.warn("[combat] mount failed (game continues):", e); }
 
 engine.start();
 window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
