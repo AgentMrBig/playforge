@@ -45,7 +45,11 @@ export class CharacterAim {
     // upper body fwd/back = aim pitch (sign already right). Arm rifle-hold needs 2 axes
     // (finicky) and crouch needs foot-IK — both deferred, kept at 0 until done right.
     this.p = {
-      spinePitch: 0.45, armRaise: 0, foreBend: 0, armAxis: "x", spineAxis: "x",
+      spinePitch: 0.45, spineAxis: "x",
+      // arm rifle-hold — axes MEASURED headless (probe_arm3, skeleton bones): right arm
+      // local x-neg raises the hand UP, z-pos brings it FORWARD. Additive on the clip so
+      // still tune to taste via __pfAnim.p.{armRaise,armFwd,foreBend}.
+      armRaise: 0.7, armFwd: 0.5, foreBend: 0.6,
       crouchKnee: 0, crouchAxis: "x", blend: 10,
     };
     if (typeof window !== "undefined") window.__pfAnim = this;
@@ -64,10 +68,14 @@ export class CharacterAim {
       let pitch = 0;
       if (this.camera) { const d = new THREE.Vector3(); this.camera.getWorldDirection(d); pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1)); }
       this._rot(this.b.spine, p.spineAxis, -pitch * p.spinePitch * this.aim);
-      this._rot(this.b.armR, p.armAxis, -p.armRaise * this.aim);
-      this._rot(this.b.foreR, p.armAxis, -p.foreBend * this.aim);
-      this._rot(this.b.armL, p.armAxis, -p.armRaise * 0.85 * this.aim);
-      this._rot(this.b.foreL, p.armAxis, -p.foreBend * this.aim);
+      // right (trigger) arm: raise (x-neg) + bring forward (z-pos) into the hold, bend elbow
+      this._rot(this.b.armR, "x", -p.armRaise * this.aim);
+      this._rot(this.b.armR, "z", p.armFwd * this.aim);
+      this._rot(this.b.foreR, "x", -p.foreBend * this.aim);
+      // left (support) arm: mirror the forward reach so both hands come to the weapon
+      this._rot(this.b.armL, "x", -p.armRaise * 0.9 * this.aim);
+      this._rot(this.b.armL, "z", -p.armFwd * this.aim);
+      this._rot(this.b.foreL, "x", -p.foreBend * this.aim);
     }
 
     // crouch: bend the knees (hips drop falls out of the leg bend naturally)
