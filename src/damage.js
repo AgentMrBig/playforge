@@ -91,6 +91,7 @@ export class CarCollisions {
   shotHit(entity, amount, point, dir) {
     if (!entity) return;
     entity.damage = (entity.damage || 0) + (amount || 0);
+    entity.smokeDmg = (entity.smokeDmg || 0) + (amount || 0) * 0.12;  // bullets smoke SLOWLY (~6 rifle hits)
     const vb = this._carVehicle(entity);
     if (vb && point && typeof vb.setWheelFlat === "function") {
       const keys = vb._wheelKeys ?? ["fl", "fr", "rl", "rr"];
@@ -194,6 +195,7 @@ export class CarCollisions {
         this._wheelWreck(me, vb, cp, severity);     // wheel that got hit may lock up
       }
       me.damage = (me.damage ?? 0) + severity;
+      me.smokeDmg = (me.smokeDmg ?? 0) + severity;   // crashes wreck the engine → full smoke feed
       me.onCarHit?.(severity, dir.clone());
     }
   }
@@ -202,9 +204,14 @@ export class CarCollisions {
   update(dt) {
     if (!this._smoke || !this._world) return;
     for (const e of this._world.entities) {
-      if (!this._carVehicle(e) || !e.damage || e.damage < this.smokeStart) continue;
+      // smoke keys off a SEPARATE accumulator (smokeDmg), not raw entity.damage:
+      // a bullet adds 8-45 dmg but a crash-hit only ~1-3, so keying smoke off
+      // entity.damage made ONE bullet smoke the car (Erik, 5x). Crashes feed
+      // smokeDmg fully (wrecked engine); bullets feed it lightly (holes).
+      const sd = e.smokeDmg ?? 0;
+      if (!this._carVehicle(e) || sd < this.smokeStart) continue;
       // 0..1 severity across the smoke band → emission rate + darkness
-      const sev = Math.min(1, (e.damage - this.smokeStart) / (this.smokeFull - this.smokeStart));
+      const sev = Math.min(1, (sd - this.smokeStart) / (this.smokeFull - this.smokeStart));
       const rate = 6 + sev * 34;                        // puffs/sec
       let acc = (this._emitAcc.get(e) ?? 0) + rate * dt;
       // engine bay = between the two FRONT TIRES (Erik). Use the real wheel
