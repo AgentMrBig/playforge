@@ -37,10 +37,13 @@ export class CharacterAim {
       loLegL: find(bones, [/leftleg/i, /(calf|lowerleg|shin)_l\b/i]),
     };
     this.aim = 0; this.crouch = 0;
-    // all live-tunable via window.__pfAnim.p
+    // NEUTRALIZED 2026-07-19: blind axis-guess stretched the arms + floated on crouch.
+    // Amounts default to 0 (character = pure mocap) until the correct bone axes are
+    // determined headlessly (pose the skeleton, read hand/foot positions). Re-enable by
+    // setting these live via window.__pfAnim.p once the axes are proven.
     this.p = {
-      spinePitch: 0.6, armRaise: 1.0, foreBend: 0.4, armAxis: "x", spineAxis: "x",
-      crouchKnee: 0.9, crouchAxis: "x", blend: 10,
+      spinePitch: 0, armRaise: 0, foreBend: 0, armAxis: "x", spineAxis: "x",
+      crouchKnee: 0, crouchAxis: "x", blend: 10,
     };
     if (typeof window !== "undefined") window.__pfAnim = this;
   }
