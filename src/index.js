@@ -21,7 +21,7 @@ export { generateRoads, RoadGraph } from "./roadgen.js";
 export { layoutTowns } from "./townlayout.js";
 export { SkidMarks } from "./skidmarks.js";
 export { CarCollisions } from "./damage.js";
-export { loadModel, loadCarModel } from "./assets.js";
+export { loadModel, loadCarModel, loadProp } from "./assets.js";
 export { loadVehicle, VehicleRig } from "./vehicledef.js";
 export { noise2, fbm, ridged, mulberry } from "./noise.js";
 export { HUD } from "./hud.js";

@@ -32,11 +32,17 @@ export async function loadModel(url, {
   center = true,
   seatOnGround = true,
   targetLength = 0,        // scale so max(x,z) extent equals this (0 = keep)
+  scale = 0,               // ABSOLUTE uniform scale (0 = off) — packs authored in cm
+                           // use 0.01 so relative sizes survive (a cup stays cup-sized
+                           // next to a bookcase; targetLength would equalize them)
   rotateY = 0,             // extra yaw if the model faces the wrong way
   alignLengthToZ: opts_alignZ = false, // vehicles: ensure long axis is Z
   shadows = true,
+  texture = null,          // rebind every material to this map (UE FBX loses its refs)
+  textureDir = "",
+  textureFlipY = false,
 } = {}) {
-  const key = url + "|" + targetLength + "|" + zUp + "|" + rotateY + "|" + opts_alignZ;
+  const key = url + "|" + targetLength + "|" + scale + "|" + zUp + "|" + rotateY + "|" + opts_alignZ + "|" + texture + "|" + textureFlipY;
   if (CACHE.has(key)) {
     const c = CACHE.get(key);
     return { group: c.group.clone(true), size: c.size.clone() };
@@ -80,7 +86,11 @@ export async function loadModel(url, {
     box = new THREE.Box3().setFromObject(root);
     size = box.getSize(new THREE.Vector3());
   }
-  if (targetLength > 0) {
+  if (scale > 0) {
+    root.scale.setScalar(scale);
+    box = new THREE.Box3().setFromObject(root);
+    size = box.getSize(new THREE.Vector3());
+  } else if (targetLength > 0) {
     const s = targetLength / Math.max(size.x, size.z);
     root.scale.setScalar(s);
     box = new THREE.Box3().setFromObject(root);
@@ -92,12 +102,59 @@ export async function loadModel(url, {
     root.position.z -= center ? cz : 0;
     root.position.y -= seatOnGround ? box.min.y : 0;
   }
+  // UE pack material hygiene: all-zeros vertex paint would multiply the model
+  // to black through FBXLoader's vertexColors, and the exported FBX loses its
+  // texture reference — rebind to the shared palette when asked
+  const tex = texture ? sharedTexture(textureDir, texture, textureFlipY) : null;
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    if (o.geometry?.attributes?.color) o.geometry.deleteAttribute("color");
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+      if (!m) return;
+      if (tex) { m.map = tex; m.color?.setHex(0xffffff); }
+      m.vertexColors = false;
+      m.needsUpdate = true;
+    });
+  });
   if (shadows) root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
 
   const group = new THREE.Group();
   group.add(root);
   CACHE.set(key, { group, size: size.clone() });
   return { group: group.clone(true), size };
+}
+
+// palette textures are shared across hundreds of props — load each once
+const TEX_CACHE = new Map();
+function sharedTexture(dir, name, flipY) {
+  const k = dir + "|" + name + "|" + flipY;
+  if (!TEX_CACHE.has(k)) {
+    const t = new THREE.TextureLoader().setPath(dir.replace(/\/?$/, "/")).load(name);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.flipY = flipY;
+    TEX_CACHE.set(k, t);
+  }
+  return TEX_CACHE.get(k);
+}
+
+/**
+ * loadProp — Assetsville static meshes (weapons, tileset pieces, props).
+ * Keeps the AUTHORED pivot (no centering/seating: modular tiles must snap
+ * edge-to-edge and props stand on their own base), cm → meters, palette
+ * bound, vertex-paint stripped. Everything else is loadModel.
+ *
+ *   const { group, size } = await loadProp("models/fabpack/weapons/SM_Katana_01.FBX");
+ */
+export async function loadProp(url, opts = {}) {
+  return loadModel(url, {
+    scale: 0.01, center: false, seatOnGround: false, zUp: false,
+    // flipY TRUE verified by readable billboard text ("DON'S DONUTS") — false
+    // renders plausible-but-wrong colors on some props, same palette-symmetry
+    // trap as the police car. Vehicles remain the false outlier.
+    texture: /\/ground\//.test(url) ? "T_roadSet.PNG" : "T_colorPalette2048.PNG",
+    textureDir: "models/fabpack", textureFlipY: true,
+    ...opts,
+  });
 }
 
 const WHEEL_PATTERNS = {
