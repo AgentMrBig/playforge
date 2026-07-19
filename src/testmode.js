@@ -12,6 +12,8 @@
 // drag = orbit · wheel = zoom · panel picks the state/weapon. Firing clicks are
 // disabled so the mouse is free for the camera.
 
+import { solveTwoBone, limbChain } from "./ik.js";
+
 export class TestMode {
   /**
    * @param {object} o
@@ -24,6 +26,8 @@ export class TestMode {
     this.world = world; this.player = player; this.input = input;
     this.active = false;
     this.anim = null;               // forced clip name (null = game logic drives)
+    this.limb = null;               // selected IK effector (handR/handL/footR/footL)
+    this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
     this._buildUI();
@@ -59,15 +63,50 @@ export class TestMode {
     this.panel?.querySelector('[data-act="pause"]')?.classList.toggle("pf-sel", on);
   }
 
+  /** select an IK effector; drag then moves that limb instead of orbiting. null = back to orbit */
+  selectLimb(limb) {
+    this.limb = this.limb === limb ? null : limb;      // toggle
+    this._ikTarget = null;
+    if (this.limb) this.setPaused(true);               // posing needs a still skeleton
+    this.panel.querySelectorAll("[data-limb]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.limb === this.limb));
+  }
+
+  /** 📸 capture the full skeleton pose (persists + logs JSON to bake in) */
+  capturePose() {
+    let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
+    if (!skel) return null;
+    const pose = {};
+    for (const b of skel.bones) pose[b.name] = b.quaternion.toArray().map((v) => +v.toFixed(4));
+    const name = `pose_${Date.now() % 100000}`;
+    try { localStorage.setItem(`pf.pose.${name}`, JSON.stringify(pose)); } catch {}
+    console.log(`[pose captured: ${name}]`, JSON.stringify(pose));
+    return name;
+  }
+
   /** per-frame: orbit camera around the character (runs after the rig → wins) */
   update() {
     if (!this.active || !this.player) return;
     if (this.anim === "tpose")                  // hold the bind pose absolutely still, every frame,
       { let skel = null; this.player.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose(); }
     const p = this.player.position;
-    // drag orbits, wheel zooms (reads the engine's own pointer deltas)
     const ptr = this.input?.pointer;
-    if (ptr) {
+    // an effector is selected: drag moves the LIMB (camera-plane), not the camera
+    if (this.limb && ptr) {
+      const chain = limbChain(this.player.object3d, this.limb);
+      if (chain) {
+        if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new (this.world.camera.position.constructor)());
+        if (ptr.down && (ptr.dx || ptr.dy)) {
+          const cam = this.world.camera;
+          const right = new (cam.position.constructor)(1, 0, 0).applyQuaternion(cam.quaternion);
+          const up = new (cam.position.constructor)(0, 1, 0).applyQuaternion(cam.quaternion);
+          const k = 0.0022 * this.dist;
+          this._ikTarget.addScaledVector(right, ptr.dx * k).addScaledVector(up, -ptr.dy * k);
+        }
+        this.ikError = solveTwoBone({ ...chain, target: this._ikTarget });
+      }
+      if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
+    } else if (ptr) {
+      // drag orbits, wheel zooms (reads the engine's own pointer deltas)
       if (ptr.down) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
@@ -121,6 +160,10 @@ export class TestMode {
       <button data-act="pause">⏸ pause animation</button>
       <h4>Weapon</h4>
       <button data-act="weapon">cycle weapon (Q)</button>
+      <h4>Pose editor (IK)</h4>
+      <div class="pf-grip-row"><span>grab</span>
+        <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
+      <button data-act="posecap">📸 capture pose</button>
       <h4>Grip editor</h4>
       <div class="pf-grip">
         <div class="pf-grip-row"><span>pos</span>
@@ -139,6 +182,10 @@ export class TestMode {
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
       b.addEventListener("click", () => this.set(b.dataset.anim === "null" ? null : b.dataset.anim)));
     this.panel.querySelector('[data-act="pause"]').addEventListener("click", () => this.setPaused());
+    this.panel.querySelectorAll("[data-limb]").forEach((b) => b.addEventListener("click", () => this.selectLimb(b.dataset.limb)));
+    this.panel.querySelector('[data-act="posecap"]').addEventListener("click", () => {
+      const n = this.capturePose(); this._gripReadout(n ? `📸 ${n}` : "no skeleton");
+    });
     this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => { window.__pfCombat?.cycle(1); setTimeout(() => this._gripReadout(), 300); });
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
