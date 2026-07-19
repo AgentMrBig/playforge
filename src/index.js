@@ -19,7 +19,7 @@ export { StreamedTerrain } from "./streamworld.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { generateRoads, RoadGraph } from "./roadgen.js";
 export { layoutTowns, mountTowns } from "./townlayout.js";
-export { roadGraphToTiles, mountRoadTiles } from "./roadtiles.js";
+export { roadGraphToTiles, mountRoadTiles, dressStreets } from "./roadtiles.js";
 export { SkidMarks } from "./skidmarks.js";
 export { CarCollisions } from "./damage.js";
 export { loadModel, loadCarModel, loadProp } from "./assets.js";

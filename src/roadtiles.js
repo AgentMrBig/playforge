@@ -82,6 +82,63 @@ export function roadGraphToTiles(roadGraph, { grid = 16 } = {}) {
   return { grid, cells, placements, tally };
 }
 
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+const dist = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
+
+/**
+ * dressStreets — street-furniture placement along the sidewalk band, scoped to town areas.
+ * The pack demo dressed a town centre (not the rural highway), so we only dress road near
+ * settlements: walk each town's nearby road samples, drop props on the sidewalk band
+ * (roadWidth/2 + bandOffset off the tarmac), facing the road. Pure: RoadGraph + settlements
+ * in, prop placements out. Mount picks a real props-street mesh per `type`.
+ *
+ * @param {object} o
+ * @param {object} o.roadGraph
+ * @param {Array<{x,z,r?}>} o.settlements
+ * @param {(x,z)=>number} o.heightAt
+ * @param {number} [o.sea=0]
+ * @param {string[]} [o.propTypes]        street-furniture kinds (demo: press_box/public_phone/poster/radio)
+ * @param {number} [o.spacing=13]         metres between props along the road
+ * @param {number} [o.bandOffset=2.5]     metres past the road edge (sidewalk zone 1.5–4m)
+ * @param {number} [o.seed=7777]
+ * @returns {Array<{x,z,rotY,type}>}
+ */
+export function dressStreets({ roadGraph, settlements = [], heightAt = () => 1, sea = 0, propTypes, spacing = 13, bandOffset = 2.5, seed = 7777 }) {
+  const kinds = (propTypes && propTypes.length) ? propTypes : ["press_box", "public_phone", "poster", "radio"];
+  const rand = rng(seed);
+  const out = [];
+  for (const s of settlements) {
+    if (heightAt(s.x, s.z) <= sea + 0.5) continue;
+    const R = s.r ?? 80;
+    const anchor = roadGraph.nearestOnRoad(s.x, s.z);
+    if (!anchor) continue;
+    const road = roadGraph.roads[anchor.roadId];
+    const half = road.width * 0.5;
+    const span = Math.min(road.length, R * 2.0);
+    let arc = Math.max(0, anchor.arc - span / 2);
+    const end = Math.min(road.length, anchor.arc + span / 2);
+    let guard = 0;
+    while (arc < end && guard++ < 400) {
+      const at = roadGraph.advance(anchor.roadId, arc, 0);
+      const [tx, tz] = at.tangent;
+      const nx = tz, nz = -tx;                       // right normal
+      for (const side of [1, -1]) {
+        if (rand() < 0.25) { continue; }             // gaps so it's not a wall of props
+        const off = half + bandOffset + rand() * 1.2;
+        const px = at.point[0] + nx * side * off;
+        const pz = at.point[1] + nz * side * off;
+        if (heightAt(px, pz) <= sea + 0.8) continue;
+        if (dist(px, pz, s.x, s.z) > R * 1.5) continue;
+        const type = kinds[Math.floor(rand() * kinds.length)];
+        const rotY = Math.atan2(-nx * side, -nz * side);   // face the road
+        out.push({ x: +px.toFixed(1), z: +pz.toFixed(1), rotY: +rotY.toFixed(3), type });
+      }
+      arc += spacing;
+    }
+  }
+  return out;
+}
+
 /**
  * mountRoadTiles — instantiate real road-tile meshes at the placements. Self-corrects the
  * authored pivot (reads each tile's bbox centre from loadProp and offsets onto the cell)
