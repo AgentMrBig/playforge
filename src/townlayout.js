@@ -23,8 +23,15 @@ const hyp = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
  * @returns {Array<{x,z,rotY,type,w,d}>}
  */
 export function layoutTowns({ settlements = [], roadGraph, catalog, heightAt = () => 1, sea = 0, seed = 7777 }) {
+  // Real PlayForge building prefabs (Asset Drop/Buildings). Footprints here are PROVISIONAL —
+  // the mount overrides w/d with the exact bbox Ninja's FBX import measures per type.
   const cat = (catalog && catalog.length) ? catalog
-    : [{ type: "house", w: 10, d: 12 }, { type: "shop", w: 14, d: 12 }, { type: "big", w: 20, d: 16 }];
+    : [
+        { type: "trailerhouse_01", w: 4, d: 12 },
+        { type: "trailerhouse_02", w: 4, d: 12 },
+        { type: "gasstation", w: 14, d: 11 },
+        { type: "barn", w: 12, d: 16 },
+      ];
   const rand = rng(seed);
   const placements = [];
   const road = roadGraph;
