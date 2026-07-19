@@ -48,6 +48,19 @@ export class Physics {
     if (!this.world) return;
     this.world.timestep = dt;
     for (const h of this._pre) h(dt);
+    // PRE-step velocity snapshot for the bodies we report contacts on: the
+    // solver eats the impact inside world.step(), so linvel() read at drain
+    // time is the post-crash leftover, not the crash. A measured 161 km/h
+    // wall hit read rel≈7 m/s post-solve → severity 1.6 instead of ~50
+    // (headless crash-probe, 2026-07-19). Impact speed = approach speed.
+    if (this._contactCbs.length) {
+      if (!this._preVel) this._preVel = new Map();      // collider handle → {x,y,z}
+      this._preVel.clear();
+      for (const [h] of this._handleEnt) {
+        const v = this.world.getCollider(h)?.parent()?.linvel();
+        if (v) this._preVel.set(h, { x: v.x, y: v.y, z: v.z });
+      }
+    }
     this.world.step(this.events);
     for (const h of this._post) h(dt);
     if (this._contactCbs.length) {
@@ -58,8 +71,8 @@ export class Physics {
         // bodies' relative speed at the moment of the event.
         const c1 = this.world.getCollider(ev.collider1());
         const c2 = this.world.getCollider(ev.collider2());
-        const v1 = c1?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
-        const v2 = c2?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
+        const v1 = this._preVel.get(ev.collider1()) ?? c1?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
+        const v2 = this._preVel.get(ev.collider2()) ?? c2?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
         const rel = Math.hypot(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
         if (rel < 2.2) return;
         const a = this._handleEnt.get(ev.collider1()) ?? null;
