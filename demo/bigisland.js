@@ -560,7 +560,10 @@ world.spawn("carCollisions").add(new CarCollisions({ audio }));  // Ember's dama
 // Erik: ONLY the official Assetsville set — the sedan-pack trio is retired.
 // Every entry is a skeletal UE rig, de-skinned at load. UE material-instance
 // paint doesn't survive FBX export — re-applied per spec where it matters.
-const AV = (len) => ({ targetLength: len, textureDir: "models/fabpack", textureFlipY: false,
+// flipY TRUE for the whole pack — A/B proved it (black paint + whitewall
+// tires vs orange-tire mud at false; the earlier per-texel "false" call was
+// a palette-symmetry coincidence, same as the props)
+const AV = (len) => ({ targetLength: len, textureDir: "models/fabpack", textureFlipY: true,
   textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } });
 const FLEET = [
   { name: "Sedan",         file: "models/fabpack/SK_veh_Sedan_01.fbx",           dz: -40, hp: 280, ep: 12, top: 50, siren: 0, opts: AV(4.9) },
@@ -573,8 +576,12 @@ const FLEET = [
   { name: "Pickup",        file: "models/fabpack/SK_veh_Pickup_01.fbx",          dz: -5,  hp: 300, ep: 12, top: 48, siren: 0, mass: 2000, opts: AV(5.4) },
   { name: "PickupOld",     file: "models/fabpack/SK_veh_PickupOld_01.fbx",       dz: 0,   hp: 220, ep: 10, top: 42, siren: 0, mass: 2000, opts: AV(5.2) },
   { name: "Van",           file: "models/fabpack/SK_veh_Van_01.fbx",             dz: 5,   hp: 240, ep: 11, top: 45, siren: 0, mass: 2100, opts: AV(5.4) },
-  { name: "Police",        file: "models/fabpack/SK_veh_PoliceCarSedan_01.fbx",  dz: 10,  hp: 380, ep: 14, top: 58, siren: 6, opts: AV(5.0) },
-  { name: "PoliceSUV",     file: "models/fabpack/SK_veh_PoliceCarSUV_01.fbx",    dz: 15,  hp: 360, ep: 13, top: 54, siren: 6, mass: 1950, opts: AV(5.2) },
+  // liveried vehicles carry their OWN texture sheet (T_PoliceCar_01), not the
+  // palette — this is Erik's "not simply textures for each car" system
+  { name: "Police",        file: "models/fabpack/SK_veh_PoliceCarSedan_01.fbx",  dz: 10,  hp: 380, ep: 14, top: 58, siren: 6,
+    opts: { ...AV(5.0), textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_PoliceCar_01.PNG", policecar: "T_PoliceCar_01.PNG" } } },
+  { name: "PoliceSUV",     file: "models/fabpack/SK_veh_PoliceCarSUV_01.fbx",    dz: 15,  hp: 360, ep: 13, top: 54, siren: 6, mass: 1950,
+    opts: { ...AV(5.2), textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_PoliceCar_01.PNG", policecar: "T_PoliceCar_01.PNG" } } },
   { name: "Hearse",        file: "models/fabpack/SK_veh_Hearse.fbx",             dz: 20,  hp: 300, ep: 13, top: 52, siren: 0, paint: 0x23262c, opts: AV(5.6) },
   { name: "Truck",         file: "models/fabpack/SK_veh_Truck_01.fbx",           dz: 25,  hp: 300, ep: 10, top: 40, siren: 0, mass: 3200, opts: AV(7.5) },
   { name: "TowTruck",      file: "models/fabpack/SK_veh_TruckTow.fbx",           dz: 30,  hp: 280, ep: 10, top: 40, siren: 0, mass: 3000, opts: AV(6.8) },
