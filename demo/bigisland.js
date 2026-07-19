@@ -342,7 +342,12 @@ class PlayerMove {
       // hold; handgun-style (pistol, uzi) use the pistol hold
       const idleClip = armed ? (cs.weaponId === "pistol" || cs.weaponId === "smg" ? "pistolIdle" : "rifleIdle") : "idle";
       const forced = window.__pfTest && window.__pfTest.active && window.__pfTest.anim;   // TEST MODE menu overrides
+      // firing pose: flash on each shot (320ms) + hold it while auto-firing. (Headless-
+      // verified the clip itself via test mode; the flash window needs real fps to see.)
+      const justFired = armed && ((cs.lastFireAt && performance.now() - cs.lastFireAt < 320) ||
+        (cs.weapon.auto && (input.held?.("attack") || input.pointer?.down)));
       if (forced) anim.play(forced, { fade: 0.2 });
+      else if (justFired) anim.play("firingRifle", { fade: 0.06 });
       else if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
       else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
       else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });

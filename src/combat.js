@@ -151,6 +151,7 @@ export class CombatSystem {
   fire() {
     const w = this.weapon;
     this._cool = w.cooldown; if (Number.isFinite(this.ammo)) this.ammo--;
+    this.lastFireAt = performance.now();          // anim layer reads this to flash the firing pose
     if (w.kind === "melee") return this._melee(w);
     // ranged: raycast from the camera, one ray per pellet with spread
     const origin = new THREE.Vector3(); this.camera.getWorldPosition(origin);
