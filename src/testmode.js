@@ -35,6 +35,7 @@ export class TestMode {
     this.limbLocks = {};            // limb → world Vector3 (pinned while posing others)
     this.poleOverrides = {};        // limb → world Vector3 (knee/elbow aim controls)
     this.welds = {};                // hand → { pos } in the held WEAPON's frame (🔗)
+    this.rotOffsets = new Map();    // bone → cumulative world-frame tweak quat — survives a PLAYING clip (the mixer stamps the pose every frame; this layer re-applies your ring edits after it)
     this._shift = false;
     this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
@@ -103,6 +104,7 @@ export class TestMode {
     const anim = window.__ch && window.__ch.animator;
     if (this.anim === "tpose" && anim) anim.current = null;   // stopped actions must restart cleanly
     this.anim = name;
+    this.rotOffsets.clear();                                   // fresh state = fresh tweaks
     if (name === "tpose" && anim) {
       anim.mixer.stopAllAction(); anim.current = null;
       let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose();  // BODY skeleton only — secondary (clothes) skeletons carry raw UE bind offsets that teleport the visual if posed
@@ -174,6 +176,7 @@ export class TestMode {
       locks: Object.fromEntries(Object.entries(this.limbLocks).map(([k, v]) => [k, v.clone()])),
       poles: Object.fromEntries(Object.entries(this.poleOverrides).map(([k, v]) => [k, v.clone()])),
       ikTarget: this._ikTarget ? this._ikTarget.clone() : null,
+      rot: [...this.rotOffsets].map(([bone, q]) => [bones.indexOf(bone), q.toArray()]),
     };
   }
   _applyPose(s) {
@@ -184,6 +187,7 @@ export class TestMode {
     this.limbLocks = Object.fromEntries(Object.entries(s.locks).map(([k, v]) => [k, v.clone()]));
     this.poleOverrides = Object.fromEntries(Object.entries(s.poles).map(([k, v]) => [k, v.clone()]));
     this._ikTarget = s.ikTarget ? s.ikTarget.clone() : null;
+    this.rotOffsets = new Map((s.rot || []).filter(([i]) => i >= 0 && bones[i]).map(([i, q]) => [bones[i], new THREE.Quaternion().fromArray(q)]));
     this._modeSync();
   }
   pushUndo() {
@@ -364,7 +368,11 @@ export class TestMode {
       const dq = this._tcProxy.quaternion.clone().multiply(this._tcPrevQ.clone().invert());
       this._tcPrevQ.copy(this._tcProxy.quaternion);
       const bone = h.limb ? (limbChain(this.player.object3d, h.limb) || {}).eff : h.bone;
-      if (bone) rotateWorld(bone, dq);
+      if (bone) {
+        rotateWorld(bone, dq);
+        const acc = this.rotOffsets.get(bone) || new THREE.Quaternion();
+        this.rotOffsets.set(bone, acc.premultiply(dq));
+      }
     }
   }
 
@@ -416,6 +424,11 @@ export class TestMode {
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
     // control rig: keep handles glued to bones; route drags on hips/chest/head
+    // ring-edit tweaks survive a PLAYING clip: the mixer just stamped the clip pose,
+    // re-apply the accumulated offsets on top (paused = the direct edit already sticks)
+    if (!this.paused && this.rotOffsets.size) {
+      for (const [bone, q] of this.rotOffsets) rotateWorld(bone, q);
+    }
     if (this.rig && this.rig.visible) {
       this.rig.update(limbChain, (l) => this.polePos(l));
       this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
