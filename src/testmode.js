@@ -162,7 +162,12 @@ export class TestMode {
         if (off.length() > maxR) this._ikTarget.copy(anchor).addScaledVector(off.normalize(), maxR);
         const ground = window.__pf?.heightAt ? window.__pf.heightAt(this._ikTarget.x, this._ikTarget.z) : -Infinity;
         if (this._ikTarget.y < ground + 0.06) this._ikTarget.y = ground + 0.06;
-        this.ikError = solveTwoBone({ ...chain, target: this._ikTarget });
+        // pole = natural bend side (elbows back+down, knees forward+up) — keeps the joint
+        // stable + predictable while dragging, from any camera angle (Erik)
+        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+        const isLeg = this.limb.startsWith("foot");
+        const pole = anchor.clone().addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
+        this.ikError = solveTwoBone({ ...chain, target: this._ikTarget, pole });
         marker.visible = true; marker.position.copy(this._ikTarget);
       }
     } else {
@@ -288,7 +293,8 @@ export class TestMode {
         background: rgba(16,20,26,.92); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
         padding: 9px 12px; font: 12px system-ui; color: #dfe6ec; }
       .pf-tl-row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-      .pf-tl select, .pf-tl input[type=text] { background: rgba(255,255,255,.1); color: #eef2f6; border: 0; border-radius: 6px; padding: 4px 6px; font: 12px system-ui; }
+      .pf-tl select, .pf-tl input[type=text] { background: #232a33; color: #eef2f6; border: 0; border-radius: 6px; padding: 4px 6px; font: 12px system-ui; }
+      .pf-tl select option { background: #232a33; color: #eef2f6; }
       .pf-tl button { border: 0; border-radius: 7px; background: rgba(255,255,255,.1); color: #eef2f6; padding: 5px 9px; cursor: pointer; font: 12px system-ui; }
       .pf-tl button:hover { background: rgba(90,170,255,.4); }
       .pf-tl input[type=range] { flex: 1; }

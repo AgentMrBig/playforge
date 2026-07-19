@@ -24,9 +24,13 @@ function rotateWorld(bone, deltaQ) {
 
 /**
  * Two-bone IK: bend `mid` and swing `root` so `eff` reaches `target` (world).
+ * `pole` (optional world point) pins the BEND DIRECTION — without it the elbow/knee
+ * re-derives its hinge from the current pose and wanders unpredictably while dragging
+ * (Erik: "the way the joint moves… is not going to work"). With it, elbows/knees always
+ * point toward their natural side, stable from any camera view.
  * @returns {number} final distance from effector to target (metres, world)
  */
-export function solveTwoBone({ root, mid, eff, target, iterations = 4 }) {
+export function solveTwoBone({ root, mid, eff, target, pole = null, iterations = 4 }) {
   for (let i = 0; i < iterations; i++) {
     root.updateWorldMatrix(true, true);
     root.getWorldPosition(_a); mid.getWorldPosition(_b); eff.getWorldPosition(_e);
@@ -49,6 +53,19 @@ export function solveTwoBone({ root, mid, eff, target, iterations = 4 }) {
     root.getWorldPosition(_a); eff.getWorldPosition(_e);
     _t1.copy(_e).sub(_a).normalize(); _t2.copy(target).sub(_a).normalize();
     rotateWorld(root, _q.setFromUnitVectors(_t1, _t2));
+
+    // ---- 3) pole: roll the bend plane so the elbow/knee points at `pole` ----
+    if (pole) {
+      root.getWorldPosition(_a); mid.getWorldPosition(_b);
+      _ax.copy(target).sub(_a).normalize();                       // root→target axis
+      const el = _t1.copy(_b).sub(_a).addScaledVector(_ax, -_t1.dot(_ax));   // elbow dir ⊥ axis
+      const pl = _t2.copy(pole).sub(_a).addScaledVector(_ax, -_t2.dot(_ax)); // pole dir ⊥ axis
+      if (el.lengthSq() > 1e-8 && pl.lengthSq() > 1e-8) {
+        el.normalize(); pl.normalize();
+        const ang = Math.atan2(el.clone().cross(pl).dot(_ax), el.dot(pl));
+        rotateWorld(root, _q.setFromAxisAngle(_ax, ang));
+      }
+    }
   }
   eff.getWorldPosition(_e);
   return _e.distanceTo(target);
