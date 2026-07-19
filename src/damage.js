@@ -45,7 +45,14 @@ export class CarCollisions {
     this._lp = new THREE.Vector3();    // contact point in mesh-local
     this._ld = new THREE.Vector3();    // crumple dir in mesh-local
     this._scaleV = new THREE.Vector3();
+    this._wpos = new THREE.Vector3();  // wheel world pos temp
     this._q = new THREE.Quaternion();
+    // ---- wheel wrecking: a hit landing on a wheel damages it; once wrecked it
+    // LOCKS (drags, no spin) via Ninja's live vb.setWheelLocked (no fake floppy
+    // wheel — a destroyed wheel just stops rolling). Erik's spec.
+    this.wheelLockAt = 3.2;            // accumulated per-wheel damage to lock it
+    this.wheelHitRadius = 1.1;         // m — contact within this of a wheel counts
+    this._wheelDmg = new WeakMap();    // car entity → [fl,fr,rl,rr] damage
     // ---- wreck smoke: world-space puff pool, driven by entity.damage -------
     // Only a genuinely beat-up car smokes — a light tap (severity ~0.2-0.5) must
     // NOT start it (Erik: "smoke shouldn't start until the car has taken some
@@ -160,6 +167,7 @@ export class CarCollisions {
       if (isCar) {                                  // sparks are metal-on-metal only
         const pt = this._rel.copy(cp); pt.y += 0.1;
         this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
+        this._wheelWreck(me, vb, cp, severity);     // wheel that got hit may lock up
       }
       me.damage = (me.damage ?? 0) + severity;
       me.onCarHit?.(severity, dir.clone());
@@ -230,6 +238,26 @@ export class CarCollisions {
     geo.setDrawRange(0, maxAlive);
     geo.attributes.position.needsUpdate = true;
     geo.attributes.color.needsUpdate = true;
+  }
+
+  /** a hit landing on/near a wheel damages that wheel; once it crosses the
+   *  threshold, lock it solid so it drags (Ninja's vb.setWheelLocked). */
+  _wheelWreck(entity, vb, cpWorld, severity) {
+    if (typeof vb.setWheelLocked !== "function") return;
+    const keys = vb._wheelKeys ?? ["fl", "fr", "rl", "rr"];
+    const S = vb.suspension;
+    let dmg = this._wheelDmg.get(entity);
+    if (!dmg) { dmg = [0, 0, 0, 0]; this._wheelDmg.set(entity, dmg); }
+    for (let i = 0; i < 4; i++) {
+      const w = S?.wheels?.[keys[i]] ?? vb.wheels?.[keys[i]];
+      if (!w) continue;
+      w.getWorldPosition(this._wpos);
+      const d = this._wpos.distanceTo(cpWorld);
+      if (d >= this.wheelHitRadius) continue;
+      dmg[i] += severity * (1 - d / this.wheelHitRadius);
+      if (dmg[i] >= this.wheelLockAt && !(vb._locked && vb._locked[i]))
+        vb.setWheelLocked(i, true);              // wrecked → locks + drags
+    }
   }
 
   /** LOCALIZED crumple: only verts within `radius` (m) of the world contact
