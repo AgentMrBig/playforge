@@ -40,6 +40,17 @@ export class TestMode {
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
     this._buildUI();
     window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); if (e.key === "Shift") this._shift = true; });
+    // Maya tool shortcuts (Erik): W=move E=rotate R=scale — CAPTURE phase so the game's
+    // E (enter car) / R (new island) / W (walk) never fire while the workshop is open
+    window.addEventListener("keydown", (e) => {
+      if (!this.active || e.repeat) return;
+      const t = e.target && e.target.tagName;
+      if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
+      const mode = { KeyW: "translate", KeyE: "rotate", KeyR: "scale" }[e.code];
+      if (!mode) return;
+      this.setGizmoMode(mode);
+      e.preventDefault(); e.stopImmediatePropagation();
+    }, true);
     window.addEventListener("keyup", (e) => { if (e.key === "Shift") this._shift = false; });
     // middle-mouse = orbit, always (Erik) — input.js only tracks L/R, so track MMB here
     this._mmb = false; this._uiDrag = false;
@@ -181,7 +192,10 @@ export class TestMode {
     const h = this.rig._handles[id];
     this._tcProxy.position.copy(h.mesh.position);
     this._tcProxy.quaternion.identity();
+    this._tcProxy.scale.set(1, 1, 1);
     this._tcPrevQ.identity();
+    this._tcPrevS = this._tcPrevS || new THREE.Vector3();
+    this._tcPrevS.set(1, 1, 1);
     tc.attach(this._tcProxy);
   }
 
@@ -201,6 +215,12 @@ export class TestMode {
         const bone = h.bone, parent = bone.parent;
         if (bone) bone.position.copy(parent.worldToLocal(this._tcProxy.position.clone()));
       }
+    } else if (this._tc.mode === "scale") {
+      // scale handles multiply the bone's scale by the drag ratio (Maya R tool)
+      const s = this._tcProxy.scale, p = this._tcPrevS;
+      const bone = h.limb ? (limbChain(this.player.object3d, h.limb) || {}).eff : h.bone;
+      if (bone && p.x && p.y && p.z) bone.scale.set(bone.scale.x * s.x / p.x, bone.scale.y * s.y / p.y, bone.scale.z * s.z / p.z);
+      p.copy(s);
     } else {
       // rotation rings turn the CONTROL'S bone (wrist/ankle/chest/head) by the delta
       const dq = this._tcProxy.quaternion.clone().multiply(this._tcPrevQ.clone().invert());
@@ -260,7 +280,7 @@ export class TestMode {
       this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
       if (this._gizmoTarget && !this._gizmoDragging && this._tcProxy)
         this._tcProxy.position.copy(this.rig._handles[this._gizmoTarget].mesh.position);   // follow the anim when idle
-      if (this.rigControl && ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+      if (this.rigControl && ptr && !this._mmb && !this._uiDrag && !this._gizmoDragging && ptr.down && (ptr.dx || ptr.dy)) {
         const k = 0.0022 * this.dist;
         this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
       }
@@ -268,7 +288,7 @@ export class TestMode {
     if (this.limb && ptr && this.fkLimbs[this.limb]) {
       // FK mode: drag ROTATES the joints directly — shoulder/hip normally, Shift = elbow/knee
       const chain = limbChain(this.player.object3d, this.limb);
-      if (chain && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+      if (chain && !this._mmb && !this._uiDrag && !this._gizmoDragging && ptr.down && (ptr.dx || ptr.dy)) {
         const cam = this.world.camera;
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
         const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -ptr.dx * 0.006)
@@ -423,7 +443,7 @@ export class TestMode {
           <div class="pf-grip-row"><span>grab</span>
             <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
           <div class="pf-grip-row"><span>gizmo</span>
-        <b data-gmode="translate" class="pf-sel">↔ move</b><b data-gmode="rotate">⟳ rotate</b></div>
+        <b data-gmode="translate" class="pf-sel" title="W">↔ move</b><b data-gmode="rotate" title="E">⟳ rotate</b><b data-gmode="scale" title="R">⤢ scale</b></div>
       <div class="pf-grip-row"><span>mode</span>
             <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
             <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
