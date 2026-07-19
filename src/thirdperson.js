@@ -51,9 +51,12 @@ export class ThirdPersonRig {
     if (!t) return;
 
     // ---- look input (mouse under pointer lock, or touch right stick) ------
+    // in TEST MODE the mouse belongs to the inspector (IK drags/orbit) — consuming it
+    // here also spun the player, which made dragged limbs loop in circles (Erik)
+    const tm = (typeof window !== "undefined" && window.__pfTest && window.__pfTest.active) ? 0 : 1;
     const stick = input.stick("right");
-    const lx = input.pointer.dx * this.sensitivity + stick.x * 3.2 * dt;
-    const ly = input.pointer.dy * this.sensitivity + stick.y * 2.4 * dt;
+    const lx = (input.pointer.dx * this.sensitivity + stick.x * 3.2 * dt) * tm;
+    const ly = (input.pointer.dy * this.sensitivity + stick.y * 2.4 * dt) * tm;
     if (Math.abs(lx) > 1e-5 || Math.abs(ly) > 1e-5) this._idleT = 0;
     else this._idleT += dt;
     this.yaw -= lx;

@@ -49,6 +49,12 @@ export class Input {
       const r = target.getBoundingClientRect();
       this.pointer.x = e.clientX - r.left;
       this.pointer.y = e.clientY - r.top;
+      // ★ reconcile button STATE from the bitmask: pressing a SECOND mouse button while
+      // one is held fires NO pointerdown (only pointermove with e.buttons changed), so
+      // LMB-shoot never registered while RMB-aiming. Synthesize the missing edges here.
+      const L = !!(e.buttons & 1), R = !!(e.buttons & 2);
+      if (L !== this.pointer.down) { this.pointer.down = L; this[L ? "_pressed" : "_released"].add("Mouse0"); }
+      if (R !== this.pointer.rightDown) { this.pointer.rightDown = R; this[R ? "_pressed" : "_released"].add("Mouse2"); }
     });
     on(target, "wheel", (e) => { this.pointer.wheel += Math.sign(e.deltaY); e.preventDefault(); }, { passive: false });
     on(target, "contextmenu", (e) => e.preventDefault());

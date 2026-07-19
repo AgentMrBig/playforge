@@ -105,6 +105,9 @@ export class TestMode {
   /** per-frame: orbit camera around the character (runs after the rig → wins) */
   update() {
     if (!this.active || !this.player) return;
+    // cursor must stay VISIBLE + clickable in test mode (Erik) — break pointer lock the
+    // instant anything re-grabs it (same treatment Ember gave the vehicle rig)
+    if (typeof document !== "undefined" && document.pointerLockElement) document.exitPointerLock();
     if (this.anim === "tpose")                  // hold the bind pose absolutely still, every frame,
       { let skel = null; this.player.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose(); }
     const p = this.player.position;
