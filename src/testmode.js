@@ -189,7 +189,7 @@ export class TestMode {
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
         right.y = 0; right.normalize();
         const k = 0.0016 * this.dist;
-        this.pan.addScaledVector(right, -ptr.dx * k);
+        this.pan.addScaledVector(right, ptr.dx * k);   // L/R inverted per Erik 15:25
         this.pan.y += ptr.dy * k;
       }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
@@ -197,6 +197,7 @@ export class TestMode {
     // control rig: keep handles glued to bones; route drags on hips/chest/head
     if (this.rig && this.rig.visible) {
       this.rig.update(limbChain);
+      this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
       if (this.rigControl && ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
         const k = 0.0022 * this.dist;
         this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);

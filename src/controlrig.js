@@ -51,7 +51,7 @@ export class ControlRig {
       l.renderOrder = 998; return l;
     };
     const SHAPES = {
-      hand: () => ring(0.09, "hand", false),
+      hand: () => ring(0.1, "hand"),
       foot: () => { const g = new THREE.Group(); const r = ring(0.17, "foot"); r.position.y = -0.05; g.add(r); return g; },
       hips: () => ring(0.3, "hips"),
       chest: () => box(0.42, 0.28, 0.26, "chest"),
@@ -81,16 +81,40 @@ export class ControlRig {
     for (const id in this._handles) this._handles[id].mesh.visible = on;
   }
 
-  /** reposition handles onto their bones (call per frame while visible) */
+  /** reposition + ORIENT handles onto their bones (call per frame while visible).
+   * Watch rule (Erik): a ring wears its bone like a watch — its axis follows the bone's
+   * length direction, never twisting into the limb. Axis measured from world positions
+   * (parent → bone), NOT bind frames (this rig's bind frames lie). */
   update(limbChainFn) {
     if (!this.visible) return;
+    const up = new THREE.Vector3(0, 1, 0), axis = new THREE.Vector3(), pp = new THREE.Vector3();
     for (const id in this._handles) {
       const h = this._handles[id];
       let bone = h.bone;
       if (!bone) {
         bone = h.bone = h.limb ? (limbChainFn(this.playerObj, h.limb) || {}).eff : findBone(this.playerObj, h.re);
       }
-      if (bone) bone.getWorldPosition(h.mesh.position);
+      if (!bone) continue;
+      bone.getWorldPosition(h.mesh.position);
+      if (h.kind === "hand" || h.kind === "chest") {
+        // ring/box axis = the bone's length direction, like a watch band on the wrist.
+        // Skip same-named wrapper parents (RightHand→RightHand sit at the SAME spot = zero axis)
+        let par = bone.parent; while (par && par.name === bone.name) par = par.parent;
+        (par || bone.parent).getWorldPosition(pp);
+        axis.copy(h.mesh.position).sub(pp);
+        if (axis.lengthSq() > 1e-8) h.mesh.quaternion.setFromUnitVectors(up, axis.normalize());
+      }
+      // hips band / head halo / foot circles stay world-flat by design
+    }
+  }
+
+  /** highlight the grabbed control white; null restores base colors */
+  highlight(id) {
+    if (this._hl === id) return;
+    this._hl = id;
+    for (const k in this._handles) {
+      const h = this._handles[k];
+      h.mesh.traverse((o) => { if (o.isLine || o.isLineSegments) o.material.color.setHex(k === id ? 0xffffff : COLORS[h.kind]); });
     }
   }
 
