@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, DayNight,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -403,6 +403,20 @@ loadCharacter("models/character/humanoid_male.fbx", {
     isArmed: () => !!(window.__pfCombat && window.__pfCombat.enabled) && (player.components.find((c) => c.onGround !== undefined)?.onGround ?? true),
     isCrouch: () => engine.input.down("ControlLeft") || engine.input.down("KeyC"),
   }));
+
+  // FOOT PLANTING (General): standing idle, the feet LOCK to the ground while the body
+  // sways above (Erik: "the feet would actually stay planted"). Own entity spawned after
+  // the player so it runs AFTER the animator each frame; releases on real steps.
+  const footPlant = new FootPlant({ playerObj: ch.visual, player, heightAt });
+  world.spawn("footplant").add({ update() {
+    const body = player.components.find((c) => c.onGround !== undefined);
+    const inp = engine.input;
+    const stick = inp.stick ? inp.stick("left") : { x: 0, y: 0 };
+    const moving = Math.hypot(inp.axis("KeyA", "KeyD") + stick.x, inp.axis("KeyS", "KeyW") - stick.y);
+    const standing = body && body.onGround && moving < 0.1 && !drivingCar &&
+      !(window.__pfTest && window.__pfTest.active) && !(window.__rag && window.__rag.active);
+    footPlant.update(standing);
+  } });
 
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
   // (muscle tone pulls toward whatever the Animator is playing — no scripts)
