@@ -413,9 +413,10 @@ loadCharacter("models/character/humanoid_male.fbx", {
     const inp = engine.input;
     const stick = inp.stick ? inp.stick("left") : { x: 0, y: 0 };
     const moving = Math.hypot(inp.axis("KeyA", "KeyD") + stick.x, inp.axis("KeyS", "KeyW") - stick.y);
-    const standing = body && body.onGround && moving < 0.1 && !drivingCar &&
-      !(window.__pfTest && window.__pfTest.active) && !(window.__rag && window.__rag.active);
-    footPlant.update(standing);
+    const free = !drivingCar && !(window.__pfTest && window.__pfTest.active) && !(window.__rag && window.__rag.active);
+    const standing = body && body.onGround && moving < 0.1 && free;
+    const walking = body && body.onGround && moving >= 0.1 && free;
+    footPlant.update(standing, walking);
   } });
 
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------

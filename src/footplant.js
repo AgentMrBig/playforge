@@ -28,9 +28,31 @@ export class FootPlant {
     if (typeof window !== "undefined") window.__footPlant = this;
   }
 
-  /** call once per frame, after the animator + aim layers, while the pose is "idle standing" */
-  update(active) {
-    if (!this.enabled || !active) { this.locks.footL = this.locks.footR = null; return; }
+  /** call once per frame, after the animator + aim layers.
+   * standing: idle → feet LOCK in place. moving: feet CONFORM — never sink into terrain
+   * (Erik: "automatic feet touch the ground and react"). */
+  update(standing, moving = false) {
+    if (!this.enabled || (!standing && !moving)) { this.locks.footL = this.locks.footR = null; return; }
+    if (!standing && moving) {
+      this.locks.footL = this.locks.footR = null;
+      if (!this.heightAt) return;
+      // locomotion ground-conform: if the clip puts a foot BELOW the terrain (slopes,
+      // steps), IK it up onto the surface; above-ground swing is the clip's business
+      for (const limb of ["footL", "footR"]) {
+        const chain = limbChain(this.playerObj, limb);
+        if (!chain) continue;
+        chain.eff.getWorldPosition(_v);
+        const ground = this.heightAt(_v.x, _v.z) + 0.02;
+        if (_v.y < ground - 0.015) {
+          const target = _v.clone(); target.y = ground;
+          const anchor = chain.root.getWorldPosition(new THREE.Vector3());
+          const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+          const pole = anchor.clone().addScaledVector(fwd, 0.8).add(new THREE.Vector3(0, 0.4, 0));
+          solveTwoBone({ ...chain, target, pole, iterations: 2 });
+        }
+      }
+      return;
+    }
     for (const limb of ["footL", "footR"]) {
       const chain = limbChain(this.playerObj, limb);
       if (!chain) continue;
