@@ -92,7 +92,7 @@ export class TestMode {
   toggle(on = !this.active) {
     this.active = on;
     if (on) this.pan.set(0, 0, 0);                   // start each session centered
-    this.panel.style.display = on ? "" : "none";
+    this.panel.style.display = on ? "block" : "none";   // "block" exactly — DayNight's auto-freeze checks it
     this.btn.classList.toggle("pf-on", on);
     if (!on) this.anim = null;                       // hand animation back to the game
   }

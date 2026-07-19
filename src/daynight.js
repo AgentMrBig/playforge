@@ -42,8 +42,10 @@ export class DayNight {
     const q = new URLSearchParams(location.search);
     this.daySeconds = Number(q.get("daylen")) || daySeconds;
     const qh = q.get("hour");
-    this.frozen = qh === "off";
-    this.hour = this.frozen ? 10 : (qh !== null && !isNaN(+qh) ? +qh : startHour);
+    // TEMPORARY (Erik 2026-07-19: "take away day and night cycle, never go dark"):
+    // clock is FROZEN by default; ?cycle=1 restores the running cycle, K still toggles
+    this.frozen = q.get("cycle") !== "1";
+    this.hour = qh !== null && !isNaN(+qh) ? +qh : (this.frozen ? 10 : startHour);
 
     this.group = new THREE.Group();
     // SUN (phase-1 config: PCFSoft, camera-following box)
