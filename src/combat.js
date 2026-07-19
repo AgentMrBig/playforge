@@ -17,7 +17,7 @@ export const WEAPONS = {
   machinegun: { name: "Machine Gun", url: "models/fabpack/weapons/SM_MachineGun_01.FBX", kind: "ranged", damage: 9,  range: 160, cooldown: 0.06, auto: true,  spread: 0.045, pellets: 1, ammo: 100, muzzle: 0.65 },
   bat:        { name: "Baseball Bat",url: "models/fabpack/weapons/SM_BaseballBat_01.FBX",kind: "melee",  damage: 18, range: 3.4, cooldown: 0.5,  knockback: 15, arc: 1.1 },
   katana:     { name: "Katana",      url: "models/fabpack/weapons/SM_Katana_01.FBX",     kind: "melee",  damage: 32, range: 3.2, cooldown: 0.45, knockback: 11, arc: 1.3 },
-  chainsaw:   { name: "Chainsaw",    url: "models/fabpack/weapons/SM_Chainsaw_01.FBX",   kind: "melee",  damage: 45, range: 3.0, cooldown: 0.3,  knockback: 8,  arc: 1.0, snd: "chainsaw" },
+  chainsaw:   { name: "Chainsaw",    url: "models/fabpack/weapons/SM_Chainsaw_01.FBX",   kind: "melee",  damage: 45, range: 3.0, cooldown: 0.3,  knockback: 8,  arc: 1.0, snd: "chainsaw", auto: true },
 };
 export const WEAPON_ORDER = ["pistol", "shotgun", "smg", "rifle", "machinegun", "bat", "katana", "chainsaw"];
 
@@ -136,7 +136,10 @@ export class CombatSystem {
     if (!this.enabled) return;
     this._cool = Math.max(0, this._cool - dt);
     if (this.input.pressed?.("nextWeapon")) this.cycle(1);
-    const wantFire = this.weapon.auto ? this.input.held?.("attack") : this.input.pressed?.("attack");
+    // held-fire must see the MOUSE too: mouse buttons live in pointer.down, not _keys (so held()
+    // alone missed them → auto weapons + chainsaw never fired on a held mouse). Erik.
+    const firing = this.input.held?.("attack") || this.input.pointer?.down;
+    const wantFire = this.weapon.auto ? firing : this.input.pressed?.("attack");
     if (wantFire && this._cool <= 0 && this.ammo > 0) this.fire();
   }
 
