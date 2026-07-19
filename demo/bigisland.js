@@ -356,6 +356,9 @@ class PlayerMove {
       } else if (forced) { blend.set(null); anim.play(forced, { fade: 0.2 }); }
       else if (justFired && moving > 0.15 && body.onGround) {
         blend.set({ lower: running ? "run" : "walk", upper: "firingRifle" });
+      } else if (armed && moving > 0.15 && body.onGround) {
+        // armed walk/run: legs move, arms KEEP HOLDING the gun (was swinging through it)
+        blend.set({ lower: running ? "run" : "walk", upper: idleClip });
       } else {
         blend.set(null);
         if (justFired) anim.play("firingRifle", { fade: 0.06 });
