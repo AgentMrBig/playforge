@@ -131,8 +131,10 @@ export class CombatSystem {
     // ranged: raycast from the camera, one ray per pellet with spread
     const origin = new THREE.Vector3(); this.camera.getWorldPosition(origin);
     const base = new THREE.Vector3(); this.camera.getWorldDirection(base);
-    // tracer/flash start at the weapon muzzle if we have a model, else just ahead of the camera
-    const muzzleWorld = this._model ? this._model.getWorldPosition(new THREE.Vector3()) : origin.clone().addScaledVector(base, w.muzzle);
+    // muzzle = the BARREL TIP, not the hand/pivot (Erik: a gun always fires from the barrel).
+    // Project the weapon model's world bbox onto the firing direction and take the front face —
+    // robust for any gun orientation. Falls back to a point ahead of the camera with no model.
+    const muzzleWorld = this._muzzle(base, w);
     for (let p = 0; p < (w.pellets || 1); p++) {
       const dir = base.clone();
       dir.x += (Math.random() - 0.5) * 2 * w.spread; dir.y += (Math.random() - 0.5) * 2 * w.spread; dir.z += (Math.random() - 0.5) * 2 * w.spread;
@@ -143,6 +145,16 @@ export class CombatSystem {
       if (hit) { this.onHitCar(hit.entity, w.damage, hit.point, dir, w.damage * 0.15); this._impact(hit.point); this.effect("impact", hit.point, dir); }
     }
     this._muzzleFlash(muzzleWorld); this.effect("muzzle", muzzleWorld, base); this.sound(w.snd || "shot");
+  }
+
+  /** barrel tip in world space: the front face of the weapon model's bbox along the firing dir */
+  _muzzle(dir, w) {
+    if (!this._model) { const o = new THREE.Vector3(); this.camera.getWorldPosition(o); return o.addScaledVector(dir, w.muzzle || 0.4); }
+    const box = new THREE.Box3().setFromObject(this._model);
+    const c = box.getCenter(new THREE.Vector3());
+    const s = box.getSize(new THREE.Vector3());
+    const half = 0.5 * (Math.abs(dir.x) * s.x + Math.abs(dir.y) * s.y + Math.abs(dir.z) * s.z);
+    return c.addScaledVector(dir, half);   // push center to the front face in the firing direction
   }
 
   _melee(w) {
