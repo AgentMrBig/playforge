@@ -143,12 +143,18 @@ export class CarCollisions {
    *  Excludes CharacterBody (also has an `rb`) so people never dent or smoke. */
   _carVehicle(e) { return e?.components?.find((c) => c instanceof VehicleBody && c.rb); }
 
-  _onContact({ entityA, entityB, force, point, normal }) {
+  _onContact({ entityA, entityB, force, point, normal, relSpeed }) {
     if (force < this.hitForce) return;
     const now = performance.now();
-    // severity scales with REAL contact force, uncapped — tap ≈0.3, full wreck
-    // ≈1.5, a semi 3+. Drives crumple depth/radius, sparks, smoke, damage tally.
-    const severity = (force - this.hitForce) / (1200 * 12);
+    // severity = REAL impact ENERGY, not the solver's contact force. Rapier's
+    // totalForceMagnitude ≈ mass·Δv/dt, so even a 2.2 m/s love-tap on a ~1500 kg
+    // car reads ~200 kN → the old force/divisor made EVERY qualifying contact
+    // severity ~13 (> smokeStart 9) → the car smoked on the slightest tap, from
+    // anything (Erik, 5×). Impact energy ∝ relSpeed², which is mass- AND
+    // dt-independent: tap(2.5 m/s)≈0, solid crash(8)≈1.5, hard wreck(20)≈10.
+    // Drives crumple depth/radius, sparks, smoke, damage tally. Gate 2.2 = phys.
+    const rel = relSpeed ?? 0;
+    const severity = Math.max(0, (rel * rel - 2.2 * 2.2) / 40);
     // world-space contact point + inward crumple happen where the hit LANDED —
     // a frontal hit only folds the front, a corner hit only the corner, the rest
     // of the shell is untouched (Erik: don't crush sides that weren't hit).
