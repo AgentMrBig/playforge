@@ -39,10 +39,12 @@ export class Engine {
     this.world = null;          // active World (scene + entities)
     this.time = 0;              // seconds since start (render clock)
     this.running = false;
-    // ambient occlusion (Ember, lighting lane): GTAO post-pass, on by default,
-    // ?ao=0 kills it (falls back to the plain render path). Built lazily on the
-    // first frame that has a camera. Seam: window.__pfAO = the GTAOPass.
-    this.aoEnabled = typeof location === "undefined" || new URLSearchParams(location.search).get("ao") !== "0";
+    // ambient occlusion (Ember, lighting lane): GTAO post-pass — OPT-IN (?ao=1).
+    // Measured to roughly DOUBLE frame cost (Erik hit ~4fps); a subtle contact-
+    // shadow effect isn't worth halving the framerate, so it's OFF by default
+    // and the game runs the cheap plain render path. Enable with ?ao=1 to A/B;
+    // a lighter half-res version can come later. Seam: window.__pfAO = GTAOPass.
+    this.aoEnabled = typeof location !== "undefined" && new URLSearchParams(location.search).get("ao") === "1";
     this._composer = null;
 
     this._accum = 0;
