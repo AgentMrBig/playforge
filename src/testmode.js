@@ -277,10 +277,22 @@ export class TestMode {
         .pf-test-btn { position: fixed; left: 16px; top: 64px; z-index: 45; padding: 10px 16px; border-radius: 10px;
           border: 0; background: #2c6e8fdd; color: #fff; font: 700 14px system-ui; cursor: pointer; }
         .pf-test-btn.pf-on { background: #1d9b6cdd; }
-        .pf-test-panel { position: fixed; right: 16px; top: 205px; z-index: 45; width: 172px;   /* below the minimap */
+        .pf-test-panel { position: fixed; right: 16px; top: 205px; z-index: 45; width: 184px;   /* below the minimap */
           background: rgba(16,20,26,.88); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
-          padding: 10px; font: 12px system-ui; color: #dfe6ec; }
+          padding: 8px; font: 12px system-ui; color: #dfe6ec; box-sizing: border-box;
+          max-height: calc(100vh - 221px); overflow-y: auto; }   /* never run off screen; all groups collapse by default so this only scrolls if you open a big one (Erik dislikes scrollbars) */
+        .pf-test-panel::-webkit-scrollbar { width: 7px; }
+        .pf-test-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 4px; }
         .pf-test-panel h4 { margin: 4px 0 6px; font-size: 11px; letter-spacing: .8px; opacity: .65; text-transform: uppercase; }
+        /* collapsible groups by purpose (Erik: "too many things going on… collapsible items grouped by purpose") */
+        .pf-grp { margin: 3px 0; }
+        .pf-grp-h { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;
+          padding: 7px 9px; border-radius: 8px; background: rgba(255,255,255,.07); font: 700 11px system-ui; letter-spacing: .5px; color: #eef2f6; }
+        .pf-grp-h:hover { background: rgba(255,255,255,.14); }
+        .pf-grp-h::after { content: "▾"; opacity: .55; font-size: 10px; }
+        .pf-grp.pf-collapsed .pf-grp-h::after { content: "▸"; }
+        .pf-grp.pf-collapsed .pf-grp-b { display: none; }
+        .pf-grp-b { padding: 4px 1px 2px; }
         .pf-test-panel button { display: block; width: 100%; margin: 3px 0; padding: 7px 9px; text-align: left;
           border: 0; border-radius: 8px; background: rgba(255,255,255,.08); color: #eef2f6; font: 12px system-ui; cursor: pointer; }
         .pf-test-panel button:hover { background: rgba(255,255,255,.16); }
@@ -302,41 +314,63 @@ export class TestMode {
     this.panel = document.createElement("div");
     this.panel.className = "pf-test-panel"; this.panel.style.display = "none";
     const animBtns = this.anims.map((a) => `<button data-anim="${a}">${a}</button>`).join("");
+    // grouped + collapsible (Erik). Each .pf-grp = a clickable header + a body;
+    // Animation is open by default, the rest collapsed, so the panel opens as 5
+    // tidy rows instead of a wall. Regroups DOM only — every data-act/anim/limb
+    // is untouched, so all the existing handlers below still bind (General's trap #3).
     this.panel.innerHTML = `
-      <h4>Animation state</h4>
-      <button data-anim="null" class="pf-sel">game logic (live)</button>
-      ${animBtns}
-      <button data-anim="tpose">🧍 T-pose (still)</button>
-      <button data-anim="blend:run+firingRifle">🔀 run + fire (blend)</button>
-      <button data-anim="blend:walk+rifleIdle">🔀 walk + aim (blend)</button>
-      <button data-act="pause">⏸ pause animation</button>
-      <h4>Weapon</h4>
-      <button data-act="weapon">cycle weapon (Q)</button>
-      <h4>Pose editor (IK)</h4>
-      <button data-act="rig">🎛 control rig</button>
-      <div class="pf-grip-row"><span>grab</span>
-        <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
-      <div class="pf-grip-row"><span>mode</span>
-        <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
-        <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
-      <button data-act="posecap">📸 capture pose</button>
-      <h4>Grip editor</h4>
-      <div class="pf-grip">
-        <div class="pf-grip-row"><span>pos</span>
-          <b data-n="px-">−x</b><b data-n="px+">+x</b><b data-n="py-">−y</b><b data-n="py+">+y</b><b data-n="pz-">−z</b><b data-n="pz+">+z</b></div>
-        <div class="pf-grip-row"><span>rot</span>
-          <b data-n="rx-">−x</b><b data-n="rx+">+x</b><b data-n="ry-">−y</b><b data-n="ry+">+y</b><b data-n="rz-">−z</b><b data-n="rz+">+z</b></div>
-        <div class="pf-grip-vals"></div>
-        <button data-act="capture">📸 capture grip</button>
-        <button data-act="gripreset">↩ reset grip</button>
+      <div class="pf-grp pf-collapsed" data-grp="anim">
+        <div class="pf-grp-h">🎬 Animation</div>
+        <div class="pf-grp-b">
+          <button data-anim="null" class="pf-sel">game logic (live)</button>
+          ${animBtns}
+          <button data-anim="tpose">🧍 T-pose (still)</button>
+          <button data-anim="blend:run+firingRifle">🔀 run + fire (blend)</button>
+          <button data-anim="blend:walk+rifleIdle">🔀 walk + aim (blend)</button>
+          <button data-act="pause">⏸ pause animation</button>
+        </div>
       </div>
-      <h4>Behavior editor</h4>
-      <button data-act="timeline">🎞 timeline (NLA)</button>
-      <h4>Physics</h4>
-      <button data-act="ragdoll">💥 ragdoll (B)</button>
+      <div class="pf-grp pf-collapsed" data-grp="pose">
+        <div class="pf-grp-h">🦾 Posing</div>
+        <div class="pf-grp-b">
+          <button data-act="rig">🎛 control rig</button>
+          <div class="pf-grip-row"><span>grab</span>
+            <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
+          <div class="pf-grip-row"><span>mode</span>
+            <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
+            <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
+          <button data-act="posecap">📸 capture pose</button>
+        </div>
+      </div>
+      <div class="pf-grp pf-collapsed" data-grp="weapon">
+        <div class="pf-grp-h">🔫 Weapon</div>
+        <div class="pf-grp-b">
+          <button data-act="weapon">cycle weapon (Q)</button>
+          <div class="pf-grip">
+            <div class="pf-grip-row"><span>pos</span>
+              <b data-n="px-">−x</b><b data-n="px+">+x</b><b data-n="py-">−y</b><b data-n="py+">+y</b><b data-n="pz-">−z</b><b data-n="pz+">+z</b></div>
+            <div class="pf-grip-row"><span>rot</span>
+              <b data-n="rx-">−x</b><b data-n="rx+">+x</b><b data-n="ry-">−y</b><b data-n="ry+">+y</b><b data-n="rz-">−z</b><b data-n="rz+">+z</b></div>
+            <div class="pf-grip-vals"></div>
+            <button data-act="capture">📸 capture grip</button>
+            <button data-act="gripreset">↩ reset grip</button>
+          </div>
+        </div>
+      </div>
+      <div class="pf-grp pf-collapsed" data-grp="timeline">
+        <div class="pf-grp-h">🎞 Timeline</div>
+        <div class="pf-grp-b"><button data-act="timeline">🎞 timeline (NLA)</button></div>
+      </div>
+      <div class="pf-grp pf-collapsed" data-grp="physics">
+        <div class="pf-grp-h">💥 Physics</div>
+        <div class="pf-grp-b"><button data-act="ragdoll">💥 ragdoll (B)</button></div>
+      </div>
       <div class="pf-test-hint">🖱️ LMB = orbit · RMB = pan · MMB = orbit<br>wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
+    // group headers toggle their own section open/closed
+    this.panel.querySelectorAll(".pf-grp-h").forEach((h) =>
+      h.addEventListener("click", () => h.parentElement.classList.toggle("pf-collapsed")));
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
       b.addEventListener("click", () => this.set(b.dataset.anim === "null" ? null : b.dataset.anim)));
     this.panel.querySelector('[data-act="pause"]').addEventListener("click", () => this.setPaused());
