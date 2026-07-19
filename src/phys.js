@@ -276,6 +276,7 @@ export class RapierVehicle extends VehicleBody {
         .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS)
         .setContactForceEventThreshold(this.mass * 2.5), this.rb);
     P._handleEnt.set(col.handle, entity);
+    this._chassisCol = col; this._entity = entity;     // refitHull swaps these
     // lower the CoM so it corners flat-ish and doesn't roll over from grip alone
     this.rb.setAdditionalMassProperties(this.mass, { x: 0, y: -halfH * 0.55, z: 0 },
       principalInertia(this.mass, track, halfH * 2, wb), { x: 0, y: 0, z: 0, w: 1 }, true);
@@ -447,6 +448,16 @@ export class RapierVehicle extends VehicleBody {
       this.ctrl.setWheelBrake(i, this.mass * 0.03);
       this.ctrl.setWheelSideFrictionStiffness(i, (i < 2 ? frontSide : rearSide) * 0.45);
     }
+    // detached wheels stay GONE — this loop re-sets frictions every step, so
+    // the guard has to stand every step too
+    if (this._detached) for (let i = 0; i < 4; i++) if (this._detached[i]) {
+      this.ctrl.setWheelEngineForce(i, 0);
+      this.ctrl.setWheelBrake(i, 0);
+      this.ctrl.setWheelSuspensionStiffness(i, 0);
+      this.ctrl.setWheelMaxSuspensionForce(i, 0);
+      this.ctrl.setWheelFrictionSlip(i, 0);
+      this.ctrl.setWheelSideFrictionStiffness(i, 0);
+    }
 
     this.ctrl.updateVehicle(dt);
   }
@@ -454,6 +465,56 @@ export class RapierVehicle extends VehicleBody {
   /** Ember: lock a wrecked wheel solid (no spin, drags). setWheelLocked(i, false) frees it. */
   setWheelLocked(i, locked = true) {
     (this._locked = this._locked ?? [false, false, false, false])[i] = locked;
+  }
+
+  /** Ember: rip a wheel OFF. That corner's suspension stops holding (the car
+   *  sags onto three wheels), controls stop reaching it, the visual hides.
+   *  Returns { key, radius, pos } — world pose to spawn the loose free-rolling
+   *  wheel body from your damage system. Wheel order: fl, fr, rl, rr. */
+  setWheelDetached(i, detached = true) {
+    if (!this.ctrl) return null;
+    (this._detached = this._detached ?? [false, false, false, false])[i] = detached;
+    if (detached) {
+      this.ctrl.setWheelSuspensionStiffness(i, 0);
+      this.ctrl.setWheelMaxSuspensionForce(i, 0);
+      this.ctrl.setWheelFrictionSlip(i, 0);
+      this.ctrl.setWheelSideFrictionStiffness(i, 0);
+      this.ctrl.setWheelEngineForce(i, 0);
+      this.ctrl.setWheelBrake(i, 0);
+    } else {
+      this.ctrl.setWheelSuspensionStiffness(i, this.suspStiff);
+      this.ctrl.setWheelMaxSuspensionForce(i, this.mass * 40);
+      this.ctrl.setWheelFrictionSlip(i, this.frictionSlip);
+      this.ctrl.setWheelSideFrictionStiffness(i, this.sideFriction);
+    }
+    const key = this._wheelKeys[i];
+    const wc = this.wheelContacts?.[key];
+    const t = this.rb.translation();
+    const r = this.wheelRadius ?? 0.33;
+    return { key, radius: r,
+      pos: wc ? { x: wc.x, y: wc.y + r, z: wc.z } : { x: t.x, y: t.y, z: t.z } };
+  }
+
+  /** Ember: a crushed car should COLLIDE as its crushed shape. Hand me the
+   *  deformed body verts as xyz triplets in ENTITY-LOCAL space (world verts
+   *  through entity.object3d.worldToLocal) and the Rapier convex hull
+   *  regenerates around them. Throttle your calls — a hull rebuild per hit
+   *  is fine, per frame is not. */
+  refitHull(points) {
+    if (!this.rb || !this.phys || !points || points.length < 12) return false;  // ≥4 pts
+    const pts = points instanceof Float32Array ? points : new Float32Array(points);
+    const desc = R.ColliderDesc.convexHull(pts);
+    if (!desc) return false;
+    desc.setMass(this.mass).setFriction(0.5).setRestitution(this.restitution)
+      .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS)
+      .setContactForceEventThreshold(this.mass * 2.5);
+    const P = this.phys;
+    const col = P.world.createCollider(desc, this.rb);
+    if (this._entity) P._handleEnt.set(col.handle, this._entity);
+    const old = this._chassisCol;
+    if (old) { P._handleEnt.delete(old.handle); P.world.removeCollider(old, false); }
+    this._chassisCol = col;
+    return true;
   }
 
   // rigid body pose → entity + live state fields for every consumer
@@ -503,6 +564,11 @@ export class RapierVehicle extends VehicleBody {
     // but a traction-limited launch should VISIBLY overspin the rubber
     this._spinExtra = (this._spinExtra ?? 0) + (this.wheelspin ? 38 * (1 / 60) : 0);
     const S = this.suspension;
+    // detached wheels vanish from the car (Ember spawns the loose one)
+    if (this._detached) this._wheelKeys.forEach((key, i) => {
+      const w = S?.wheels?.[key] ?? this.wheels?.[key];
+      if (w && w.visible === this._detached[i]) w.visible = !this._detached[i];
+    });
     if (S?.boneMode) {
       // skeletal rig (UE/Fab): wheels are BONES — vertical travel is
       // bind-relative in the bone's parent frame; spin/steer compose ON the
