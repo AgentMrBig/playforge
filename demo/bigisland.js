@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -663,6 +663,11 @@ world.spawn("camera").add(rig);
 // Spawned AFTER the camera rig so its per-frame camera override wins while active.
 const testMode = new TestMode({ world, player, input: engine.input });
 world.spawn("testmode").add({ update() { testMode.update(); } });
+
+// VEHICLE TEST MODE (Erik, Ember's lane): 🚗/V — orbit a car + drive the real
+// damage pipeline (crash sides, wheel states, smoke, reset) from a panel.
+const vehicleTest = new VehicleTestMode({ world });
+world.spawn("vehicletest").add({ update() { vehicleTest.update(); } });
 
 // phones/tablets get the full on-screen control overlay (Erik) — WASD d-pad
 // (walk + drive) plus E enter/exit, Space jump/handbrake, F flip. Each button

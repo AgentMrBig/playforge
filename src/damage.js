@@ -107,6 +107,60 @@ export class CarCollisions {
     entity.onCarHit?.(amount, dir);
   }
 
+  /** VEHICLE TEST MODE seam: apply a real hit to a chosen side, through the exact
+   *  same pipeline as a physics contact (dent + sparks + wheel wreck + damage +
+   *  smoke accrual) — severity in the same units (tap≈0.3, hard≈1.5, wreck≈25+).
+   *  side: "front" | "rear" | "left" | "right" */
+  testHit(entity, severity = 1, side = "front") {
+    const vb = this._carVehicle(entity);
+    if (!vb || !entity.object3d) return;
+    const obj = entity.object3d;
+    obj.updateWorldMatrix(true, false);
+    const box = new THREE.Box3().setFromObject(obj);
+    const c = box.getCenter(new THREE.Vector3()), half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    // local axes in world: cars spawn rotated so the nose is local +Z? measure it —
+    // use the LONGER horizontal axis as the car's length axis (robust to rig).
+    const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(obj.quaternion);
+    const az = new THREE.Vector3(0, 0, 1).applyQuaternion(obj.quaternion);
+    const lenX = Math.abs(half.x * ax.x) + Math.abs(half.z * ax.z);
+    const [lenAxis, sideAxis, lenH, sideH] = lenX >= half.length() * 0.4
+      ? [ax, az, Math.max(half.x, half.z), Math.min(half.x, half.z)]
+      : [az, ax, Math.max(half.x, half.z), Math.min(half.x, half.z)];
+    const pick = { front: [lenAxis, lenH], rear: [lenAxis.clone().negate(), lenH],
+                   left: [sideAxis, sideH], right: [sideAxis.clone().negate(), sideH] }[side] ?? [lenAxis, lenH];
+    const cp = c.clone().addScaledVector(pick[0], pick[1]);   // surface point, mid-height
+    const dir = pick[0].clone().negate();                     // inward
+    // same response as _onContact's car path:
+    const depth = Math.min(0.6, 0.06 + 0.18 * severity);
+    const radius = 0.45 + 0.3 * Math.min(4, severity);
+    this._dentCar(entity, vb, cp, dir, depth, radius);
+    const pt = this._rel.copy(cp); pt.y += 0.1;
+    this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
+    this._wheelWreck(entity, vb, cp, severity);
+    entity.damage = (entity.damage ?? 0) + severity;
+    entity.smokeDmg = (entity.smokeDmg ?? 0) + severity;
+    entity.onCarHit?.(severity, dir.clone());
+  }
+
+  /** VEHICLE TEST MODE seam: restore a car to showroom state — un-dent every
+   *  mesh (from the cached rest shape), zero damage/smoke, revive all wheels. */
+  resetCar(entity) {
+    if (!entity) return;
+    entity.object3d?.traverse((o) => {
+      const orig = o.userData?._orig, pos = o.geometry?.attributes?.position;
+      if (!orig || !pos) return;
+      pos.array.set(orig); pos.needsUpdate = true; o.geometry.computeVertexNormals();
+    });
+    entity.damage = 0; entity.smokeDmg = 0;
+    this._wheelDmg.delete(entity);
+    const vb = this._carVehicle(entity);
+    if (vb) for (let i = 0; i < 4; i++) {
+      if (vb._flat?.[i] && typeof vb.setWheelFlat === "function") vb.setWheelFlat(i, false);
+      if (vb._locked?.[i]) vb.setWheelLocked(i, false);
+      if (vb._detached?.[i] && typeof vb.setWheelDetached === "function") vb.setWheelDetached(i, false);
+    }
+  }
+
   // world-space smoke pool (normal blend, so it can go dark unlike the additive
   // spark Emitter). Added to the system entity's node, which lives at world
   // origin in the scene, so puffs stay where they were emitted (not glued to
