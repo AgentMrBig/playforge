@@ -182,6 +182,8 @@ export class TestMode {
       <button data-anim="null" class="pf-sel">game logic (live)</button>
       ${animBtns}
       <button data-anim="tpose">🧍 T-pose (still)</button>
+      <button data-anim="blend:run+firingRifle">🔀 run + fire (blend)</button>
+      <button data-anim="blend:walk+rifleIdle">🔀 walk + aim (blend)</button>
       <button data-act="pause">⏸ pause animation</button>
       <h4>Weapon</h4>
       <button data-act="weapon">cycle weapon (Q)</button>

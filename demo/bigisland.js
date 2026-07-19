@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -347,12 +347,23 @@ class PlayerMove {
       const justFired = armed && (cs.aiming ||
         (cs.lastFireAt && performance.now() - cs.lastFireAt < 320) ||
         (cs.weapon.auto && (input.held?.("attack") || input.pointer?.down)));
-      if (forced) anim.play(forced, { fade: 0.2 });
-      else if (justFired) anim.play("firingRifle", { fade: 0.06 });
-      else if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
-      else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
-      else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
-      else anim.play(idleClip, { fade: 0.3 });
+      // BLENDED LAYERS (Erik): moving while aiming/firing = the legs play walk/run while
+      // the upper body plays the firing pose — two clips at once, split by bone.
+      const blend = anim._blend || (anim._blend = new BlendController(anim));
+      if (forced && String(forced).startsWith("blend:")) {
+        const [lo, up] = String(forced).slice(6).split("+");
+        blend.set({ lower: lo, upper: up });
+      } else if (forced) { blend.set(null); anim.play(forced, { fade: 0.2 }); }
+      else if (justFired && moving > 0.15 && body.onGround) {
+        blend.set({ lower: running ? "run" : "walk", upper: "firingRifle" });
+      } else {
+        blend.set(null);
+        if (justFired) anim.play("firingRifle", { fade: 0.06 });
+        else if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
+        else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
+        else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
+        else anim.play(idleClip, { fade: 0.3 });
+      }
     }
   }
 }
