@@ -150,7 +150,7 @@ export class TestMode {
           const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
           const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
           const k = 0.0022 * this.dist;
-          this._ikTarget.addScaledVector(right, ptr.dx * k).addScaledVector(up, -ptr.dy * k);
+          this._ikTarget.addScaledVector(right, -ptr.dx * k).addScaledVector(up, -ptr.dy * k);  // dx flipped: Erik reports L/R reversed in practice
         }
         // ★ the ball must never escape (Erik: "ends up on the ground, can never get it
         // back") — clamp to the limb's reach sphere around the shoulder/hip + above ground
