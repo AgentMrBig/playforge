@@ -10,6 +10,7 @@
 // Author poses with the existing IK grab; capture writes them into the selected marker.
 
 import * as THREE from "three";
+import { applyWelds } from "./ik.js";
 
 const smooth = (x) => x * x * (3 - 2 * x);
 const _sq = new THREE.Quaternion();   // slerp target MUST be a real Quaternion (plain {x,y,z,w} reads _x internals = silent no-op)
@@ -22,6 +23,7 @@ export class BehaviorTimeline {
     this.base = null;            // base clip name
     this.time = 0; this.playing = false;
     this.markers = [];           // [{ t, window, pose: {boneName: [x,y,z,w]} }]
+    this.welds = {};             // hand → { pos } in the held weapon's frame (🔗, from TestMode)
     this.selected = -1;          // selected marker index (new markers auto-select — Erik)
     this._skel = null;
   }
@@ -107,7 +109,7 @@ export class BehaviorTimeline {
 
   /** persist / restore a named behavior */
   save(name) {
-    const data = { base: this.base, markers: this.markers };
+    const data = { base: this.base, markers: this.markers, welds: this.welds };
     try { localStorage.setItem(`pf.behavior.${name}`, JSON.stringify(data)); } catch {}
     console.log(`[behavior saved: ${name}]`, JSON.stringify(data));
     return data;
@@ -116,7 +118,7 @@ export class BehaviorTimeline {
     try {
       const d = JSON.parse(localStorage.getItem(`pf.behavior.${name}`) || "null");
       if (!d || !d.base) return false;
-      this.setBase(d.base, true); this.markers = d.markers || []; this.selected = -1;
+      this.setBase(d.base, true); this.markers = d.markers || []; this.welds = d.welds || {}; this.selected = -1;
       return true;
     } catch { return false; }
   }
@@ -148,6 +150,8 @@ export class BehaviorPlayer {
   update(dt) {
     if (!this.active) return;
     this.tl.evaluate(dt);
+    // 🔗 welded hands ride the weapon during in-game playback too
+    applyWelds(this.tl.playerObj, this.tl.welds, window.__pfCombat && window.__pfCombat._holder);
     if (!this.tl.playing) this.stop();               // behavior finished → game resumes
   }
 }

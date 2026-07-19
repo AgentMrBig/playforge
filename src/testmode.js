@@ -13,7 +13,7 @@
 // disabled so the mouse is free for the camera.
 
 import * as THREE from "three";
-import { solveTwoBone, limbChain, rotateWorld } from "./ik.js";
+import { solveTwoBone, limbChain, rotateWorld, applyWelds } from "./ik.js";
 import { BehaviorTimeline } from "./animtimeline.js";
 import { ControlRig } from "./controlrig.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -34,6 +34,7 @@ export class TestMode {
     this.fkLimbs = {};              // limb → true = FK mode (drag rotates joints)
     this.limbLocks = {};            // limb → world Vector3 (pinned while posing others)
     this.poleOverrides = {};        // limb → world Vector3 (knee/elbow aim controls)
+    this.welds = {};                // hand → { pos } in the held WEAPON's frame (🔗)
     this._shift = false;
     this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
@@ -136,6 +137,32 @@ export class TestMode {
     fkB.classList.toggle("pf-sel", !!(l && this.fkLimbs[l]));
     lkB.textContent = l && this.limbLocks[l] ? "🔒 locked" : "🔓 lock";
     lkB.classList.toggle("pf-sel", !!(l && this.limbLocks[l]));
+    const wB = this.panel.querySelector('[data-act="weld"]');
+    if (wB) {
+      wB.textContent = l && this.welds[l] ? "🔗 welded" : "🔗 weld";
+      wB.classList.toggle("pf-sel", !!(l && this.welds[l]));
+      wB.style.display = l && l.startsWith("hand") ? "" : "none";   // hands only
+    }
+  }
+
+  /** 🔗 weld the selected hand TO the held weapon: stores the hand's position in the
+   * weapon's frame; every frame after animation, IK pins the hand back onto it — so
+   * the support hand rides the gun through playback, not a point in space (Erik) */
+  toggleWeld() {
+    const limb = this.limb && this.limb.startsWith("hand") ? this.limb : null;
+    if (!limb) return;
+    if (this.welds[limb]) { delete this.welds[limb]; }
+    else {
+      const holder = window.__pfCombat && window.__pfCombat._holder;
+      const chain = limbChain(this.player.object3d, limb);
+      if (!holder || !chain) return;
+      holder.updateWorldMatrix(true, false);
+      const inv = holder.matrixWorld.clone().invert();
+      const pos = chain.eff.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv);
+      this.welds[limb] = { pos: pos.toArray().map((v) => +v.toFixed(4)) };
+    }
+    if (this.timeline) this.timeline.welds = JSON.parse(JSON.stringify(this.welds));   // behaviors carry welds
+    this._modeSync();
   }
 
   /** ↩︎ undo/redo (Erik: "moved his leg, it didn't move the way I wanted") — snapshot
@@ -345,7 +372,10 @@ export class TestMode {
   toggleTimeline(on) {
     const anim = window.__ch && window.__ch.animator;
     if (!anim) return;
-    if (!this.timeline) { this.timeline = new BehaviorTimeline(anim, this.player.object3d); window.__pfTimeline = this.timeline; this._buildTimelineUI(); }
+    if (!this.timeline) {
+      this.timeline = new BehaviorTimeline(anim, this.player.object3d); window.__pfTimeline = this.timeline; this._buildTimelineUI();
+      this.timeline.welds = JSON.parse(JSON.stringify(this.welds));   // carry any welds made before the timeline opened
+    }
     const open = on ?? this.bar.style.display === "none";
     this.bar.style.display = open ? "" : "none";
     if (open) {
@@ -460,6 +490,12 @@ export class TestMode {
       if (!c) continue;
       solveTwoBone({ ...c, target: this.limbLocks[l], pole: this.polePos(l), iterations: 4 });
     }
+    // 🔗 welded hands ride the weapon — after animation + locks, before foot collision
+    if (this.welds.handL || this.welds.handR) {
+      const w = { ...this.welds };
+      if (this.limb && w[this.limb]) delete w[this.limb];   // the actively-dragged hand wins
+      applyWelds(this.player.object3d, w, window.__pfCombat && window.__pfCombat._holder);
+    }
     // 👣 always-on foot-ground collision while posing (Erik 19:34: "I don't want to have
     // to lock my ik to get foot-to-ground — lower the character and his feet have to
     // detect collisions"). Only clamps BELOW ground: lifting raises the feet freely.
@@ -560,7 +596,8 @@ export class TestMode {
         <b data-act="undo" title="Z">↩ undo</b><b data-act="redo" title="Shift+Z">↪ redo</b></div>
       <div class="pf-grip-row"><span>mode</span>
             <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
-            <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
+            <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b>
+            <b data-act="weld" title="weld this hand to the held weapon — it rides the object through playback">🔗 weld</b></div>
           <button data-act="posecap">📸 capture pose</button>
         </div>
       </div>
@@ -603,6 +640,7 @@ export class TestMode {
     this.panel.querySelectorAll('[data-gmode]').forEach((b) => b.addEventListener('click', () => this.setGizmoMode(b.dataset.gmode)));
     this.panel.querySelector('[data-act="undo"]').addEventListener('click', () => this.undo());
     this.panel.querySelector('[data-act="redo"]').addEventListener('click', () => this.redo());
+    this.panel.querySelector('[data-act="weld"]').addEventListener("click", () => this.toggleWeld());
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;
       if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];

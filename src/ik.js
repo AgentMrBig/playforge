@@ -102,3 +102,30 @@ export function limbChain(playerObj, limb) {
   });
   return found;
 }
+
+/** pole position from a chain's CURRENT bend (keeps the joint where it already points) */
+export function currentBendPole(chain) {
+  const root = chain.root.getWorldPosition(new THREE.Vector3());
+  const mid = chain.mid.getWorldPosition(new THREE.Vector3());
+  const eff = chain.eff.getWorldPosition(new THREE.Vector3());
+  const axis = eff.clone().sub(root);
+  const len2 = axis.lengthSq() || 1;
+  const proj = root.clone().addScaledVector(axis, mid.clone().sub(root).dot(axis) / len2);
+  const perp = mid.clone().sub(proj);
+  return perp.lengthSq() > 1e-4 ? mid.addScaledVector(perp.normalize(), 0.35)
+                                : root.add(new THREE.Vector3(0, -0.5, 0));
+}
+
+/** WELDS (Erik: "his hand stays attached to the object I put it on") — each weld pins a
+ * hand to a point stored in the held OBJECT's frame; call every frame AFTER animation. */
+export function applyWelds(playerObj, welds, holder) {
+  if (!holder || !welds) return;
+  let did = false;
+  for (const limb in welds) {
+    const chain = limbChain(playerObj, limb);
+    if (!chain) continue;
+    if (!did) { holder.updateWorldMatrix(true, false); did = true; }
+    const target = new THREE.Vector3().fromArray(welds[limb].pos).applyMatrix4(holder.matrixWorld);
+    solveTwoBone({ ...chain, target, pole: currentBendPole(chain), iterations: 3 });
+  }
+}
