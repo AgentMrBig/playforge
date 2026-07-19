@@ -62,7 +62,14 @@ export class DayNight {
     this.bounce.castShadow = false;
     this.group.add(this.sun, this.sun.target, this.moon, this.moon.target, this.hemi, this.bounce, this.bounce.target);
     this._sky = new THREE.Color(); this._c = new THREE.Color();
-    if (typeof window !== "undefined") window.__pfSky = this;
+    if (typeof window !== "undefined") {
+      window.__pfSky = this;
+      // hard freeze toggle (Erik: "stop time while im testing" — the test-panel
+      // auto-freeze only fires with a panel open, not while just driving). Press
+      // K anytime, or __pfFreezeTime(true/false); freezing holds the sun still.
+      window.__pfFreezeTime = (b = !this.frozen) => { this.frozen = !!b; console.log(`[time ${this.frozen ? "FROZEN" : "running"} @ ${this.hour.toFixed(1)}h]`); return this.frozen; };
+      window.addEventListener("keydown", (e) => { if (e.code === "KeyK" && !e.repeat && !/input|textarea|select/i.test(e.target?.tagName)) window.__pfFreezeTime(); });
+    }
   }
 
   _shadowRig(light) {
