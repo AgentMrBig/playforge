@@ -16,6 +16,7 @@ import * as THREE from "three";
 import { solveTwoBone, limbChain, rotateWorld } from "./ik.js";
 import { BehaviorTimeline } from "./animtimeline.js";
 import { ControlRig } from "./controlrig.js";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 export class TestMode {
   /**
@@ -135,19 +136,78 @@ export class TestMode {
       window.__pfRig = this.rig;
       window.addEventListener("pointerdown", (e) => {
         if (!this.rig.visible || this._uiDrag || e.button !== 0) return;
+        if (this._tc && this._tc.axis) return;                                    // click is ON the gizmo — let it drive
         const nx = (e.clientX / window.innerWidth) * 2 - 1, ny = -(e.clientY / window.innerHeight) * 2 + 1;
         const id = this.rig.pick(nx, ny, this.world.camera);
         this.rigControl = null;
-        if (id === null) { if (this.limb) this.selectLimb(this.limb); return; }   // empty space → release, orbit
+        if (id === null) { if (this.limb) this.selectLimb(this.limb); this.attachGizmo(null); return; }   // empty space → release
         const h = this.rig._handles[id];
         if (h.limb) { if (this.limb !== h.limb) this.selectLimb(h.limb); }        // hands/feet → the IK grab
         else { if (this.limb) this.selectLimb(this.limb); this.rigControl = id; this.setPaused(true); }
+        this.attachGizmo(id);                                                     // manipulators on the selected control
       }, true);
     }
     const vis = on ?? !this.rig.visible;
     this.rig.setVisible(vis);
     if (!vis) this.rigControl = null;
+    if (!vis && this._tc) this.attachGizmo(null);
     this.panel.querySelector('[data-act="rig"]')?.classList.toggle("pf-sel", vis);
+  }
+
+  /** the manipulator gizmo (Erik: "all the standard manipulators, x,y,z movement…
+   * i also need rotation") — three's TransformControls attached to a proxy at the
+   * selected control; translate drives IK/hips, rotate turns the bone itself. */
+  _gizmo() {
+    if (this._tc) return this._tc;
+    const dom = window.__pf?.engine?.renderer?.domElement || document.body;
+    const tc = new TransformControls(this.world.camera, dom);
+    tc.setSize(0.85);
+    this.world.scene.add(tc.getHelper ? tc.getHelper() : tc);
+    this._tcProxy = new THREE.Object3D(); this.world.scene.add(this._tcProxy);
+    this._tcPrevQ = new THREE.Quaternion();
+    tc.addEventListener("dragging-changed", (e) => {
+      this._gizmoDragging = e.value;
+      if (e.value) this._tcPrevQ.copy(this._tcProxy.quaternion);
+    });
+    tc.addEventListener("objectChange", () => this._onGizmoChange());
+    this._tc = tc;
+    return tc;
+  }
+
+  attachGizmo(id) {
+    const tc = this._gizmo();
+    this._gizmoTarget = id || null;
+    if (!id) { tc.detach(); return; }
+    const h = this.rig._handles[id];
+    this._tcProxy.position.copy(h.mesh.position);
+    this._tcProxy.quaternion.identity();
+    this._tcPrevQ.identity();
+    tc.attach(this._tcProxy);
+  }
+
+  setGizmoMode(m) {
+    this._gizmo().setMode(m);
+    this.panel.querySelectorAll("[data-gmode]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.gmode === m));
+  }
+
+  _onGizmoChange() {
+    const id = this._gizmoTarget; if (!id || !this.rig) return;
+    const h = this.rig._handles[id];
+    if (this._tc.mode === "translate") {
+      if (h.limb) {
+        // arrows drive the IK target — the per-frame solve moves the limb onto it
+        this._ikTarget = (this._ikTarget || new THREE.Vector3()).copy(this._tcProxy.position);
+      } else if (id === "hips") {
+        const bone = h.bone, parent = bone.parent;
+        if (bone) bone.position.copy(parent.worldToLocal(this._tcProxy.position.clone()));
+      }
+    } else {
+      // rotation rings turn the CONTROL'S bone (wrist/ankle/chest/head) by the delta
+      const dq = this._tcProxy.quaternion.clone().multiply(this._tcPrevQ.clone().invert());
+      this._tcPrevQ.copy(this._tcProxy.quaternion);
+      const bone = h.limb ? (limbChain(this.player.object3d, h.limb) || {}).eff : h.bone;
+      if (bone) rotateWorld(bone, dq);
+    }
   }
 
   /** open/close the behavior timeline (Maya-Trax-style NLA editor) */
@@ -181,7 +241,7 @@ export class TestMode {
     // MMB always orbits (Erik); LMB orbits when no limb is grabbed, moves the limb when one is
     if (ptr) {
       if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
-      if (ptr.rightDown && !this._uiDrag && (ptr.dx || ptr.dy)) {
+      if (ptr.rightDown && !this._uiDrag && !this._gizmoDragging && (ptr.dx || ptr.dy)) {
         // RMB drag = PAN, STRICTLY screen axes (Erik: 'no forward/back at all — that's zoom').
         // X = the camera's right flattened to horizontal, Y = pure world up — so a pitched
         // camera can never leak drag into the view axis (that leak read as zooming).
@@ -198,6 +258,8 @@ export class TestMode {
     if (this.rig && this.rig.visible) {
       this.rig.update(limbChain);
       this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
+      if (this._gizmoTarget && !this._gizmoDragging && this._tcProxy)
+        this._tcProxy.position.copy(this.rig._handles[this._gizmoTarget].mesh.position);   // follow the anim when idle
       if (this.rigControl && ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
         const k = 0.0022 * this.dist;
         this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
@@ -218,7 +280,7 @@ export class TestMode {
       const chain = limbChain(this.player.object3d, this.limb);
       if (chain) {
         if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new THREE.Vector3());
-        if (!this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+        if (!this._mmb && !this._uiDrag && !this._gizmoDragging && ptr.down && (ptr.dx || ptr.dy)) {
           const cam = this.world.camera;
           const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
           const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
@@ -245,7 +307,7 @@ export class TestMode {
       }
     } else {
       marker.visible = false;
-      if (ptr && !this._mmb && !this._uiDrag && !this.rigControl && ptr.down && (ptr.dx || ptr.dy)) {
+      if (ptr && !this._mmb && !this._uiDrag && !this._gizmoDragging && !this.rigControl && ptr.down && (ptr.dx || ptr.dy)) {
         // LMB untouched = orbit (Erik's corrected spec: RMB pans, MMB orbits, LMB stays)
         this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
       }
@@ -261,6 +323,26 @@ export class TestMode {
       const isLegL = l.startsWith("foot");
       const poleL = anchorL.clone().addScaledVector(fwdL, isLegL ? 0.8 : -0.6).add(new THREE.Vector3(0, isLegL ? 0.4 : -0.5, 0));
       solveTwoBone({ ...c, target: this.limbLocks[l], pole: poleL, iterations: 4 });
+    }
+    // 👣 always-on foot-ground collision while posing (Erik 19:34: "I don't want to have
+    // to lock my ik to get foot-to-ground — lower the character and his feet have to
+    // detect collisions"). Only clamps BELOW ground: lifting raises the feet freely.
+    const hAt = window.__pf?.heightAt;
+    if (hAt && (this.paused || this.limb || this.rigControl || this._gizmoTarget)) {
+      for (const fl of ["footL", "footR"]) {
+        if (fl === this.limb || this.limbLocks[fl]) continue;   // grabbed/locked feet already handled
+        const c = limbChain(this.player.object3d, fl);
+        if (!c) continue;
+        const fp = c.eff.getWorldPosition(new THREE.Vector3());
+        const g = hAt(fp.x, fp.z) + 0.02;
+        if (fp.y < g - 0.01) {
+          const target = fp.clone(); target.y = g;
+          const anchorF = c.root.getWorldPosition(new THREE.Vector3());
+          const fwdF = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+          const poleF = anchorF.clone().addScaledVector(fwdF, 0.8).add(new THREE.Vector3(0, 0.4, 0));
+          solveTwoBone({ ...c, target, pole: poleF, iterations: 2 });
+        }
+      }
     }
 
     const cam = this.world.camera;
@@ -340,7 +422,9 @@ export class TestMode {
           <button data-act="rig">🎛 control rig</button>
           <div class="pf-grip-row"><span>grab</span>
             <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
-          <div class="pf-grip-row"><span>mode</span>
+          <div class="pf-grip-row"><span>gizmo</span>
+        <b data-gmode="translate" class="pf-sel">↔ move</b><b data-gmode="rotate">⟳ rotate</b></div>
+      <div class="pf-grip-row"><span>mode</span>
             <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
             <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
           <button data-act="posecap">📸 capture pose</button>
@@ -382,6 +466,7 @@ export class TestMode {
     this.panel.querySelector('[data-act="fk"]').addEventListener("click", () => {
       if (this.limb) { this.fkLimbs[this.limb] = !this.fkLimbs[this.limb]; this._ikTarget = null; this._modeSync(); }
     });
+    this.panel.querySelectorAll('[data-gmode]').forEach((b) => b.addEventListener('click', () => this.setGizmoMode(b.dataset.gmode)));
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;
       if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];
