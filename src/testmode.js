@@ -38,15 +38,32 @@ export class TestMode {
     if (!on) this.anim = null;                       // hand animation back to the game
   }
 
-  /** force a state; null returns control to the game's anim logic */
+  /** force a state; null returns control to the game's anim logic. "tpose" freezes the bind pose. */
   set(name) {
+    const anim = window.__ch && window.__ch.animator;
+    if (this.anim === "tpose" && anim) anim.current = null;   // stopped actions must restart cleanly
     this.anim = name;
+    if (name === "tpose" && anim) {
+      anim.mixer.stopAllAction(); anim.current = null;
+      let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose();  // BODY skeleton only — secondary (clothes) skeletons carry raw UE bind offsets that teleport the visual if posed
+    }
+    this.setPaused(false);                                     // switching states always unpauses
     this.panel.querySelectorAll("[data-anim]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.anim === String(name)));
+  }
+
+  /** ⏸ freeze the current pose mid-frame (grip placement needs a still character) */
+  setPaused(on = !this.paused) {
+    this.paused = on;
+    const anim = window.__ch && window.__ch.animator;
+    if (anim) anim.mixer.timeScale = on ? 0 : 1;
+    this.panel?.querySelector('[data-act="pause"]')?.classList.toggle("pf-sel", on);
   }
 
   /** per-frame: orbit camera around the character (runs after the rig → wins) */
   update() {
     if (!this.active || !this.player) return;
+    if (this.anim === "tpose")                  // hold the bind pose absolutely still, every frame,
+      { let skel = null; this.player.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; }); if (skel) skel.pose(); }
     const p = this.player.position;
     // drag orbits, wheel zooms (reads the engine's own pointer deltas)
     const ptr = this.input?.pointer;
@@ -100,6 +117,8 @@ export class TestMode {
       <h4>Animation state</h4>
       <button data-anim="null" class="pf-sel">game logic (live)</button>
       ${animBtns}
+      <button data-anim="tpose">🧍 T-pose (still)</button>
+      <button data-act="pause">⏸ pause animation</button>
       <h4>Weapon</h4>
       <button data-act="weapon">cycle weapon (Q)</button>
       <h4>Grip editor</h4>
@@ -119,6 +138,7 @@ export class TestMode {
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
       b.addEventListener("click", () => this.set(b.dataset.anim === "null" ? null : b.dataset.anim)));
+    this.panel.querySelector('[data-act="pause"]').addEventListener("click", () => this.setPaused());
     this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => { window.__pfCombat?.cycle(1); setTimeout(() => this._gripReadout(), 300); });
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
