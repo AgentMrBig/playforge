@@ -235,6 +235,28 @@ export class TestMode {
     return root.addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
   }
 
+  /** standing surface at (x,z): terrain height, raised by any VEHICLE under the point
+   * (Erik: "his feet won't go through the ground or vehicles or anything") */
+  _surfaceAt(x, z, fromY) {
+    const base = window.__pf?.heightAt ? window.__pf.heightAt(x, z) : -Infinity;
+    const cars = window.__pf?.cars || [];
+    let top = base;
+    if (cars.length) {
+      this._downRay = this._downRay || new THREE.Raycaster();
+      this._downRay.set(new THREE.Vector3(x, fromY + 1.8, z), new THREE.Vector3(0, -1, 0));
+      this._downRay.far = 6;
+      for (const c of cars) {
+        const o = c.object3d;
+        if (!o) continue;
+        const cp = o.position;
+        if ((cp.x - x) * (cp.x - x) + (cp.z - z) * (cp.z - z) > 25) continue;   // 5m cull
+        const hit = this._downRay.intersectObject(o, true)[0];
+        if (hit && hit.point.y > top) top = hit.point.y;
+      }
+    }
+    return top;
+  }
+
   /** leash: an aim can't be dragged far from the body ("cannot drag past here") */
   _clampPole(limb, v) {
     const chain = limbChain(this.player.object3d, limb);
@@ -486,7 +508,7 @@ export class TestMode {
         const maxR = (anchor.distanceTo(bpos) + bpos.distanceTo(epos)) * 1.02 + 0.02;
         const off = this._ikTarget.clone().sub(anchor);
         if (off.length() > maxR) this._ikTarget.copy(anchor).addScaledVector(off.normalize(), maxR);
-        const ground = window.__pf?.heightAt ? window.__pf.heightAt(this._ikTarget.x, this._ikTarget.z) : -Infinity;
+        const ground = this._surfaceAt(this._ikTarget.x, this._ikTarget.z, this._ikTarget.y);
         if (this._ikTarget.y < ground + 0.06) this._ikTarget.y = ground + 0.06;
         this.ikError = solveTwoBone({ ...chain, target: this._ikTarget, pole: this.polePos(this.limb) });
         marker.visible = true; marker.position.copy(this._ikTarget);
@@ -522,7 +544,7 @@ export class TestMode {
         const c = limbChain(this.player.object3d, fl);
         if (!c) continue;
         const fp = c.eff.getWorldPosition(new THREE.Vector3());
-        const g = hAt(fp.x, fp.z) + 0.02;
+        const g = this._surfaceAt(fp.x, fp.z, fp.y) + 0.02;
         if (fp.y < g - 0.01) {
           const target = fp.clone(); target.y = g;
           solveTwoBone({ ...c, target, pole: this.polePos(fl), iterations: 2 });
