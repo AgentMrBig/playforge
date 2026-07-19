@@ -332,14 +332,16 @@ class PlayerMove {
     }
     const anim = entity.components.find((c) => c.play && c.mixer);
     if (anim) {
-      const planar = Math.hypot(body.velocity.x, body.velocity.z);
-      // armed = holding a ranged weapon on foot → the animator holds the gun (Mixamo armed clips)
+      // drive locomotion from INPUT intent, not body.velocity — the character controller keeps a
+      // little slide-drift on the ground even when standing, which used to fake a constant walk.
+      const moving = Math.hypot(ix, iz);
+      const running = input.down("ShiftLeft");
       const cs = window.__pfCombat;
       const armed = cs && cs.enabled && cs.weapon && cs.weapon.kind === "ranged" && !drivingCar;
       const idleClip = armed ? (cs.weaponId === "pistol" ? "pistolIdle" : "rifleIdle") : "idle";
       if (!body.onGround) anim.play("jump", { fade: 0.1, once: true });
-      else if (planar > 8) anim.play("run", { fade: 0.15 });
-      else if (planar > 0.5) anim.play("walk", { fade: 0.18, speed: planar / 4.4 });
+      else if (moving > 0.15 && running) anim.play("run", { fade: 0.15 });
+      else if (moving > 0.15) anim.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
       else anim.play(idleClip, { fade: 0.3 });
     }
   }
