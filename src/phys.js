@@ -190,7 +190,7 @@ export class RapierVehicle extends VehicleBody {
       suspRelax = 3.4,        // rebound damping
       frictionSlip = 11.5,    // tire longitudinal traction
       sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
-      steerGrip = 15,         // m/s² lateral-G that full steering may demand (13 tight, 18 twitchy → 15)
+      steerGrip = 13,         // m/s² lateral-G that full steering may demand
       driftSideFriction = 0.11,// rear grip on handbrake — measured sweep:
                               // 0.12→17° slip, 0.09→32°, 0.07→50°(spin).
                               // 0.11 + halved front steer cap = progressive
@@ -334,11 +334,7 @@ export class RapierVehicle extends VehicleBody {
     // δ_cap = atan(L·a/v²) (how real steering feels: you don't crank 15°
     // at 90 km/h). Input shaping only — the tires still do the physics.
     const v2 = Math.max(fwdSpeed * fwdSpeed, 1);
-    // FLOOR the cap so you never lose the wheel at speed (Erik: train-track at
-    // top speed), but 30% floor overshot the other way (twitchy). 0.15 is the
-    // middle: ~5° at top speed (vs 0.9° train-track / 10.7° twitchy). The tires
-    // still limit hard cornering; dialing with Erik's drive-test.
-    let cap = Math.max(this.steerMax * 0.15, Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2)));
+    let cap = Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2));
     // handbrake pulled: the FRONT must not crank the nose around — Erik saw
     // the front "gaining turn speed" instead of the tail stepping out. Less
     // front steering authority = the rotation has to come from the rear
@@ -452,14 +448,6 @@ export class RapierVehicle extends VehicleBody {
       this.ctrl.setWheelBrake(i, this.mass * 0.03);
       this.ctrl.setWheelSideFrictionStiffness(i, (i < 2 ? frontSide : rearSide) * 0.45);
     }
-    // flat tires: rim-riding rubber — half the side grip, a constant rolling
-    // drag that PULLS the car toward the flat corner, and a soggy sag
-    if (this._flat) for (let i = 0; i < 4; i++) if (this._flat[i]) {
-      this.ctrl.setWheelSideFrictionStiffness(i, (i < 2 ? frontSide : rearSide) * 0.5);
-      this.ctrl.setWheelFrictionSlip(i, this.frictionSlip * 0.55);
-      this.ctrl.setWheelBrake(i, Math.max(this.ctrl.wheelBrake?.(i) ?? 0, this.mass * 0.011));
-      this.ctrl.setWheelSuspensionStiffness(i, this.suspStiff * 0.55);
-    }
     // detached wheels stay GONE — this loop re-sets frictions every step, so
     // the guard has to stand every step too
     if (this._detached) for (let i = 0; i < 4; i++) if (this._detached[i]) {
@@ -477,17 +465,6 @@ export class RapierVehicle extends VehicleBody {
   /** Ember: lock a wrecked wheel solid (no spin, drags). setWheelLocked(i, false) frees it. */
   setWheelLocked(i, locked = true) {
     (this._locked = this._locked ?? [false, false, false, false])[i] = locked;
-  }
-
-  /** Shot/blown tire (Erik: "I shoot a tire it should go flat"): the corner
-   *  rides on the rim — grip halves, rolling drags, the car pulls toward the
-   *  flat and the wheel visual squashes. setWheelFlat(i, false) re-inflates.
-   *  Wheel order: fl fr rl rr = 0 1 2 3. */
-  setWheelFlat(i, flat = true) {
-    (this._flat = this._flat ?? [false, false, false, false])[i] = flat;
-    const key = this._wheelKeys?.[i];
-    const w = this.suspension?.wheels?.[key] ?? this.wheels?.[key];
-    if (w) w.scale.y = flat ? 0.72 : 1;              // visibly squashed rubber
   }
 
   /** Ember: rip a wheel OFF. That corner's suspension stops holding (the car
