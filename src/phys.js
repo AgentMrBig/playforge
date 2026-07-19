@@ -190,7 +190,7 @@ export class RapierVehicle extends VehicleBody {
       suspRelax = 3.4,        // rebound damping
       frictionSlip = 11.5,    // tire longitudinal traction
       sideFriction = 0.8,     // tire lateral grip multiplier (1.0 = glued)
-      steerGrip = 13,         // m/s² lateral-G that full steering may demand
+      steerGrip = 18,         // m/s² lateral-G that full steering may demand (was 13 — too tight at speed)
       driftSideFriction = 0.11,// rear grip on handbrake — measured sweep:
                               // 0.12→17° slip, 0.09→32°, 0.07→50°(spin).
                               // 0.11 + halved front steer cap = progressive
@@ -334,7 +334,11 @@ export class RapierVehicle extends VehicleBody {
     // δ_cap = atan(L·a/v²) (how real steering feels: you don't crank 15°
     // at 90 km/h). Input shaping only — the tires still do the physics.
     const v2 = Math.max(fwdSpeed * fwdSpeed, 1);
-    let cap = Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2));
+    // FLOOR the cap so you never lose the wheel at speed (Erik: "at top speed you
+    // might as well be on a train track"). The 1/v² curve was dropping to ~1.5°
+    // at top speed; keep at least ~30% of full lock at any speed and let the
+    // TIRES limit hard cornering (understeer/slide) instead of a fake angle cap.
+    let cap = Math.max(this.steerMax * 0.3, Math.min(this.steerMax, Math.atan(this.wheelbase * this.steerGrip / v2)));
     // handbrake pulled: the FRONT must not crank the nose around — Erik saw
     // the front "gaining turn speed" instead of the tail stepping out. Less
     // front steering authority = the rotation has to come from the rear
