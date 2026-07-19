@@ -73,8 +73,13 @@ export class CombatSystem {
     this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
-    this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, Math.PI / 2] };   // barrel fwd + rolled upright (verified headless — was sideways). Live-tune via setHold
+    // grip = how the weapon sits in the hand. PER-WEAPON, persisted: the test tool's grip
+    // editor nudges it live and 📸 CAPTURE saves to localStorage (pf.grip.<id>) — "locked in
+    // until changed via our testing tool" (Erik). DEFAULT_GRIP is the verified baseline.
+    this.DEFAULT_GRIP = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, Math.PI / 2] };
+    this.hold = this._loadGrip(this.weaponId);
     this.muzzleEnd = 1;   // which end of the barrel axis is the muzzle (+1/-1); flipMuzzle() toggles
+    this.aiming = false;  // RMB held = aim stance (Erik: RMB aims, LMB shoots)
     this._swing = null;                                            // active melee swing animation
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
     input.bind?.("nextWeapon", ["KeyQ"]);
@@ -83,6 +88,7 @@ export class CombatSystem {
   async equip(id) {
     if (!WEAPONS[id]) return;
     this.weaponId = id; this.weapon = WEAPONS[id]; this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0;
+    this.hold = this._loadGrip(id);              // per-weapon grip (captured via the test tool)
     if (this.loadProp && this.player?.object3d) {
       try {
         const { group } = await this.loadProp(this.weapon.url);
@@ -127,10 +133,28 @@ export class CombatSystem {
     }
     this._onHand = !!hand;
   }
-  /** live-tune the in-hand weapon placement from the console: __pfCombat.setHold([x,y,z],[rx,ry,rz]) */
+  /** live-tune the in-hand weapon placement: __pfCombat.setHold([x,y,z],[rx,ry,rz]) */
   setHold(pos, rot) {
     if (pos) this.hold.pos = pos; if (rot) this.hold.rot = rot;
     if (this._holder && this._onHand) { this._holder.position.fromArray(this.hold.pos); this._holder.rotation.fromArray(this.hold.rot); }
+  }
+  /** nudge the current grip by deltas (grip editor buttons) */
+  nudgeHold(dPos = [0, 0, 0], dRot = [0, 0, 0]) {
+    this.setHold(this.hold.pos.map((v, i) => +(v + dPos[i]).toFixed(3)), this.hold.rot.map((v, i) => +(v + dRot[i]).toFixed(3)));
+  }
+  _gripKey(id) { return `pf.grip.${id}`; }
+  _loadGrip(id) {
+    try { const s = localStorage.getItem(this._gripKey(id)); if (s) { const g = JSON.parse(s); if (g.pos && g.rot) return g; } } catch {}
+    return { pos: [...this.DEFAULT_GRIP.pos], rot: [...this.DEFAULT_GRIP.rot] };
+  }
+  /** 📸 CAPTURE — lock the current grip in for this weapon (persists until re-captured/reset) */
+  saveGrip() {
+    try { localStorage.setItem(this._gripKey(this.weaponId), JSON.stringify(this.hold)); } catch {}
+    return { weapon: this.weaponId, ...this.hold };
+  }
+  resetGrip() {
+    try { localStorage.removeItem(this._gripKey(this.weaponId)); } catch {}
+    this.hold = this._loadGrip(this.weaponId); this.setHold(this.hold.pos, this.hold.rot);
   }
   cycle(dir = 1) { this.idx = (this.idx + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length; return this.equip(WEAPON_ORDER[this.idx]); }
 
@@ -138,6 +162,7 @@ export class CombatSystem {
     this._updateFX(dt);                 // FX fade runs even while driving/disabled
     this._updateSwing(dt);              // melee swing animation
     if (this._model && !this._onHand) this._placeHolder();   // rig loaded after equip → re-attach to the hand
+    this.aiming = !!(this.enabled && this.weapon.kind === "ranged" && this.input.pointer?.rightDown);  // RMB = aim
     if (!this.enabled) return;
     this._cool = Math.max(0, this._cool - dt);
     if (this.input.pressed?.("nextWeapon")) this.cycle(1);

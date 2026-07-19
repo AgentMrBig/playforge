@@ -79,7 +79,13 @@ export class TestMode {
           border: 0; border-radius: 8px; background: rgba(255,255,255,.08); color: #eef2f6; font: 12px system-ui; cursor: pointer; }
         .pf-test-panel button:hover { background: rgba(255,255,255,.16); }
         .pf-test-panel button.pf-sel { background: rgba(60,160,255,.45); }
-        .pf-test-hint { opacity: .55; font-size: 10.5px; margin-top: 7px; line-height: 1.45; }`;
+        .pf-test-hint { opacity: .55; font-size: 10.5px; margin-top: 7px; line-height: 1.45; }
+        .pf-grip-row { display: flex; gap: 3px; align-items: center; margin: 3px 0; }
+        .pf-grip-row span { width: 24px; opacity: .6; font-size: 10.5px; }
+        .pf-grip-row b { flex: 1; text-align: center; padding: 5px 0; border-radius: 6px; font-weight: 600;
+          background: rgba(255,255,255,.08); cursor: pointer; font-size: 10.5px; user-select: none; }
+        .pf-grip-row b:hover { background: rgba(90,170,255,.4); }
+        .pf-grip-vals { font-size: 9.5px; opacity: .7; margin: 4px 0 5px; word-break: break-all; line-height: 1.4; }`;
       document.head.appendChild(s);
     }
     this.btn = document.createElement("button");
@@ -96,15 +102,46 @@ export class TestMode {
       ${animBtns}
       <h4>Weapon</h4>
       <button data-act="weapon">cycle weapon (Q)</button>
+      <h4>Grip editor</h4>
+      <div class="pf-grip">
+        <div class="pf-grip-row"><span>pos</span>
+          <b data-n="px-">−x</b><b data-n="px+">+x</b><b data-n="py-">−y</b><b data-n="py+">+y</b><b data-n="pz-">−z</b><b data-n="pz+">+z</b></div>
+        <div class="pf-grip-row"><span>rot</span>
+          <b data-n="rx-">−x</b><b data-n="rx+">+x</b><b data-n="ry-">−y</b><b data-n="ry+">+y</b><b data-n="rz-">−z</b><b data-n="rz+">+z</b></div>
+        <div class="pf-grip-vals"></div>
+        <button data-act="capture">📸 capture grip</button>
+        <button data-act="gripreset">↩ reset grip</button>
+      </div>
       <h4>Physics</h4>
       <button data-act="ragdoll">💥 ragdoll (B)</button>
-      <div class="pf-test-hint">drag = orbit · wheel = zoom<br>T toggles test mode</div>`;
+      <div class="pf-test-hint">drag = orbit · wheel = zoom<br>grip: 1cm / 5° per tap<br>T toggles test mode</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
     this.panel.querySelectorAll("[data-anim]").forEach((b) =>
       b.addEventListener("click", () => this.set(b.dataset.anim === "null" ? null : b.dataset.anim)));
-    this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => window.__pfCombat?.cycle(1));
+    this.panel.querySelector('[data-act="weapon"]').addEventListener("click", () => { window.__pfCombat?.cycle(1); setTimeout(() => this._gripReadout(), 300); });
     this.panel.querySelector('[data-act="ragdoll"]').addEventListener("click", () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" })));
+    // grip editor: nudge the held weapon 1cm / 5° per tap, capture persists it per-weapon
+    const STEP_P = 0.01, STEP_R = Math.PI / 36;
+    this.panel.querySelectorAll(".pf-grip b").forEach((b) => b.addEventListener("click", () => {
+      const cs = window.__pfCombat; if (!cs) return;
+      const [kind, axis, sign] = [b.dataset.n[0], b.dataset.n[1], b.dataset.n[2] === "+" ? 1 : -1];
+      const d = [0, 0, 0]; d[{ x: 0, y: 1, z: 2 }[axis]] = sign * (kind === "p" ? STEP_P : STEP_R);
+      cs.nudgeHold(kind === "p" ? d : [0, 0, 0], kind === "r" ? d : [0, 0, 0]);
+      this._gripReadout();
+    }));
+    this.panel.querySelector('[data-act="capture"]').addEventListener("click", () => {
+      const saved = window.__pfCombat?.saveGrip();
+      this._gripReadout(`📸 saved ${saved?.weapon}`);
+      console.log("[grip captured]", JSON.stringify(saved));   // paste this to General to bake in for everyone
+    });
+    this.panel.querySelector('[data-act="gripreset"]').addEventListener("click", () => { window.__pfCombat?.resetGrip(); this._gripReadout("reset"); });
+    this._gripReadout();
+  }
+
+  _gripReadout(note) {
+    const el = this.panel?.querySelector(".pf-grip-vals"); const cs = window.__pfCombat;
+    if (el && cs) el.textContent = `${cs.weaponId}: p[${cs.hold.pos.map((v) => v.toFixed(2)).join(",")}] r[${cs.hold.rot.map((v) => v.toFixed(2)).join(",")}]${note ? " · " + note : ""}`;
   }
 }
