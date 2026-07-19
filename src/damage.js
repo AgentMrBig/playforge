@@ -51,6 +51,7 @@ export class CarCollisions {
     // LOCKS (drags, no spin) via Ninja's live vb.setWheelLocked (no fake floppy
     // wheel — a destroyed wheel just stops rolling). Erik's spec.
     this.wheelLockAt = 3.2;            // accumulated per-wheel damage to lock it
+    this.wheelDetachAt = 8;            // ...and to knock it clean off the car
     this.wheelHitRadius = 1.1;         // m — contact within this of a wheel counts
     this._wheelDmg = new WeakMap();    // car entity → [fl,fr,rl,rr] damage
     // ---- wreck smoke: world-space puff pool, driven by entity.damage -------
@@ -257,6 +258,12 @@ export class CarCollisions {
       dmg[i] += severity * (1 - d / this.wheelHitRadius);
       if (dmg[i] >= this.wheelLockAt && !(vb._locked && vb._locked[i]))
         vb.setWheelLocked(i, true);              // wrecked → locks + drags
+      // extreme wheel damage → the wheel comes OFF (Erik's spec). Ninja's seam
+      // drops that corner's suspension (car sags onto 3 + leans) + hides the
+      // wheel. The loose free-rolling wheel body is deferred cosmetic polish.
+      if (dmg[i] >= this.wheelDetachAt && typeof vb.setWheelDetached === "function"
+          && !(vb._detached && vb._detached[i]))
+        vb.setWheelDetached(i, true);
     }
   }
 
