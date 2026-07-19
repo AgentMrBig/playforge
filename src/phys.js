@@ -615,10 +615,26 @@ export class CharacterBody {
       return;
     }
     this.velocity.y += this.gravity * dt;
+    // CAR RIDING (Erik): standing on a dynamic body means moving WITH it —
+    // the ground under your feet is a moving frame. Carry the platform's
+    // velocity at the foot contact (linear + ω×r, so a turning car swings
+    // you around too). Without this the capsule stood still in world space
+    // while the car rolled out from under it.
+    let carX = 0, carY = 0, carZ = 0;
+    const g = this._groundRb;
+    if (g && this.onGround && g.isEnabled?.() !== false) {
+      const gv = g.linvel(), gw = g.angvel(), gt = g.translation();
+      const t0 = this.rb.translation();
+      const rx = t0.x - gt.x, ry = (t0.y - half) - gt.y, rz = t0.z - gt.z;
+      carX = gv.x + gw.y * rz - gw.z * ry;
+      carY = gv.y + gw.z * rx - gw.x * rz;
+      carZ = gv.z + gw.x * ry - gw.y * rx;
+    }
+    this._groundRb = null;                          // re-detected below each step
     const desired = {
-      x: this.velocity.x * dt,
-      y: this.velocity.y * dt,
-      z: this.velocity.z * dt,
+      x: (this.velocity.x + carX) * dt,
+      y: this.velocity.y * dt + Math.max(0, carY) * dt,
+      z: (this.velocity.z + carZ) * dt,
     };
     this.ctrl.computeColliderMovement(this.col, desired);
     const mv = this.ctrl.computedMovement();
@@ -648,6 +664,7 @@ export class CharacterBody {
         let jy = this.gravity * this.massKg * dt;              // gravity is negative
         if (justLanded) jy += fallVy * this.massKg;
         body.applyImpulseAtPoint({ x: 0, y: jy, z: 0 }, { x: foot.x, y: foot.y, z: foot.z }, true);
+        this._groundRb = body;                       // the moving frame we ride next step
       }
     }
     entity.position.set(nx, ny - half, nz);
