@@ -162,7 +162,7 @@ export class CarCollisions {
       // (Erik: "limit the damage for the characters so they wont go all weird").
       const depth = isCar ? Math.min(0.6, 0.06 + 0.18 * severity) : Math.min(0.12, 0.04 + 0.05 * severity);
       const radius = isCar ? 0.45 + 0.3 * Math.min(4, severity) : 0.22 + 0.06 * Math.min(3, severity);
-      this._dentCar(me, cp, dir, depth, radius);
+      this._dentCar(me, vb, cp, dir, depth, radius);
 
       if (isCar) {                                  // sparks are metal-on-metal only
         const pt = this._rel.copy(cp); pt.y += 0.1;
@@ -263,10 +263,26 @@ export class CarCollisions {
   /** LOCALIZED crumple: only verts within `radius` (m) of the world contact
    *  `pointW` fold inward along `dirW` by up to `depth` (m). No whole-body crush
    *  — a frontal hit only folds the front, a corner hit only the corner. */
-  _dentCar(entity, pointW, dirW, depth, radius) {
+  // tag each of a vehicle's wheel meshes so deformation skips them BY IDENTITY —
+  // the de-skinned pack cars have all-unnamed meshes, so the name regex missed
+  // the wheels and they were denting into wobbly blobs (Erik). Wheels are the
+  // meshes under the vehicle's wheel nodes; they never crumple (a wrecked wheel
+  // LOCKS via setWheelLocked instead).
+  _markWheels(vb) {
+    if (!vb || vb._wheelsMarked) return;
+    const S = vb.suspension, keys = vb._wheelKeys ?? ["fl", "fr", "rl", "rr"];
+    for (const k of keys) {
+      const w = S?.wheels?.[k] ?? vb.wheels?.[k];
+      w?.traverse?.((o) => { if (o.isMesh) o.userData._isWheel = true; });
+    }
+    vb._wheelsMarked = true;
+  }
+
+  _dentCar(entity, vb, pointW, dirW, depth, radius) {
+    this._markWheels(vb);
     entity.object3d?.traverse((o) => {
       if (!o.isMesh || !o.geometry?.attributes?.position) return;
-      if (/wheel|tire|tyre|rim|glass|window/i.test(o.name)) return;  // skip spinners + glass
+      if (o.userData._isWheel || /wheel|tire|tyre|rim|glass|window/i.test(o.name)) return;  // wheels + glass never crumple
       this._dentMesh(o, pointW, dirW, depth, radius);
     });
   }
