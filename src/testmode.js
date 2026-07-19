@@ -176,16 +176,39 @@ export class TestMode {
     this._applyPose(this._redoStack.pop());
   }
 
-  /** a limb's pole position: the aim-control override if the animator placed one,
-   * else the natural default (elbows back+down, knees forward+up) */
+  /** a limb's pole position: the aim-control override if the animator placed one, else
+   * derived from the limb's ACTUAL bend right now — the aim sits just off the real
+   * elbow/knee, and grabbing it never snaps the limb (Erik: "arms snap to an unnatural
+   * state… placement is bizarre" — both were the old canned-offset default) */
   polePos(limb) {
     if (this.poleOverrides[limb]) return this.poleOverrides[limb];
     const chain = limbChain(this.player.object3d, limb);
     if (!chain) return new THREE.Vector3();
-    const anchor = chain.root.getWorldPosition(new THREE.Vector3());
+    const root = chain.root.getWorldPosition(new THREE.Vector3());
+    const mid = chain.mid.getWorldPosition(new THREE.Vector3());
+    const eff = chain.eff.getWorldPosition(new THREE.Vector3());
+    const axis = eff.clone().sub(root);
+    const len2 = axis.lengthSq() || 1;
+    const proj = root.clone().addScaledVector(axis, mid.clone().sub(root).dot(axis) / len2);
+    const perp = mid.clone().sub(proj);                       // bend direction, in the current pose
+    if (perp.lengthSq() > 1e-4) return mid.addScaledVector(perp.normalize(), 0.35);
+    // near-straight limb: bend plane is ambiguous — natural-side fallback
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
     const isLeg = limb.startsWith("foot");
-    return anchor.addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
+    return root.addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
+  }
+
+  /** leash: an aim can't be dragged far from the body ("cannot drag past here") */
+  _clampPole(limb, v) {
+    const chain = limbChain(this.player.object3d, limb);
+    if (!chain) return v;
+    const root = chain.root.getWorldPosition(new THREE.Vector3());
+    const mid = chain.mid.getWorldPosition(new THREE.Vector3());
+    const reach = root.distanceTo(mid) + mid.distanceTo(chain.eff.getWorldPosition(mid.clone()));
+    const maxR = reach * 1.5 + 0.15;
+    const off = v.clone().sub(root);
+    if (off.length() > maxR) v.copy(root).addScaledVector(off.normalize(), maxR);
+    return v;
   }
 
   /** 📸 capture the full skeleton pose (persists + logs JSON to bake in) */
@@ -282,7 +305,9 @@ export class TestMode {
     const h = this.rig._handles[id];
     if (this._tc.mode === "translate") {
       if (h.aimFor) {
-        this.poleOverrides[h.aimFor] = (this.poleOverrides[h.aimFor] || new THREE.Vector3()).copy(this._tcProxy.position);
+        const ov = (this.poleOverrides[h.aimFor] = (this.poleOverrides[h.aimFor] || new THREE.Vector3()).copy(this._tcProxy.position));
+        this._clampPole(h.aimFor, ov);
+        this._tcProxy.position.copy(ov);                      // gizmo stops at the leash too
       } else if (h.limb) {
         // arrows drive the IK target — the per-frame solve moves the limb onto it
         this._ikTarget = (this._ikTarget || new THREE.Vector3()).copy(this._tcProxy.position);
@@ -365,6 +390,7 @@ export class TestMode {
           const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
           const ov = this.poleOverrides[hc.aimFor] || (this.poleOverrides[hc.aimFor] = this.polePos(hc.aimFor).clone());
           ov.addScaledVector(right, -ptr.dx * k).addScaledVector(up, -ptr.dy * k);
+          this._clampPole(hc.aimFor, ov);
         } else {
           this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
         }
