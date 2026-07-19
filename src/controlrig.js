@@ -63,7 +63,7 @@ export class ControlRig {
       const g = new THREE.Group();
       g.add(SHAPES[kind]());
       const picker = new THREE.Mesh(
-        new THREE.SphereGeometry(kind === "hand" ? 0.1 : 0.16, 8, 6),
+        new THREE.SphereGeometry(kind === "hand" ? 0.1 : kind === "aim" ? 0.07 : 0.16, 8, 6),
         new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
       picker.userData.rigId = id;
       g.add(picker);

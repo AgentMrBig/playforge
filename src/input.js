@@ -62,7 +62,13 @@ export class Input {
 
   /** GTA-style mouse look: click canvas → pointer locks; Esc releases (browser default) */
   enablePointerLock() {
-    const req = () => { if (document.pointerLockElement !== this.target) this.target.requestPointerLock(); };
+    const req = () => {
+      // the character workshop needs a FREE cursor — a lock request mid-gizmo-drag
+      // throws InvalidStateError inside TransformControls' setPointerCapture and
+      // freezes clientX/Y, killing the drag (Erik: "it knows how it SHOULD move")
+      if (window.__pfTest && window.__pfTest.active) return;
+      if (document.pointerLockElement !== this.target) this.target.requestPointerLock();
+    };
     this.target.addEventListener("pointerdown", req);
     this._h.push([this.target, "pointerdown", req]);
   }
