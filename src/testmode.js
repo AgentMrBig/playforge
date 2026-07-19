@@ -161,7 +161,10 @@ export class TestMode {
       holder.updateWorldMatrix(true, false);
       const inv = holder.matrixWorld.clone().invert();
       const pos = chain.eff.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv);
-      this.welds[limb] = { pos: pos.toArray().map((v) => +v.toFixed(4)) };
+      // grip angle relative to the weapon too — the wrist must not twist as the gun swings
+      const relQ = holder.getWorldQuaternion(new THREE.Quaternion()).invert()
+        .multiply(chain.eff.getWorldQuaternion(new THREE.Quaternion()));
+      this.welds[limb] = { pos: pos.toArray().map((v) => +v.toFixed(4)), quat: relQ.toArray().map((v) => +v.toFixed(5)) };
     }
     if (this.timeline) this.timeline.welds = JSON.parse(JSON.stringify(this.welds));   // behaviors carry welds
     this._modeSync();

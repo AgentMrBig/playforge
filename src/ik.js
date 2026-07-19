@@ -121,11 +121,20 @@ export function currentBendPole(chain) {
 export function applyWelds(playerObj, welds, holder) {
   if (!holder || !welds) return;
   let did = false;
+  const hq = new THREE.Quaternion(), wq = new THREE.Quaternion(), dq = new THREE.Quaternion();
   for (const limb in welds) {
     const chain = limbChain(playerObj, limb);
     if (!chain) continue;
     if (!did) { holder.updateWorldMatrix(true, false); did = true; }
     const target = new THREE.Vector3().fromArray(welds[limb].pos).applyMatrix4(holder.matrixWorld);
     solveTwoBone({ ...chain, target, pole: currentBendPole(chain), iterations: 3 });
+    // orientation weld: the wrist keeps its captured angle RELATIVE to the weapon,
+    // so the grip doesn't twist as the gun swings
+    if (welds[limb].quat) {
+      holder.getWorldQuaternion(hq);
+      chain.eff.getWorldQuaternion(wq);
+      dq.fromArray(welds[limb].quat).premultiply(hq);      // desired world = holderQ * relQ
+      rotateWorld(chain.eff, dq.multiply(wq.invert()));    // delta = desired * current⁻¹
+    }
   }
 }
