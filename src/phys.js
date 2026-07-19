@@ -490,9 +490,14 @@ export class RapierVehicle extends VehicleBody {
    *  Wheel order: fl fr rl rr = 0 1 2 3. */
   setWheelFlat(i, flat = true) {
     (this._flat = this._flat ?? [false, false, false, false])[i] = flat;
+    // NO wheel scaling — the old scale.y=0.72 squashed the whole wheel incl. the
+    // STEEL RIM, which doesn't deform (Erik: "the rim is made of steel… the rubber
+    // is the only part that goes flat"). A flat instead SAGS the corner: the axle
+    // drops by the lost sidewall (in the per-frame position update) while the rim
+    // stays perfectly round. Undo any legacy squash left on the mesh.
     const key = this._wheelKeys?.[i];
     const w = this.suspension?.wheels?.[key] ?? this.wheels?.[key];
-    if (w) w.scale.y = flat ? 0.72 : 1;              // visibly squashed rubber
+    if (w && w.scale.y !== 1) w.scale.y = 1;
   }
 
   /** Ember: lock a wrecked wheel solid (no spin, drags). setWheelLocked(i, false) frees it. */
@@ -613,7 +618,9 @@ export class RapierVehicle extends VehicleBody {
         if (!w || !c) return;
         const susp = this.ctrl.wheelSuspensionLength(i) ?? this.suspRest;
         const hard = this.ctrl.wheelChassisConnectionPointCs(i);
-        const wantVisY = hard.y - susp + this._restRide;
+        // flat tire = axle drops by the lost sidewall; rim stays round (no scale)
+        const flatDrop = this._flat?.[i] ? (this.wheelRadius ?? 0.33) * 0.15 : 0;
+        const wantVisY = hard.y - susp + this._restRide - flatDrop;
         w.position[c.upAxis] = c.bindL + (wantVisY - c.bindVisY) / c.gain;
         const spin = (this.ctrl.wheelRotation(i) ?? 0) + (i >= 2 ? this._spinExtra : 0);
         w.quaternion.copy(c.bindQ);
@@ -627,8 +634,10 @@ export class RapierVehicle extends VehicleBody {
         const susp = this.ctrl.wheelSuspensionLength(i) ?? this.suspRest;
         const hard = this.ctrl.wheelChassisConnectionPointCs(i);
         // wheel CENTER in chassis space = hardpoint + suspension travel down;
-        // lift into the ground-origin frame the visual rig lives in
-        w.position.y = (hard.y - susp + this._restRide) / (S.scale ?? 1);
+        // lift into the ground-origin frame the visual rig lives in. A flat
+        // tire drops the axle by the lost sidewall (rim stays round — no scale).
+        const flatDrop = this._flat?.[i] ? (this.wheelRadius ?? 0.33) * 0.15 : 0;
+        w.position.y = (hard.y - susp + this._restRide - flatDrop) / (S.scale ?? 1);
         w.rotation.x = (this.ctrl.wheelRotation(i) ?? 0) + (i >= 2 ? this._spinExtra : 0);
         if (i < 2) w.rotation.y = this.steer * 0.9;
       });
