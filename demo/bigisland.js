@@ -26,13 +26,32 @@ world.scene.fog = new THREE.Fog(0x8fb9dc, 180, 620);
 world.camera.far = 3000;
 world.camera.updateProjectionMatrix();
 
-world.spawn("sun").mesh((() => {
+// SUN + SKY (Ember, lighting lane): the DirectionalLight never had castShadow —
+// the whole shadow pipeline (renderer flag, mesh flags, terrain receive) was
+// plumbed but no light cast. Real sun shadows now, with the shadow box
+// FOLLOWING the camera so a 3km island still gets crisp near-field shadows.
+// Ambient is a HemisphereLight (sky blue from above, warm ground bounce from
+// below) so shade has direction instead of dead-flat grey.
+const SUN_DIR = new THREE.Vector3(0.55, 0.75, 0.3).normalize();
+{
   const g = new THREE.Group();
-  const sun = new THREE.DirectionalLight(0xfff0d0, 2.2);
-  sun.position.set(120, 160, 60);
-  g.add(sun, new THREE.AmbientLight(0xa8c0e0, 0.85));
-  return g;
-})());
+  const sun = new THREE.DirectionalLight(0xfff0d0, 2.6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  const S = 95;                                          // shadow box half-size (m)
+  sun.shadow.camera.left = -S; sun.shadow.camera.right = S;
+  sun.shadow.camera.top = S; sun.shadow.camera.bottom = -S;
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 500;
+  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+  g.add(sun, sun.target, new THREE.HemisphereLight(0xbfd7f0, 0x8a7a5f, 0.75));
+  world.spawn("sun").mesh(g).add({
+    update() {                                           // shadow box tracks the view
+      const c = world.camera.position;
+      sun.target.position.set(c.x, 0, c.z);
+      sun.position.set(c.x + SUN_DIR.x * 220, SUN_DIR.y * 220, c.z + SUN_DIR.z * 220);
+    },
+  });
+}
 
 // ============================================================================
 // WORLD GEN — one deterministic height function for a ~3km island

@@ -25,6 +25,10 @@ export class Engine {
     this.renderer.setClearColor(clearColor);
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // filmic color pipeline (Ember, lighting lane): ACES tames the flat washed-
+    // out look — highlights roll off instead of clipping, colors get depth
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
 
     this.input = new Input(canvas);
     this.world = null;          // active World (scene + entities)
