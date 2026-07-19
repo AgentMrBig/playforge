@@ -74,6 +74,7 @@ export class CombatSystem {
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
     this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, 0] };   // in-hand grip (live-tunable via setHold)
+    this.muzzleEnd = 1;   // which end of the barrel axis is the muzzle (+1/-1); flipMuzzle() toggles
     this._swing = null;                                            // active melee swing animation
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
     input.bind?.("nextWeapon", ["KeyQ"]);
@@ -86,6 +87,17 @@ export class CombatSystem {
       try {
         const { group } = await this.loadProp(this.weapon.url);
         this._holder?.parent?.remove(this._holder);
+        // MUZZLE MARKER — a point CHILD of the gun locked to the barrel tip (Erik: the flash
+        // must be fixed to the gun, not recomputed from the camera each shot). Barrel = the
+        // model's longest local axis; muzzleEnd (+1/-1) picks the muzzle end vs the stock.
+        {
+          const lb = new THREE.Box3().setFromObject(group);
+          const lc = lb.getCenter(new THREE.Vector3()), lsz = lb.getSize(new THREE.Vector3());
+          const ax = (lsz.x >= lsz.y && lsz.x >= lsz.z) ? "x" : (lsz.z >= lsz.y) ? "z" : "y";
+          const marker = new THREE.Object3D();
+          marker.position.copy(lc); marker.position[ax] += this.muzzleEnd * 0.5 * lsz[ax];
+          group.add(marker); this._muzzleMarker = marker; this._muzzleAxis = ax; this._muzzleHalf = 0.5 * lsz[ax];
+        }
         // attach to the REAL skinned hand bone (the animated one, from the skeleton). A plain
         // traverse for isBone grabs this FBX's DEAD DUPLICATE bones, so the gun floated off the
         // root instead of riding the hand (Erik). Skeleton bones are the deform bones the anim moves.
@@ -151,18 +163,15 @@ export class CombatSystem {
     this._muzzleFlash(muzzleWorld); this.effect("muzzle", muzzleWorld, base); this.sound(w.snd || "shot");
   }
 
-  /** barrel tip in world space: the front face of the weapon model's bbox along the firing dir */
+  /** barrel tip in world space — the marker CHILD locked to the gun, so it's always the barrel */
   _muzzle(dir, w) {
-    if (!this._model) { const o = new THREE.Vector3(); this.camera.getWorldPosition(o); return o.addScaledVector(dir, w.muzzle || 0.4); }
-    this._model.updateWorldMatrix(true, false);
-    const box = new THREE.Box3().setFromObject(this._model);
-    const c = box.getCenter(new THREE.Vector3());
-    const s = box.getSize(new THREE.Vector3());
-    // barrel ≈ the gun's LONGEST world axis (not the aim dir — that gave the gun's SIDE); point it downrange
-    let axis = (s.x >= s.y && s.x >= s.z) ? new THREE.Vector3(1, 0, 0) : (s.z >= s.y) ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
-    if (axis.dot(dir) < 0) axis.negate();
-    const half = 0.5 * (Math.abs(axis.x) * s.x + Math.abs(axis.y) * s.y + Math.abs(axis.z) * s.z);
-    return c.addScaledVector(axis, half);   // tip of the barrel
+    if (this._muzzleMarker) return this._muzzleMarker.getWorldPosition(new THREE.Vector3());
+    const o = new THREE.Vector3(); this.camera.getWorldPosition(o); return o.addScaledVector(dir, w.muzzle || 0.4);
+  }
+  /** if the flash comes off the STOCK, flip the marker to the other end: __pfCombat.flipMuzzle() */
+  flipMuzzle() {
+    if (this._muzzleMarker) this._muzzleMarker.position[this._muzzleAxis] -= 2 * this.muzzleEnd * this._muzzleHalf;
+    this.muzzleEnd *= -1;
   }
 
   _melee(w) {
