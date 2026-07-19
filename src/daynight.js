@@ -100,7 +100,10 @@ export class DayNight {
     ramp(HEMI_SKY, e, this.hemi.color);
     ramp(HEMI_GND, e, this.hemi.groundColor);
     ramp(SKY_COL, e, this._sky);
-    this.engine.renderer.setClearColor(this._sky);
+    // scene.background (not renderer clear color!) — it's color-managed, so it
+    // renders identically through the plain path AND the AO composer (a raw
+    // clear color gets cleared linear then output-transformed = washed white)
+    this.world.scene.background = this._sky;
     const fog = this.world.scene.fog;
     if (fog) fog.color.copy(this._sky);
     this.engine.renderer.toneMappingExposure = 0.9 + 0.25 * d;

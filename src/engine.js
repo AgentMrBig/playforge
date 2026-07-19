@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { Input } from "./input.js";
 import { Tweens } from "./tween.js";
+// postprocessing (Ember, lighting lane): ambient occlusion pass
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 /**
  * Engine — owns the renderer, the loop, and the active scene.
@@ -34,6 +39,11 @@ export class Engine {
     this.world = null;          // active World (scene + entities)
     this.time = 0;              // seconds since start (render clock)
     this.running = false;
+    // ambient occlusion (Ember, lighting lane): GTAO post-pass, on by default,
+    // ?ao=0 kills it (falls back to the plain render path). Built lazily on the
+    // first frame that has a camera. Seam: window.__pfAO = the GTAOPass.
+    this.aoEnabled = typeof location === "undefined" || new URLSearchParams(location.search).get("ao") !== "0";
+    this._composer = null;
 
     this._accum = 0;
     this._last = 0;
@@ -71,15 +81,41 @@ export class Engine {
       if (steps === Engine.MAX_CATCHUP) this._accum = 0;
       Tweens.update(dt);
       world._update(dt, this);
-      if (world.camera) this.renderer.render(world.scene, world.camera);
+      if (world.camera) {
+        if (this.aoEnabled && !this._composer) this._buildComposer(world);
+        if (this._composer) {
+          // worlds/cameras can swap — keep the passes pointed at the live ones
+          if (this._rp.camera !== world.camera || this._rp.scene !== world.scene) {
+            this._rp.camera = world.camera; this._rp.scene = world.scene;
+            this._gtao.camera = world.camera; this._gtao.scene = world.scene;
+          }
+          this._composer.render();
+        } else this.renderer.render(world.scene, world.camera);
+      }
     }
     this.input.endFrame();
+  }
+
+  _buildComposer(world) {
+    const w = this.canvas.clientWidth || window.innerWidth;
+    const h = this.canvas.clientHeight || window.innerHeight;
+    this._composer = new EffectComposer(this.renderer);
+    this._rp = new RenderPass(world.scene, world.camera);
+    this._gtao = new GTAOPass(world.scene, world.camera, w, h);
+    this._gtao.output = GTAOPass.OUTPUT.Default;
+    // OutputPass applies the renderer's tone mapping (ACES) + sRGB at the end,
+    // so the day/night exposure ramp keeps working through the composer
+    this._composer.addPass(this._rp);
+    this._composer.addPass(this._gtao);
+    this._composer.addPass(new OutputPass());
+    if (typeof window !== "undefined") window.__pfAO = this._gtao;
   }
 
   _onResize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this._composer?.setSize(w, h);
     this.aspect = w / h;
     if (this.world?.camera) {
       this.world.camera.aspect = this.aspect;
