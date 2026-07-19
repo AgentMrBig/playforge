@@ -33,6 +33,7 @@ export class TestMode {
     this.limb = null;               // selected IK effector (handR/handL/footR/footL)
     this.fkLimbs = {};              // limb → true = FK mode (drag rotates joints)
     this.limbLocks = {};            // limb → world Vector3 (pinned while posing others)
+    this.poleOverrides = {};        // limb → world Vector3 (knee/elbow aim controls)
     this._shift = false;
     this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
@@ -127,6 +128,18 @@ export class TestMode {
     lkB.classList.toggle("pf-sel", !!(l && this.limbLocks[l]));
   }
 
+  /** a limb's pole position: the aim-control override if the animator placed one,
+   * else the natural default (elbows back+down, knees forward+up) */
+  polePos(limb) {
+    if (this.poleOverrides[limb]) return this.poleOverrides[limb];
+    const chain = limbChain(this.player.object3d, limb);
+    if (!chain) return new THREE.Vector3();
+    const anchor = chain.root.getWorldPosition(new THREE.Vector3());
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+    const isLeg = limb.startsWith("foot");
+    return anchor.addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
+  }
+
   /** 📸 capture the full skeleton pose (persists + logs JSON to bake in) */
   capturePose() {
     let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
@@ -154,6 +167,17 @@ export class TestMode {
         if (id === null) { if (this.limb) this.selectLimb(this.limb); this.attachGizmo(null); return; }   // empty space → release
         const h = this.rig._handles[id];
         if (h.limb) { if (this.limb !== h.limb) this.selectLimb(h.limb); }        // hands/feet → the IK grab
+        else if (h.aimFor) {
+          // knee/elbow aim: pin the limb's effector where it is, then the aim swivels
+          // the joint around it (pole vector) — Maya behavior
+          if (this.limb) this.selectLimb(this.limb);
+          this.rigControl = id; this.setPaused(true);
+          if (!this.limbLocks[h.aimFor]) {
+            const c = limbChain(this.player.object3d, h.aimFor);
+            if (c) { this.limbLocks[h.aimFor] = c.eff.getWorldPosition(new THREE.Vector3()); this._modeSync(); }
+          }
+          this.setGizmoMode("translate");                                         // aims are position-only
+        }
         else { if (this.limb) this.selectLimb(this.limb); this.rigControl = id; this.setPaused(true); }
         this.attachGizmo(id);                                                     // manipulators on the selected control
       }, true);
@@ -208,7 +232,9 @@ export class TestMode {
     const id = this._gizmoTarget; if (!id || !this.rig) return;
     const h = this.rig._handles[id];
     if (this._tc.mode === "translate") {
-      if (h.limb) {
+      if (h.aimFor) {
+        this.poleOverrides[h.aimFor] = (this.poleOverrides[h.aimFor] || new THREE.Vector3()).copy(this._tcProxy.position);
+      } else if (h.limb) {
         // arrows drive the IK target — the per-frame solve moves the limb onto it
         this._ikTarget = (this._ikTarget || new THREE.Vector3()).copy(this._tcProxy.position);
       } else if (id === "hips") {
@@ -276,13 +302,23 @@ export class TestMode {
     }
     // control rig: keep handles glued to bones; route drags on hips/chest/head
     if (this.rig && this.rig.visible) {
-      this.rig.update(limbChain);
+      this.rig.update(limbChain, (l) => this.polePos(l));
       this.rig.highlight(this.rigControl || this.limb || null);   // grabbed control glows white
       if (this._gizmoTarget && !this._gizmoDragging && this._tcProxy)
         this._tcProxy.position.copy(this.rig._handles[this._gizmoTarget].mesh.position);   // follow the anim when idle
       if (this.rigControl && ptr && !this._mmb && !this._uiDrag && !this._gizmoDragging && ptr.down && (ptr.dx || ptr.dy)) {
         const k = 0.0022 * this.dist;
-        this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
+        const hc = this.rig._handles[this.rigControl];
+        if (hc && hc.aimFor) {
+          // freeform-drag an aim control in the camera plane (gizmo covers precise axes)
+          const cam = this.world.camera;
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+          const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+          const ov = this.poleOverrides[hc.aimFor] || (this.poleOverrides[hc.aimFor] = this.polePos(hc.aimFor).clone());
+          ov.addScaledVector(right, -ptr.dx * k).addScaledVector(up, -ptr.dy * k);
+        } else {
+          this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
+        }
       }
     }
     if (this.limb && ptr && this.fkLimbs[this.limb]) {
@@ -317,12 +353,7 @@ export class TestMode {
         if (off.length() > maxR) this._ikTarget.copy(anchor).addScaledVector(off.normalize(), maxR);
         const ground = window.__pf?.heightAt ? window.__pf.heightAt(this._ikTarget.x, this._ikTarget.z) : -Infinity;
         if (this._ikTarget.y < ground + 0.06) this._ikTarget.y = ground + 0.06;
-        // pole = natural bend side (elbows back+down, knees forward+up) — keeps the joint
-        // stable + predictable while dragging, from any camera angle (Erik)
-        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
-        const isLeg = this.limb.startsWith("foot");
-        const pole = anchor.clone().addScaledVector(fwd, isLeg ? 0.8 : -0.6).add(new THREE.Vector3(0, isLeg ? 0.4 : -0.5, 0));
-        this.ikError = solveTwoBone({ ...chain, target: this._ikTarget, pole });
+        this.ikError = solveTwoBone({ ...chain, target: this._ikTarget, pole: this.polePos(this.limb) });
         marker.visible = true; marker.position.copy(this._ikTarget);
       }
     } else {
@@ -338,11 +369,7 @@ export class TestMode {
       if (l === this.limb) continue;                    // the actively-dragged limb wins
       const c = limbChain(this.player.object3d, l);
       if (!c) continue;
-      const anchorL = c.root.getWorldPosition(new THREE.Vector3());
-      const fwdL = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
-      const isLegL = l.startsWith("foot");
-      const poleL = anchorL.clone().addScaledVector(fwdL, isLegL ? 0.8 : -0.6).add(new THREE.Vector3(0, isLegL ? 0.4 : -0.5, 0));
-      solveTwoBone({ ...c, target: this.limbLocks[l], pole: poleL, iterations: 4 });
+      solveTwoBone({ ...c, target: this.limbLocks[l], pole: this.polePos(l), iterations: 4 });
     }
     // 👣 always-on foot-ground collision while posing (Erik 19:34: "I don't want to have
     // to lock my ik to get foot-to-ground — lower the character and his feet have to
@@ -357,10 +384,7 @@ export class TestMode {
         const g = hAt(fp.x, fp.z) + 0.02;
         if (fp.y < g - 0.01) {
           const target = fp.clone(); target.y = g;
-          const anchorF = c.root.getWorldPosition(new THREE.Vector3());
-          const fwdF = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
-          const poleF = anchorF.clone().addScaledVector(fwdF, 0.8).add(new THREE.Vector3(0, 0.4, 0));
-          solveTwoBone({ ...c, target, pole: poleF, iterations: 2 });
+          solveTwoBone({ ...c, target, pole: this.polePos(fl), iterations: 2 });
         }
       }
     }

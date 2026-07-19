@@ -12,7 +12,7 @@
 import * as THREE from "three";
 import { rotateWorld } from "./ik.js";
 
-const COLORS = { hand: 0xffa53b, foot: 0xffa53b, hips: 0xffd84d, chest: 0x53c8ff, head: 0x53c8ff };
+const COLORS = { hand: 0xffa53b, foot: 0xffa53b, hips: 0xffd84d, chest: 0x53c8ff, head: 0x53c8ff, aim: 0xc07aff };
 
 /** find ONE connected bone by name regex, skipping this rig's duplicate wrappers:
  * prefer the bone whose parent does NOT share its name (outermost of a nested dup run)
@@ -56,6 +56,8 @@ export class ControlRig {
       hips: () => ring(0.3, "hips"),
       chest: () => box(0.42, 0.28, 0.26, "chest"),
       head: () => { const g = new THREE.Group(); const r = ring(0.16, "head"); r.position.y = 0.18; g.add(r); return g; },
+      // pole-vector aim (knee/elbow): small crossed-ring locator, Maya-style
+      aim: () => { const g = new THREE.Group(); g.add(ring(0.06, "aim", true)); g.add(ring(0.06, "aim", false)); return g; },
     };
     const add = (id, kind, opts = {}) => {
       const g = new THREE.Group();
@@ -74,22 +76,53 @@ export class ControlRig {
     add("hips", "hips", { re: /^hips$/i });
     add("chest", "chest", { re: /^spine2$/i });
     add("head", "head", { re: /^head$/i });
+    // knee/elbow aims — where the joint POINTS (pole vectors, Erik: "research the knee
+    // aims and elbow aims"). aimFor names the limb whose mid-joint they steer.
+    add("kneeL", "aim", { aimFor: "footL" }); add("kneeR", "aim", { aimFor: "footR" });
+    add("elbowL", "aim", { aimFor: "handL" }); add("elbowR", "aim", { aimFor: "handR" });
+    // dashed guide line from each mid joint to its aim (visual link, Maya-style)
+    this._aimLines = {};
+    for (const id of ["kneeL", "kneeR", "elbowL", "elbowR"]) {
+      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+      const l = new THREE.Line(g, new THREE.LineDashedMaterial({ color: COLORS.aim, dashSize: 0.05, gapSize: 0.04, depthTest: false, transparent: true, opacity: 0.6 }));
+      l.renderOrder = 997; l.visible = false; scene.add(l);
+      this._aimLines[id] = l;
+    }
   }
 
   setVisible(on) {
     this.visible = on;
     for (const id in this._handles) this._handles[id].mesh.visible = on;
+    if (!on) for (const id in this._aimLines) this._aimLines[id].visible = false;
   }
 
   /** reposition + ORIENT handles onto their bones (call per frame while visible).
    * Watch rule (Erik): a ring wears its bone like a watch — its axis follows the bone's
    * length direction, never twisting into the limb. Axis measured from world positions
    * (parent → bone), NOT bind frames (this rig's bind frames lie). */
-  update(limbChainFn) {
+  update(limbChainFn, poleFn = null) {
     if (!this.visible) return;
     const up = new THREE.Vector3(0, 1, 0), axis = new THREE.Vector3(), pp = new THREE.Vector3();
     for (const id in this._handles) {
       const h = this._handles[id];
+      // aim controls sit at the limb's pole position (override or computed default)
+      if (h.aimFor) {
+        if (!poleFn) { h.mesh.visible = false; continue; }
+        h.mesh.visible = this.visible;
+        h.mesh.position.copy(poleFn(h.aimFor));
+        const chain = limbChainFn(this.playerObj, h.aimFor);
+        const line = this._aimLines[id];
+        if (chain && line) {
+          const pos = line.geometry.attributes.position;
+          chain.mid.getWorldPosition(pp);
+          pos.setXYZ(0, pp.x, pp.y, pp.z);
+          pos.setXYZ(1, h.mesh.position.x, h.mesh.position.y, h.mesh.position.z);
+          pos.needsUpdate = true;
+          line.computeLineDistances();
+          line.visible = true;
+        }
+        continue;
+      }
       let bone = h.bone;
       if (!bone) {
         bone = h.bone = h.limb ? (limbChainFn(this.playerObj, h.limb) || {}).eff : findBone(this.playerObj, h.re);
