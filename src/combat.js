@@ -98,30 +98,34 @@ export class CombatSystem {
           marker.position.copy(lc); marker.position[ax] += this.muzzleEnd * 0.5 * lsz[ax];
           group.add(marker); this._muzzleMarker = marker; this._muzzleAxis = ax; this._muzzleHalf = 0.5 * lsz[ax];
         }
-        // attach to the REAL skinned hand bone (the animated one, from the skeleton). A plain
-        // traverse for isBone grabs this FBX's DEAD DUPLICATE bones, so the gun floated off the
-        // root instead of riding the hand (Erik). Skeleton bones are the deform bones the anim moves.
-        let hand = null;
-        this.player.object3d.traverse((o) => {
-          if (!hand && o.isSkinnedMesh && o.skeleton) hand = o.skeleton.bones.find((b) => /righthand|hand_r/i.test(b.name)) || null;
-        });
-        this.player.object3d.updateWorldMatrix(true, true);
         const holder = new THREE.Group();
         holder.add(group);
-        if (hand) {
-          // the skeleton is cm-scaled; cancel the bone's world scale so the metre-prop reads real size
-          const s = hand.getWorldScale(new THREE.Vector3()).x || 1;
-          holder.scale.setScalar(1 / s);
-          holder.position.fromArray(this.hold.pos);
-          holder.rotation.fromArray(this.hold.rot);
-          hand.add(holder);
-        } else {
-          holder.position.set(0.28, 0.95, 0.35);   // fallback: body-frame hand height
-          this.player.object3d.add(holder);
-        }
-        this._holder = holder; this._model = group; this._onHand = !!hand;
+        this._holder = holder; this._model = group;
+        this._placeHolder();   // attach to the hand — retries in update() until the async rig loads
       } catch { /* model optional; combat still works without a visible weapon */ }
     }
+  }
+  /** parent the weapon holder to the real skinned hand bone; falls back to a body offset until
+   * the character rig finishes loading (equip runs before the async load) — update() retries. */
+  _placeHolder() {
+    const holder = this._holder; if (!holder) return;
+    let hand = null;
+    this.player?.object3d?.traverse((o) => {
+      if (!hand && o.isSkinnedMesh && o.skeleton) hand = o.skeleton.bones.find((b) => /righthand|hand_r/i.test(b.name)) || null;
+    });
+    this.player?.object3d?.updateWorldMatrix(true, true);
+    holder.parent?.remove(holder);
+    if (hand) {
+      const s = hand.getWorldScale(new THREE.Vector3()).x || 1;   // cancel the cm-scaled bone
+      holder.scale.setScalar(1 / s);
+      holder.position.fromArray(this.hold.pos); holder.rotation.fromArray(this.hold.rot);
+      hand.add(holder);
+    } else {
+      holder.scale.setScalar(1);
+      holder.position.set(0.28, 0.95, 0.35); holder.rotation.set(0, 0, 0);
+      this.player?.object3d?.add(holder);
+    }
+    this._onHand = !!hand;
   }
   /** live-tune the in-hand weapon placement from the console: __pfCombat.setHold([x,y,z],[rx,ry,rz]) */
   setHold(pos, rot) {
@@ -133,6 +137,7 @@ export class CombatSystem {
   update(dt) {
     this._updateFX(dt);                 // FX fade runs even while driving/disabled
     this._updateSwing(dt);              // melee swing animation
+    if (this._model && !this._onHand) this._placeHolder();   // rig loaded after equip → re-attach to the hand
     if (!this.enabled) return;
     this._cool = Math.max(0, this._cool - dt);
     if (this.input.pressed?.("nextWeapon")) this.cycle(1);
