@@ -17,8 +17,9 @@ export const WEAPONS = {
   machinegun: { name: "Machine Gun", url: "models/fabpack/weapons/SM_MachineGun_01.FBX", kind: "ranged", damage: 9,  range: 160, cooldown: 0.06, auto: true,  spread: 0.045, pellets: 1, ammo: 100, muzzle: 0.65 },
   bat:        { name: "Baseball Bat",url: "models/fabpack/weapons/SM_BaseballBat_01.FBX",kind: "melee",  damage: 18, range: 3.4, cooldown: 0.5,  knockback: 15, arc: 1.1 },
   katana:     { name: "Katana",      url: "models/fabpack/weapons/SM_Katana_01.FBX",     kind: "melee",  damage: 32, range: 3.2, cooldown: 0.45, knockback: 11, arc: 1.3 },
+  chainsaw:   { name: "Chainsaw",    url: "models/fabpack/weapons/SM_Chainsaw_01.FBX",   kind: "melee",  damage: 45, range: 3.0, cooldown: 0.3,  knockback: 8,  arc: 1.0, snd: "chainsaw" },
 };
-export const WEAPON_ORDER = ["pistol", "shotgun", "smg", "rifle", "machinegun", "bat", "katana"];
+export const WEAPON_ORDER = ["pistol", "shotgun", "smg", "rifle", "machinegun", "bat", "katana", "chainsaw"];
 
 /**
  * Pure hit test: nearest target whose world-AABB the ray crosses within maxDist.
@@ -73,6 +74,7 @@ export class CombatSystem {
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
     this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, 0] };   // in-hand grip (live-tunable via setHold)
+    this._swing = null;                                            // active melee swing animation
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
     input.bind?.("nextWeapon", ["KeyQ"]);
   }
@@ -114,6 +116,7 @@ export class CombatSystem {
 
   update(dt) {
     this._updateFX(dt);                 // FX fade runs even while driving/disabled
+    this._updateSwing(dt);              // melee swing animation
     if (!this.enabled) return;
     this._cool = Math.max(0, this._cool - dt);
     if (this.input.pressed?.("nextWeapon")) this.cycle(1);
@@ -143,11 +146,20 @@ export class CombatSystem {
   }
 
   _melee(w) {
+    this._swing = { t: 0, dur: Math.min(0.28, w.cooldown) };   // trigger the swing animation
     const from = new THREE.Vector3(); (this.player?.object3d || this.camera).getWorldPosition(from);
     const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
     const hits = meleeHits(from, fwd, w.range, w.arc, this.targets());
-    for (const h of hits) this.onHitCar(h.entity, w.damage, (h.entity.object3d || h.entity).position, h.dir, w.knockback);
-    this.effect("swing", from, fwd); this.sound(hits.length ? "melee_hit" : "swing");
+    for (const h of hits) { this.onHitCar(h.entity, w.damage, (h.entity.object3d || h.entity).position, h.dir, w.knockback); this._impact((h.entity.object3d || h.entity).position); }
+    this.effect("swing", from, fwd); this.sound(w.snd || "swing");
+  }
+  _updateSwing(dt) {
+    if (!this._swing || !this._holder || !this._onHand) return;
+    this._swing.t += dt;
+    const p = this._swing.t / this._swing.dur;
+    if (p >= 1) { this._swing = null; this._holder.rotation.fromArray(this.hold.rot); return; }
+    const arc = Math.sin(p * Math.PI) * 1.5;                   // wind up → follow through
+    this._holder.rotation.set(this.hold.rot[0] - arc, this.hold.rot[1], this.hold.rot[2]);
   }
 
   // ---- FX: self-managed additive bursts, faded + auto-removed in _updateFX ----
