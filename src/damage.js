@@ -169,18 +169,40 @@ export class CarCollisions {
     const n = this._sCount;
     this._sPos = new Float32Array(n * 3);
     this._sVel = new Float32Array(n * 3);
-    this._sCol = new Float32Array(n * 3);
     this._sLife = new Float32Array(n);
     this._sLife0 = new Float32Array(n);
-    this._sBase = new Float32Array(n);     // per-puff base grey (faded by life)
+    this._sShade = new Float32Array(n);    // per-puff grey (light hurt=pale, wreck=soot)
+    this._sAlpha = new Float32Array(n);    // per-puff opacity over life
+    this._sSize0 = new Float32Array(n);    // per-puff base size (grows with age)
+    this._sSize = new Float32Array(n);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this._sPos, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(this._sCol, 3));
-    // additive so faded/dead puffs (colour → 0) vanish cleanly, like the spark
-    // Emitter. Wreck severity reads through DENSITY + size, not darkness.
-    this._smoke = new THREE.Points(geo, new THREE.PointsMaterial({
-      size: 0.9, vertexColors: true, transparent: true, opacity: 0.6,
-      depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+    geo.setAttribute("aShade", new THREE.BufferAttribute(this._sShade, 1));
+    geo.setAttribute("aAlpha", new THREE.BufferAttribute(this._sAlpha, 1));
+    geo.setAttribute("aSize", new THREE.BufferAttribute(this._sSize, 1));
+    // REAL smoke, not additive glow: additive can only brighten, so the old
+    // plume was a blocky white column (harness screenshots). Normal blending
+    // with per-particle alpha needs a shader — soft radial sprite, grey set by
+    // severity (pale steam → black soot), fading in fast / out slow.
+    this._smoke = new THREE.Points(geo, new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+      vertexShader: `
+        attribute float aShade; attribute float aAlpha; attribute float aSize;
+        varying float vShade; varying float vAlpha;
+        void main() {
+          vShade = aShade; vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize * (340.0 / max(1.0, -mv.z));
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        varying float vShade; varying float vAlpha;
+        void main() {
+          float d = length(gl_PointCoord - vec2(0.5));
+          float soft = smoothstep(0.5, 0.08, d);          // round, feathered edge
+          if (soft * vAlpha < 0.01) discard;
+          gl_FragColor = vec4(vec3(vShade), soft * vAlpha);
+        }`,
     }));
     this._smoke.frustumCulled = false;
     geo.setDrawRange(0, 0);
@@ -304,31 +326,37 @@ export class CarCollisions {
     this._sVel[i*3]   = (Math.random() - 0.5) * 0.5;
     this._sVel[i*3+1] = 1.2 + Math.random() * 0.9;      // rise
     this._sVel[i*3+2] = (Math.random() - 0.5) * 0.5;
-    // sootier (lower base) when lightly hurt, thicker/brighter smoke when wrecked
-    // — density does most of the "wrecked" work; base grey adds body
-    this._sBase[i] = 0.28 + sev * 0.22;
+    // real soot logic: light damage = pale grey steam-smoke, a totaled engine
+    // burns rich = thick DARK plume (the old additive ramp was backwards —
+    // it could only get whiter as the wreck got worse)
+    this._sShade[i] = Math.max(0.12, 0.55 - sev * 0.38) + Math.random() * 0.08;
+    this._sSize0[i] = 0.55 + sev * 0.5 + Math.random() * 0.25;
     this._sLife[i] = this._sLife0[i] = 1.1 + Math.random() * 1.3 + sev * 0.8;
   }
 
   _stepSmoke(dt) {
-    const P = this._sPos, V = this._sVel, C = this._sCol, L = this._sLife, L0 = this._sLife0, B = this._sBase;
+    const P = this._sPos, V = this._sVel, L = this._sLife, L0 = this._sLife0;
+    const A = this._sAlpha, S = this._sSize, S0 = this._sSize0;
     let maxAlive = 0;
     for (let i = 0; i < this._sCount; i++) {
-      if (L[i] <= 0) { C[i*3] = C[i*3+1] = C[i*3+2] = 0; continue; }
+      if (L[i] <= 0) { A[i] = 0; continue; }
       L[i] -= dt;
       V[i*3+1] += 0.4 * dt;                             // buoyant lift
+      V[i*3] += 0.22 * dt;                              // light wind drift
       V[i*3] *= 0.98; V[i*3+2] *= 0.98;
       P[i*3] += V[i*3] * dt; P[i*3+1] += V[i*3+1] * dt; P[i*3+2] += V[i*3+2] * dt;
-      // fade in fast, out slow: brightness peaks early then dissolves to 0
+      // opacity: in fast, out slow; size: puffs EXPAND as they rise and thin out
       const t = Math.max(L[i], 0) / L0[i];              // 1 (new) → 0 (dead)
-      const c = B[i] * Math.min(1, t * 3) * t;          // additive → clean vanish
-      C[i*3] = C[i*3+1] = C[i*3+2] = c;
+      A[i] = Math.min(1, t * 3) * t * 0.5;
+      S[i] = S0[i] * (1 + (1 - t) * 1.6);
       maxAlive = i + 1;
     }
     const geo = this._smoke.geometry;
     geo.setDrawRange(0, maxAlive);
     geo.attributes.position.needsUpdate = true;
-    geo.attributes.color.needsUpdate = true;
+    geo.attributes.aAlpha.needsUpdate = true;
+    geo.attributes.aSize.needsUpdate = true;
+    geo.attributes.aShade.needsUpdate = true;   // shades change on slot reuse
   }
 
   /** a hit landing on/near a wheel damages that wheel; once it crosses the
