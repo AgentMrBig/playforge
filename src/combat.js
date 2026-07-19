@@ -86,10 +86,14 @@ export class CombatSystem {
       try {
         const { group } = await this.loadProp(this.weapon.url);
         this._holder?.parent?.remove(this._holder);
-        // find the right-hand bone (character.js normalises to Mixamo names: "RightHand")
+        // attach to the REAL skinned hand bone (the animated one, from the skeleton). A plain
+        // traverse for isBone grabs this FBX's DEAD DUPLICATE bones, so the gun floated off the
+        // root instead of riding the hand (Erik). Skeleton bones are the deform bones the anim moves.
         let hand = null;
+        this.player.object3d.traverse((o) => {
+          if (!hand && o.isSkinnedMesh && o.skeleton) hand = o.skeleton.bones.find((b) => /righthand|hand_r/i.test(b.name)) || null;
+        });
         this.player.object3d.updateWorldMatrix(true, true);
-        this.player.object3d.traverse((o) => { if (!hand && o.isBone && /righthand|hand_r|mixamorig.*righthand/i.test(o.name)) hand = o; });
         const holder = new THREE.Group();
         holder.add(group);
         if (hand) {
@@ -150,11 +154,15 @@ export class CombatSystem {
   /** barrel tip in world space: the front face of the weapon model's bbox along the firing dir */
   _muzzle(dir, w) {
     if (!this._model) { const o = new THREE.Vector3(); this.camera.getWorldPosition(o); return o.addScaledVector(dir, w.muzzle || 0.4); }
+    this._model.updateWorldMatrix(true, false);
     const box = new THREE.Box3().setFromObject(this._model);
     const c = box.getCenter(new THREE.Vector3());
     const s = box.getSize(new THREE.Vector3());
-    const half = 0.5 * (Math.abs(dir.x) * s.x + Math.abs(dir.y) * s.y + Math.abs(dir.z) * s.z);
-    return c.addScaledVector(dir, half);   // push center to the front face in the firing direction
+    // barrel ≈ the gun's LONGEST world axis (not the aim dir — that gave the gun's SIDE); point it downrange
+    let axis = (s.x >= s.y && s.x >= s.z) ? new THREE.Vector3(1, 0, 0) : (s.z >= s.y) ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+    if (axis.dot(dir) < 0) axis.negate();
+    const half = 0.5 * (Math.abs(axis.x) * s.x + Math.abs(axis.y) * s.y + Math.abs(axis.z) * s.z);
+    return c.addScaledVector(axis, half);   // tip of the barrel
   }
 
   _melee(w) {
