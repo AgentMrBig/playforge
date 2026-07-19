@@ -25,6 +25,7 @@ export { CarCollisions } from "./damage.js";
 export { loadModel, loadCarModel, loadProp } from "./assets.js";
 export { loadVehicle, VehicleRig } from "./vehicledef.js";
 export { noise2, fbm, ridged, mulberry } from "./noise.js";
+export { CombatSystem, WEAPONS, WEAPON_ORDER, rayHit, meleeHits } from "./combat.js";
 export { HUD } from "./hud.js";
 export { Minimap } from "./minimap.js";
 export { TouchControls } from "./touchcontrols.js";
