@@ -395,15 +395,41 @@ export class RapierVehicle extends VehicleBody {
     // up to road speed (~0.25s), not a hand-tuned "recovery" clock
     else this._rearGrip = Math.min(rearTarget, this._rearGrip + this.sideFriction * 4 * dt);
     const rearSide = this._rearGrip;
-    this.ctrl.setWheelSideFrictionStiffness(0, hb ? this.sideFriction * 0.7 : this.sideFriction);
-    this.ctrl.setWheelSideFrictionStiffness(1, hb ? this.sideFriction * 0.7 : this.sideFriction);
+    // FRONT TIRES LET GO IN A SLIDE (Erik x3: "the front miraculously gets
+    // its turn speed multiplied"). Measured why: in a slide the front axle
+    // becomes the PIVOT — its own lateral velocity is near zero, so rapier's
+    // stiffness-based side friction acts as a pivot CONSTRAINT with whatever
+    // force it takes (telemetry: yaw wound 0.5 -> 7 rad/s while the front
+    // slip stayed under 0.12 rad, so a front-slip fade never engages). The
+    // real physics: once the BODY slides across its path, all four contact
+    // patches are scrubbing — the front cannot anchor a pivot. Fade front
+    // grip on the body slide state, same kinetic curve as the rear.
+    const fkin = 1 - 0.8 * THREE.MathUtils.smoothstep(slipA, 0.06, 0.35);
+    const frontSide = this.sideFriction * fkin * (hb ? 0.55 : 1);
+    this.ctrl.setWheelSideFrictionStiffness(0, frontSide);
+    this.ctrl.setWheelSideFrictionStiffness(1, frontSide);
     this.ctrl.setWheelSideFrictionStiffness(2, rearSide);
     this.ctrl.setWheelSideFrictionStiffness(3, rearSide);
     this.ctrl.setWheelFrictionSlip(2, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
     this.ctrl.setWheelFrictionSlip(3, hb ? this.frictionSlip * 0.25 : this.frictionSlip);
-    if (hb) { this.ctrl.setWheelBrake(2, this.mass * 0.011); this.ctrl.setWheelBrake(3, this.mass * 0.011); }
+    // locked rears DRAG — kinetic friction opposing the velocity is what
+    // bleeds speed in a real ebrake slide (broken traction, not a turn boost)
+    if (hb) { this.ctrl.setWheelBrake(2, this.mass * 0.013); this.ctrl.setWheelBrake(3, this.mass * 0.013); }
+
+    // Ember's damage lane: wrecked non-round wheels lock solid and drag —
+    // no spin, engine force gone, carcass scrubs sideways
+    if (this._locked) for (let i = 0; i < 4; i++) if (this._locked[i]) {
+      this.ctrl.setWheelEngineForce(i, 0);
+      this.ctrl.setWheelBrake(i, this.mass * 0.03);
+      this.ctrl.setWheelSideFrictionStiffness(i, (i < 2 ? frontSide : rearSide) * 0.45);
+    }
 
     this.ctrl.updateVehicle(dt);
+  }
+
+  /** Ember: lock a wrecked wheel solid (no spin, drags). setWheelLocked(i, false) frees it. */
+  setWheelLocked(i, locked = true) {
+    (this._locked = this._locked ?? [false, false, false, false])[i] = locked;
   }
 
   // rigid body pose → entity + live state fields for every consumer
@@ -422,6 +448,9 @@ export class RapierVehicle extends VehicleBody {
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(entity.object3d.quaternion);
     this.speed = this.velocity.dot(fwd);
     const latV = this.velocity.dot(right);
+    // body-frame lateral velocity + yaw rate for the tire-slip model in _drive
+    this._latV = latV;
+    this._yawRate = this.rb.angvel().y;
 
     let grounded = 0;
     this.wheelContacts = this.wheelContacts ?? {};
