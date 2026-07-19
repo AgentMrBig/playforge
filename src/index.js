@@ -34,6 +34,7 @@ export { Minimap } from "./minimap.js";
 export { TouchControls } from "./touchcontrols.js";
 export { TestMode } from "./testmode.js";
 export { VehicleTestMode } from "./vehicletest.js";
+export { DayNight } from "./daynight.js";
 export { solveTwoBone, limbChain } from "./ik.js";
 export { BlendController, splitClip } from "./animblend.js";
 export * as THREE from "three";
