@@ -71,3 +71,49 @@ export function layoutTowns({ settlements = [], roadGraph, catalog, heightAt = (
   }
   return placements;
 }
+
+/**
+ * mountTowns — the glue that turns placements into real meshes in the scene.
+ * Self-measuring: loadProp returns { group, size }, so each building's footprint
+ * comes straight from its bbox (size.x × size.z) — no hand-tuned catalog, no
+ * handoff. Pass whole-building prefab URLs for towns, or parcel/ground-tile URLs
+ * for a settlement ground layer; same layout math either way.
+ *
+ * @param {object} o
+ * @param {object} o.world            the World (needs .scene; THREE.Object3D graph)
+ * @param {object} o.THREE            the three namespace (for Group)
+ * @param {(url:string,opts?:object)=>Promise<{group:object,size:{x:number,z:number}}>} o.loadProp
+ * @param {Array} o.settlements
+ * @param {import('./roadgen.js').RoadGraph} o.roadGraph
+ * @param {(x:number,z:number)=>number} o.heightAt
+ * @param {string[]} o.urls           mesh URLs to place (buildings or ground tiles)
+ * @param {number} [o.sea=0]
+ * @param {number} [o.seed=7777]
+ * @param {number} [o.yOffset=0]      lift meshes off the terrain to kill z-fighting
+ * @returns {Promise<{count:number, group:object}>}
+ */
+export async function mountTowns({ world, THREE, loadProp, settlements, roadGraph, heightAt, urls, sea = 0, seed = 7777, yOffset = 0 }) {
+  // load each source mesh once, measure its footprint from the bbox
+  const loaded = await Promise.all(urls.map(async (url) => {
+    const { group, size } = await loadProp(url);
+    const type = url.split("/").pop().replace(/\.[Ff][Bb][Xx]$/, "");
+    return { type, src: group, w: Math.max(0.5, size.x), d: Math.max(0.5, size.z) };
+  }));
+  const byType = Object.fromEntries(loaded.map((l) => [l.type, l.src]));
+  const catalog = loaded.map(({ type, w, d }) => ({ type, w, d }));
+
+  const placements = layoutTowns({ settlements, roadGraph, catalog, heightAt, sea, seed });
+
+  const townGroup = new THREE.Group();
+  townGroup.name = "towns";
+  for (const p of placements) {
+    const src = byType[p.type];
+    if (!src) continue;
+    const g = src.clone(true);
+    g.position.set(p.x, heightAt(p.x, p.z) + yOffset, p.z);
+    g.rotation.y = p.rotY;
+    townGroup.add(g);
+  }
+  world.scene.add(townGroup);
+  return { count: placements.length, group: townGroup };
+}
