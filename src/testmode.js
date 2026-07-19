@@ -35,9 +35,14 @@ export class TestMode {
     this._buildUI();
     window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); });
     // middle-mouse = orbit, always (Erik) — input.js only tracks L/R, so track MMB here
-    this._mmb = false;
-    window.addEventListener("pointerdown", (e) => { if (e.button === 1) { this._mmb = true; if (this.active) e.preventDefault(); } });
-    window.addEventListener("pointerup", (e) => { if (e.button === 1) this._mmb = false; });
+    this._mmb = false; this._uiDrag = false;
+    window.addEventListener("pointerdown", (e) => {
+      if (e.button === 1) { this._mmb = true; if (this.active) e.preventDefault(); }
+      // drags that START on UI (timeline scrubber, panels, buttons) must never orbit or
+      // move limbs (Erik: "can't control the time slider — my mouse still rotates the camera")
+      this._uiDrag = !!(e.target && e.target.closest && e.target.closest(".pf-tl, .pf-test-panel, .pf-test-btn, .pf-touch, button, input, select"));
+    }, true);
+    window.addEventListener("pointerup", (e) => { if (e.button === 1) this._mmb = false; this._uiDrag = false; });
     window.addEventListener("mousedown", (e) => { if (e.button === 1 && this.active) e.preventDefault(); });  // kill autoscroll
     if (typeof window !== "undefined") window.__pfTest = this;
   }
@@ -133,14 +138,14 @@ export class TestMode {
     const marker = this._marker();
     // MMB always orbits (Erik); LMB orbits when no limb is grabbed, moves the limb when one is
     if (ptr) {
-      if (this._mmb && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
+      if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
     if (this.limb && ptr) {
       const chain = limbChain(this.player.object3d, this.limb);
       if (chain) {
         if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new THREE.Vector3());
-        if (!this._mmb && ptr.down && (ptr.dx || ptr.dy)) {
+        if (!this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
           const cam = this.world.camera;
           const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
           const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
@@ -162,7 +167,7 @@ export class TestMode {
       }
     } else {
       marker.visible = false;
-      if (ptr && !this._mmb && ptr.down && (ptr.dx || ptr.dy)) {
+      if (ptr && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
         this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
       }
     }
