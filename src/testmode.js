@@ -13,7 +13,7 @@
 // disabled so the mouse is free for the camera.
 
 import * as THREE from "three";
-import { solveTwoBone, limbChain } from "./ik.js";
+import { solveTwoBone, limbChain, rotateWorld } from "./ik.js";
 import { BehaviorTimeline } from "./animtimeline.js";
 import { ControlRig } from "./controlrig.js";
 
@@ -30,12 +30,16 @@ export class TestMode {
     this.active = false;
     this.anim = null;               // forced clip name (null = game logic drives)
     this.limb = null;               // selected IK effector (handR/handL/footR/footL)
+    this.fkLimbs = {};              // limb → true = FK mode (drag rotates joints)
+    this.limbLocks = {};            // limb → world Vector3 (pinned while posing others)
+    this._shift = false;
     this._ikTarget = null;          // world-space target the drag moves
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
     this.pan = new THREE.Vector3();                        // LMB drag = pan offset (Erik)
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
     this._buildUI();
-    window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); });
+    window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); if (e.key === "Shift") this._shift = true; });
+    window.addEventListener("keyup", (e) => { if (e.key === "Shift") this._shift = false; });
     // middle-mouse = orbit, always (Erik) — input.js only tracks L/R, so track MMB here
     this._mmb = false; this._uiDrag = false;
     window.addEventListener("pointerdown", (e) => {
@@ -97,6 +101,18 @@ export class TestMode {
     this._ikTarget = null;
     if (this.limb) this.setPaused(true);               // posing needs a still skeleton
     this.panel.querySelectorAll("[data-limb]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.limb === this.limb));
+    this._modeSync();
+  }
+
+  /** refresh the FK/lock buttons for the selected limb */
+  _modeSync() {
+    const fkB = this.panel.querySelector('[data-act="fk"]'), lkB = this.panel.querySelector('[data-act="lock"]');
+    if (!fkB) return;
+    const l = this.limb;
+    fkB.textContent = l && this.fkLimbs[l] ? "FK" : "IK";
+    fkB.classList.toggle("pf-sel", !!(l && this.fkLimbs[l]));
+    lkB.textContent = l && this.limbLocks[l] ? "🔒 locked" : "🔓 lock";
+    lkB.classList.toggle("pf-sel", !!(l && this.limbLocks[l]));
   }
 
   /** 📸 capture the full skeleton pose (persists + logs JSON to bake in) */
@@ -183,7 +199,18 @@ export class TestMode {
         this.rig.drag(this.rigControl, -ptr.dx * k, -ptr.dy * k, this.world.camera);
       }
     }
-    if (this.limb && ptr) {
+    if (this.limb && ptr && this.fkLimbs[this.limb]) {
+      // FK mode: drag ROTATES the joints directly — shoulder/hip normally, Shift = elbow/knee
+      const chain = limbChain(this.player.object3d, this.limb);
+      if (chain && !this._mmb && !this._uiDrag && ptr.down && (ptr.dx || ptr.dy)) {
+        const cam = this.world.camera;
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -ptr.dx * 0.006)
+          .multiply(new THREE.Quaternion().setFromAxisAngle(right, -ptr.dy * 0.006));
+        rotateWorld(this._shift ? chain.mid : chain.root, q);
+      }
+      marker.visible = false;
+    } else if (this.limb && ptr) {
       const chain = limbChain(this.player.object3d, this.limb);
       if (chain) {
         if (!this._ikTarget) this._ikTarget = chain.eff.getWorldPosition(new THREE.Vector3());
@@ -219,6 +246,19 @@ export class TestMode {
         this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006));
       }
     }
+    // 🔒 locked limbs: re-solve onto their pinned targets every frame, so posing hips/
+    // chest/other limbs leaves them exactly where they were locked (plant feet → lean!)
+    for (const l in this.limbLocks) {
+      if (l === this.limb) continue;                    // the actively-dragged limb wins
+      const c = limbChain(this.player.object3d, l);
+      if (!c) continue;
+      const anchorL = c.root.getWorldPosition(new THREE.Vector3());
+      const fwdL = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+      const isLegL = l.startsWith("foot");
+      const poleL = anchorL.clone().addScaledVector(fwdL, isLegL ? 0.8 : -0.6).add(new THREE.Vector3(0, isLegL ? 0.4 : -0.5, 0));
+      solveTwoBone({ ...c, target: this.limbLocks[l], pole: poleL, iterations: 4 });
+    }
+
     const cam = this.world.camera;
     const cy = Math.cos(this.pitch), h = 1.05;
     const fx = p.x + this.pan.x, fy = p.y + h + this.pan.y, fz = p.z + this.pan.z;
@@ -276,6 +316,9 @@ export class TestMode {
       <button data-act="rig">🎛 control rig</button>
       <div class="pf-grip-row"><span>grab</span>
         <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
+      <div class="pf-grip-row"><span>mode</span>
+        <b data-act="fk" title="drag rotates the joints instead (Shift = elbow/knee)">IK</b>
+        <b data-act="lock" title="pin this limb in place while you pose everything else">🔓 lock</b></div>
       <button data-act="posecap">📸 capture pose</button>
       <h4>Grip editor</h4>
       <div class="pf-grip">
@@ -298,6 +341,15 @@ export class TestMode {
       b.addEventListener("click", () => this.set(b.dataset.anim === "null" ? null : b.dataset.anim)));
     this.panel.querySelector('[data-act="pause"]').addEventListener("click", () => this.setPaused());
     this.panel.querySelectorAll("[data-limb]").forEach((b) => b.addEventListener("click", () => this.selectLimb(b.dataset.limb)));
+    this.panel.querySelector('[data-act="fk"]').addEventListener("click", () => {
+      if (this.limb) { this.fkLimbs[this.limb] = !this.fkLimbs[this.limb]; this._ikTarget = null; this._modeSync(); }
+    });
+    this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
+      if (!this.limb) return;
+      if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];
+      else { const c = limbChain(this.player.object3d, this.limb); if (c) this.limbLocks[this.limb] = c.eff.getWorldPosition(new THREE.Vector3()); }
+      this._modeSync();
+    });
     this.panel.querySelector('[data-act="posecap"]').addEventListener("click", () => {
       const n = this.capturePose(); this._gripReadout(n ? `📸 ${n}` : "no skeleton");
     });
