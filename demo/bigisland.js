@@ -312,7 +312,7 @@ class PlayerMove {
     const stick = input.stick("left");
     const ix = input.axis("KeyA", "KeyD") + stick.x;
     const iz = input.axis("KeyS", "KeyW") - stick.y;
-    const run = input.down("ShiftLeft") ? 9.3 : 5.5;  // −15%: feet were skating ahead of the clips (Erik)
+    const run = input.down("ShiftLeft") ? 9.3 : 5.0;  // walk trimmed to match the anim (Erik: still a touch fast)
     const wish = f.multiplyScalar(iz).addScaledVector(rt, ix);
     if (wish.lengthSq() > 1) wish.normalize();
     body.velocity.x = wish.x * run;

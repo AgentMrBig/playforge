@@ -71,6 +71,7 @@ export class CombatSystem {
     this.player = player; this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
+    this.hold = { pos: [0, 0, 0.06], rot: [0, Math.PI / 2, 0] };   // in-hand grip (live-tunable via setHold)
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
     input.bind?.("nextWeapon", ["KeyQ"]);
   }
@@ -81,11 +82,32 @@ export class CombatSystem {
     if (this.loadProp && this.player?.object3d) {
       try {
         const { group } = await this.loadProp(this.weapon.url);
-        this._model?.parent?.remove(this._model);
-        this._model = group; this.player.object3d.add(group);
-        group.position.set(0.25, 1.1, 0.15);   // rough right-hand hold; refine to a hand bone later
-      } catch { /* model optional; combat still works */ }
+        this._holder?.parent?.remove(this._holder);
+        // find the right-hand bone (character.js normalises to Mixamo names: "RightHand")
+        let hand = null;
+        this.player.object3d.updateWorldMatrix(true, true);
+        this.player.object3d.traverse((o) => { if (!hand && o.isBone && /righthand|hand_r|mixamorig.*righthand/i.test(o.name)) hand = o; });
+        const holder = new THREE.Group();
+        holder.add(group);
+        if (hand) {
+          // the skeleton is cm-scaled; cancel the bone's world scale so the metre-prop reads real size
+          const s = hand.getWorldScale(new THREE.Vector3()).x || 1;
+          holder.scale.setScalar(1 / s);
+          holder.position.fromArray(this.hold.pos);
+          holder.rotation.fromArray(this.hold.rot);
+          hand.add(holder);
+        } else {
+          holder.position.set(0.28, 0.95, 0.35);   // fallback: body-frame hand height
+          this.player.object3d.add(holder);
+        }
+        this._holder = holder; this._model = group; this._onHand = !!hand;
+      } catch { /* model optional; combat still works without a visible weapon */ }
     }
+  }
+  /** live-tune the in-hand weapon placement from the console: __pfCombat.setHold([x,y,z],[rx,ry,rz]) */
+  setHold(pos, rot) {
+    if (pos) this.hold.pos = pos; if (rot) this.hold.rot = rot;
+    if (this._holder && this._onHand) { this._holder.position.fromArray(this.hold.pos); this._holder.rotation.fromArray(this.hold.rot); }
   }
   cycle(dir = 1) { this.idx = (this.idx + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length; return this.equip(WEAPON_ORDER[this.idx]); }
 
