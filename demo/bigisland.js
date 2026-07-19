@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -341,7 +341,8 @@ class PlayerMove {
       // pose by weapon family (Erik): long guns (rifle/shotgun/AR/MG) share the rifle
       // hold; handgun-style (pistol, uzi) use the pistol hold
       const idleClip = armed ? (cs.weaponId === "pistol" || cs.weaponId === "smg" ? "pistolIdle" : "rifleIdle") : "idle";
-      const forced = window.__pfTest && window.__pfTest.active && window.__pfTest.anim;   // TEST MODE menu overrides
+      const forced = (window.__pfTest && window.__pfTest.active && window.__pfTest.anim) ||
+        (window.__pfBPlayer && window.__pfBPlayer.active && "__behavior__");   // TEST MODE menu / a playing behavior owns the mixer
       // RMB = AIM (shouldered pose, Erik: "then he's in position"), LMB = shoot.
       // firing pose also flashes per shot + holds while auto-firing.
       const justFired = armed && (cs.aiming ||
@@ -407,6 +408,14 @@ loadCharacter("models/character/humanoid_male.fbx", {
   // FOOT PLANTING (General): standing idle, the feet LOCK to the ground while the body
   // sways above (Erik: "the feet would actually stay planted"). Own entity spawned after
   // the player so it runs AFTER the animator each frame; releases on real steps.
+  // BEHAVIOR PLAYBACK (General): workshop-authored behaviors run in the LIVE game.
+  // __pfPlayBehavior("name") plays a saved behavior; the anim-select yields while it
+  // runs and control returns automatically when it ends.
+  const bPlayer = new BehaviorPlayer(ch.animator, ch.visual);
+  window.__pfBPlayer = bPlayer;
+  window.__pfPlayBehavior = (n) => bPlayer.play(n);
+  world.spawn("behaviorplayer").add({ update(dt) { bPlayer.update(dt); } });
+
   const footPlant = new FootPlant({ playerObj: ch.visual, player, heightAt });
   world.spawn("footplant").add({ update() {
     const body = player.components.find((c) => c.onGround !== undefined);

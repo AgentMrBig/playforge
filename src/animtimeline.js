@@ -82,7 +82,7 @@ export class BehaviorTimeline {
     if (this.playing && a) {
       a.paused = false;
       this.time = a.time;                       // mixer advances; we follow
-      if (this.time >= this.duration() - 0.016) { this.playing = false; a.paused = true; }
+      if (this.time >= this.duration() - 0.016 || (a.loop === THREE.LoopOnce && !a.isRunning())) { this.playing = false; a.paused = true; }
     }
     const bones = this.bones(); if (!bones.length) return;
     for (const m of this.markers) {
@@ -96,7 +96,13 @@ export class BehaviorTimeline {
     }
   }
 
-  play() { if (!this.base) return; if (this.time >= this.duration() - 0.02) this.scrub(0); this.playing = true; }
+  play({ once = false } = {}) {
+    if (!this.base) return;
+    if (this.time >= this.duration() - 0.02) this.scrub(0);
+    const a = this.animator.actions[this.base];
+    if (a) { a.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity); a.clampWhenFinished = once; }
+    this.playing = true;
+  }
   pause() { this.playing = false; const a = this.base && this.animator.actions[this.base]; if (a) a.paused = true; }
 
   /** persist / restore a named behavior */
@@ -122,4 +128,26 @@ export class BehaviorTimeline {
 
   /** hand animation control back to the game */
   close() { this.playing = false; this.base = null; this.animator.current = null; }
+}
+
+/** BehaviorPlayer — run a SAVED behavior in the LIVE game (author in the workshop,
+ * play in gameplay). While active the game's anim-select yields; when the behavior
+ * finishes, control returns automatically. `window.__pfPlayBehavior("name")` anywhere. */
+export class BehaviorPlayer {
+  constructor(animator, playerObj) {
+    this.tl = new BehaviorTimeline(animator, playerObj);
+    this.active = false;
+  }
+  play(name) {
+    if (!this.tl.load(name)) return false;
+    this.tl.scrub(0); this.tl.play({ once: true });   // behaviors run ONCE — looping skipped the end and control never returned
+    this.active = true;
+    return true;
+  }
+  stop() { this.active = false; this.tl.close(); }
+  update(dt) {
+    if (!this.active) return;
+    this.tl.evaluate(dt);
+    if (!this.tl.playing) this.stop();               // behavior finished → game resumes
+  }
 }
