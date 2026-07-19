@@ -61,7 +61,7 @@ const JOINTS = [
 const RAGDOLL_GROUPS = (0x0002 << 16) | 0xffff;
 
 export class Ragdoll {
-  constructor(bones, phys, { totalMass = 75, tone = 1.2 } = {}) {
+  constructor(bones, phys, { totalMass = 75, tone = 1.9 } = {}) {   // 1.2 flailed (Erik: too floppy); 1.9 holds its pose more, still ragdolls. Live-dial __rag.tone
     this.bones = bones;
     this.phys = phys;
     this.tone = tone;
@@ -99,7 +99,7 @@ export class Ragdoll {
         R.RigidBodyDesc.dynamic()
           .setTranslation(mid.x, mid.y, mid.z)
           .setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w })
-          .setLinearDamping(0.15).setAngularDamping(0.6).setCcdEnabled(true));
+          .setLinearDamping(0.15).setAngularDamping(0.95).setCcdEnabled(true));  // more angular damping = less limb flailing (Erik: needs dampening)
       const col = P.world.createCollider(
         R.ColliderDesc.capsule(Math.max(0.02, len / 2 - radius), radius)
           .setMass(this.totalMass * (massFor[name] ?? 0.05))
