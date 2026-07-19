@@ -744,3 +744,25 @@ try {
 
 engine.start();
 window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
+
+// DEV: blow up the player to test the character damage/ragdoll system (Erik) — 💥 button + KeyB
+function blowUpPlayer() {
+  const rag = window.__rag; if (!rag || drivingCar) return;
+  const R = () => Math.random() - 0.5;
+  const chest = player.position.clone(); chest.y += 1.1;
+  rag.enter(new THREE.Vector3(R() * 6, 9 + Math.random() * 4, R() * 6),     // explosive launch
+            new THREE.Vector3(R() * 14, R() * 8, R() * 14), chest);          // wild spin
+  player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
+  player.damage = (player.damage || 0) + 100; player.onCarHit?.(100, new THREE.Vector3(0, 1, 0));
+  audio.playSfx("crash_metal_big", { volume: 0.8 });
+}
+window.addEventListener("keydown", (e) => { if (e.code === "KeyB" && !drivingCar) blowUpPlayer(); });
+{
+  const b = document.createElement("button");
+  b.textContent = "💥 BLOW UP (B)";
+  b.style.cssText = "position:fixed;left:16px;top:16px;z-index:45;padding:10px 16px;border-radius:10px;border:0;" +
+    "background:#c0392bdd;color:#fff;font:700 14px system-ui;cursor:pointer;touch-action:none";
+  b.addEventListener("click", blowUpPlayer);
+  b.addEventListener("touchstart", (ev) => { ev.preventDefault(); blowUpPlayer(); });
+  document.body.appendChild(b);
+}
