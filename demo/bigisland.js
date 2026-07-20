@@ -613,7 +613,12 @@ loadCharacter("models/character/humanoid_male.fbx", {
   const bPlayer = new BehaviorPlayer(ch.animator, ch.visual);
   window.__pfBPlayer = bPlayer;
   window.__pfPlayBehavior = (n) => bPlayer.play(n);
-  new BehaviorTriggers(bPlayer);   // key-bound behaviors fire in normal gameplay
+  // Anima behavior-triggers are DISABLED in live gameplay (Erik): key-bound behaviors were
+  // firing while moving and slamming a bad/empty pose → random T-pose + torso twist. They
+  // stay usable inside the Anima tool; they just no longer inject into normal movement.
+  // Also clear any stored key-bindings + a console helper to wipe all Anima-authored data.
+  try { localStorage.removeItem("pf.behavior.triggers"); } catch {}
+  window.__pfClearAnima = () => { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith("pf.behavior.")) localStorage.removeItem(k); } } catch {} return "Anima behaviors/poses cleared"; };
   // 🎥 motion recorder — always sampling the character so "capture moment" grabs the last
   // ~15s of real gameplay (Erik). Skips while a captured moment is being scrubbed in Anima.
   const motionRec = new MotionRecorder(ch.visual, player);
