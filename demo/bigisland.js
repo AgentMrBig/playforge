@@ -217,10 +217,21 @@ function mergeGroupGeo(groupObj) {
     SYNTY_ROCKS = rocks.length ? rocks : null;
     // whole Synty buildings (Erik) — replace the placeholder boxes at settlement lots
     const blds = [];
-    for (const n of ["01", "02", "03", "04", "04_Alt", "05", "06", "07", "08", "09", "10", "11", "12", "13"]) {
+    for (const n of ["01", "02", "03", "04", "04_Alt", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "17"]) {
       const r = await loadProp(`models/wasteland/SM_Bld_Building_${n}.FBX`, GW).catch(() => null);
       if (r && r.group) blds.push({ group: r.group, size: r.size });
     }
+    // typed landmarks (Erik: gas stations/etc): a bar + a composite gas station (shop + pump
+    // canopy grouped — Synty modular pieces share an origin so they align when stacked)
+    { const bar = await loadProp("models/wasteland/SM_Bld_Bar_Entrance_01.FBX", GW).catch(() => null);
+      if (bar?.group) blds.push({ group: bar.group, size: bar.size }); }
+    { const shop = await loadProp("models/wasteland/SM_Bld_Gas_Station_01.FBX", GW).catch(() => null);
+      const cover = await loadProp("models/wasteland/SM_Bld_Gas_Station_Cover_01.FBX", GW).catch(() => null);
+      if (shop?.group) {
+        const g = new THREE.Group(); g.add(shop.group);
+        if (cover?.group) g.add(cover.group);
+        blds.push({ group: g, size: shop.size });
+      } }
     SYNTY_BLDS = blds.length ? blds : null;
     // spawn tiles decorated before this finished → rebuild them so buildings appear immediately
     if (SYNTY_BLDS && terrain && terrain.rebuild) terrain.rebuild(world);
