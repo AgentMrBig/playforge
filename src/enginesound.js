@@ -35,6 +35,15 @@ export class EngineSound {
     this._nodes = null;
     this._crackleT = 0;
     this.running = false;
+    // combustion ROUGHNESS (Ember 2026-07-20, Erik: "still sounds like the cars
+    // are powered by an 80s computer"). The #1 synthetic tell is perfect
+    // periodicity — a real engine's firing is irregular (idle LOPE, roughest at
+    // low load, smoothing out under power). This drives a smoothed random wobble
+    // on the firing frequency + a resonant exhaust peak. Tunable live:
+    // window.__pfEngineSound.roughness (0 = old sterile tone, 1 = default, 2 = lumpy).
+    this.roughness = (typeof location !== "undefined" && /(?:\?|&)rough=([\d.]+)/.exec(location.search)) ? +RegExp.$1 : 1;
+    this._lope = 0;
+    if (typeof window !== "undefined") window.__pfEngineSound = this;
   }
 
   start() { this.running = true; }
@@ -111,9 +120,14 @@ export class EngineSound {
     crackle.gain.value = 0;
     bp.connect(crackle).connect(master);
 
-    shaper.connect(lp).connect(lp2).connect(master);
+    // exhaust/airbox BODY resonance — a low peaking bump gives the sound a
+    // chest/thump "body" instead of a thin electronic buzz (part of the realism
+    // pass). Tracks a little with rpm in update().
+    const peak = ctx.createBiquadFilter();
+    peak.type = "peaking"; peak.frequency.value = 110; peak.Q.value = 1.1; peak.gain.value = 7;
+    shaper.connect(lp).connect(lp2).connect(peak).connect(master);
     master.connect(ctx.destination);
-    this._nodes = { master, shaper, lp, lp2, oscs, oscGains, bp, crackle, nGain };
+    this._nodes = { master, shaper, lp, lp2, peak, oscs, oscGains, bp, crackle, nGain };
   }
 
   update(dt, { entity }) {
@@ -152,10 +166,20 @@ export class EngineSound {
     const step = Math.max(-rate * dt, Math.min(rate * dt, wantN - curN));
     this.rpm = (curN + step) * this.redline;
 
+    // ---- combustion roughness: a smoothed random walk wobbles the firing
+    // rate — real engines aren't perfectly periodic. Strongest at low load
+    // (idle LOPE), smooths out under power (clean pull). This is the main cure
+    // for the sterile "80s computer" tone (Erik). ------------------------------
+    const load0 = 0.25 + t0 * 0.75;
+    const lopeAmt = this.roughness * (0.55 + 0.45 * this.mean) * (1 - 0.72 * load0);
+    this._lope = this._lope * 0.86 + (Math.random() * 2 - 1) * 0.14;   // -1..1 smoothed
+    const roughN = 1 + this._lope * 0.055 * lopeAmt;                   // ±~5.5% firing wobble at idle
+
     // ---- firing frequency drives the stack (one octave down: warm, not
     // whiney — pitch still tracks rpm, just in a listenable register) -------
     const revN = this.rpm / this.redline;
-    const fire = (this.rpm / 60) * (this.cylinders / 2) * 0.5;
+    const fire = (this.rpm / 60) * (this.cylinders / 2) * 0.5 * roughN;
+    if (n.peak) n.peak.frequency.value = 96 + revN * 90;              // body resonance rises slightly with revs
     for (let i = 0; i < n.oscs.length; i++) {
       const o = n.oscs[i];
       if (!o._mult) continue;
@@ -174,7 +198,10 @@ export class EngineSound {
     const cutoff = 240 + this.mean * 420 + t * 520 + revN * 260;   // caps ~1.4k
     n.lp.frequency.value = cutoff;
     n.lp2.frequency.value = cutoff * 1.6;
-    const vol = (0.05 + 0.1 * this.mean) * load * this.volume * (0.65 + 0.35 * revN);
+    // amplitude flutter pairs with the pitch wobble — combustion roughness hits
+    // both, so the lope reads as a real lumpy idle, not a vibrato.
+    const flutter = 1 + this._lope * 0.05 * lopeAmt;
+    const vol = (0.05 + 0.1 * this.mean) * load * this.volume * (0.65 + 0.35 * revN) * flutter;
     n.master.gain.value += (vol - n.master.gain.value) * (1 - Math.exp(-dt * 10));
 
     // ---- misfire crackle: top-fuel idle/lift-off chaos --------------------
