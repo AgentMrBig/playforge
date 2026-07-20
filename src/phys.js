@@ -137,6 +137,23 @@ export class Physics {
     return made;
   }
 
+  /**
+   * Low-level static trimesh from raw world-space arrays (no THREE mesh needed).
+   * Ember: lets the terrain build a FINER collision surface than its render mesh
+   * — Rapier trimesh collision uses TRIANGLE FACE normals, so a coarse tile mesh
+   * (2.67 m triangles) faceted the wheel raycast and launched the car at speed
+   * (the 140-160 km/h jitter). A denser collision grid sampled from heightAt has
+   * smaller facets → the wheels ride the smooth curve instead of catapulting.
+   * @param {Float32Array} verts  xyz world positions
+   * @param {Uint32Array}  idx    triangle indices
+   */
+  addTrimesh(verts, idx, { friction = 1.0, restitution = 0.02, entity = null } = {}) {
+    const col = this.world.createCollider(
+      R.ColliderDesc.trimesh(verts, idx).setFriction(friction).setRestitution(restitution));
+    if (entity) this._handleEnt.set(col.handle, entity);
+    return col;
+  }
+
   /** static box collider (props, walls) — half extents, world center */
   addBox(half, center, { yaw = 0, friction = 1.0, restitution = 0.05, entity = null } = {}) {
     const rb = this.world.createRigidBody(

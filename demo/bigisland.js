@@ -394,9 +394,41 @@ terrain.onTile = (tile, mesh) => {
   if (!phys.world) { pendingTiles.push([tile, mesh]); return; }
   attachTilePhysics(tile, mesh);
 };
+// FINE terrain collision (Ember 2026-07-20): the render mesh's collider is only
+// ~2.67 m triangles, and Rapier trimesh collision uses FACE normals — so at speed
+// the wheels launched off those coarse facets (the 140-160 km/h jitter). Bake a
+// DENSER collision surface sampled from heightAt (collision ≠ visual) so the
+// wheels ride the smooth curve. Only near tiles (where the car drives fast) pay
+// for it; far tiles keep the cheap render-mesh collider. COLLISION_CELL = target
+// collision cell size in metres (smaller = smoother, more triangles). Live A/B:
+// default ON (fine); add ?coarsecol=1 to the URL to fall back to the coarse
+// render-mesh collider so Erik can feel the difference at 140-160 km/h.
+const COLLISION_CELL = new URLSearchParams(location.search).get("coarsecol") ? 0 : 1.5;
+function fineTerrainCollider(x0, z0, size) {
+  const cres = Math.max(8, Math.round(size / COLLISION_CELL));
+  const N = cres + 1;
+  const verts = new Float32Array(N * N * 3);
+  for (let j = 0; j < N; j++)
+    for (let i = 0; i < N; i++) {
+      const wx = x0 + (i / cres) * size, wz = z0 + (j / cres) * size;
+      const o = (j * N + i) * 3;
+      verts[o] = wx; verts[o + 1] = heightAt(wx, wz); verts[o + 2] = wz;
+    }
+  const idx = new Uint32Array(cres * cres * 6);
+  let t = 0;
+  for (let j = 0; j < cres; j++)
+    for (let i = 0; i < cres; i++) {
+      const a = j * N + i, b = a + 1, c = a + N, d = c + 1;
+      idx[t++] = a; idx[t++] = c; idx[t++] = b;
+      idx[t++] = b; idx[t++] = c; idx[t++] = d;
+    }
+  return phys.addTrimesh(verts, idx, { friction: 1.0 });
+}
 function attachTilePhysics(tile, mesh) {
   if (tile.dead) return;
-  const cols = phys.addMeshCollider(mesh);             // the tile mesh IS the collider
+  const cols = [];
+  if (tile.size <= 160 && COLLISION_CELL > 0) cols.push(fineTerrainCollider(tile.x0, tile.z0, tile.size)); // near: smooth collision
+  else cols.push(...phys.addMeshCollider(mesh));                                                            // far / coarsecol: mesh collider
   for (const b of tile.physBoxes ?? []) cols.push(phys.addBox(b.half, b.center));
   for (const bm of tile.physMeshes ?? []) cols.push(...phys.addMeshCollider(bm)); // buildings → trimesh (walls solid, doorways open)
   tile.cleanup.push(() => cols.forEach((c) => phys.removeCollider(c)));
