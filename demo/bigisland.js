@@ -944,7 +944,20 @@ world.spawn("roads").add(roadNet);
     loadProp("models/gangwarfare/SM_Prop_Barrel_Metal_01.FBX", GW),
   ]).then(([dump, barrel]) => {
     const p = player.position;
-    const place = (m, dx, dz) => { m.position.set(p.x + dx, heightAt(p.x + dx, p.z + dz), p.z + dz); m.rotation.y = Math.random() * Math.PI; world.scene.add(m); };
+    // place, then give a SOLID static collider sized to the mesh footprint so cars +
+    // the player actually bump these instead of passing through (Erik). Knockable-
+    // dynamic props are a later pass; solid-and-static fixes the ghosting now.
+    const place = (m, dx, dz) => {
+      m.position.set(p.x + dx, heightAt(p.x + dx, p.z + dz), p.z + dz);
+      m.rotation.y = Math.random() * Math.PI;
+      world.scene.add(m);
+      physReady.then(() => {
+        m.updateWorldMatrix(true, true);
+        const box = new THREE.Box3().setFromObject(m);
+        const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+        if (size.x > 0 && size.y > 0) phys.addBox([size.x / 2, size.y / 2, size.z / 2], [ctr.x, ctr.y, ctr.z]);
+      });
+    };
     place(dump.group, 3, 3.5);
     place(barrel.group, 4.6, 3.9);
     window.__gw = [dump.group, barrel.group];
