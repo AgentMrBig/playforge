@@ -74,7 +74,7 @@ export class TrajectoryLean {
     const sideA = this.accel.x * rx + this.accel.z * rz;  // lateral (+ turning right)
     const clamp = (v) => Math.max(-p.max, Math.min(p.max, v));
     const tPitch = clamp(fwdA * p.fwdGain);
-    const tRoll = clamp(sideA * p.sideGain);
+    const tRoll = clamp(-sideA * p.sideGain);   // bank INTO the turn (Erik: was mirrored)
 
     // low-pass the applied lean so it eases in and settles (no snap)
     const kl = 1 - Math.exp(-p.blend * dt);

@@ -66,16 +66,27 @@ export class ThirdPersonRig {
         this.distance * Math.pow(1.14, input.pointer.wheel), this.minDist, this.maxDist);
 
     // ---- lazy auto-realign behind movement heading ------------------------
+    // ONLY when the player runs AWAY from the camera (forward). Strafing sideways
+    // must NOT pull the camera around — with camera-relative movement that creates
+    // a feedback loop where "right" keeps redefining itself and the player spirals
+    // in a circle (Erik's D-orbit bug). Gate the drift by forward-alignment.
     const body = t.components?.find((c) => c.velocity);
     const vel = body?.velocity ?? ZERO;
     const speed2 = vel.x * vel.x + vel.z * vel.z;
     if (this._idleT > this.recenterDelay && speed2 > 4) {
-      const heading = Math.atan2(-vel.x, -vel.z); // camera sits opposite travel
-      let diff = heading - this.yaw;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // shortest arc
-      // drift rate scales with how far off we are — never snaps, always eases
-      const rate = Math.min(Math.abs(diff), 1) * this.recenterRate;
-      this.yaw += Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
+      const inv = 1 / Math.sqrt(speed2);
+      const vdx = vel.x * inv, vdz = vel.z * inv;
+      // camera's view direction on the ground plane is -back = (-sinYaw, -cosYaw)
+      const fwdAlign = Math.max(0, vdx * -Math.sin(this.yaw) + vdz * -Math.cos(this.yaw));
+      if (fwdAlign > 0.15) {
+        const heading = Math.atan2(-vel.x, -vel.z); // camera sits opposite travel
+        let diff = heading - this.yaw;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // shortest arc
+        // drift rate scales with how far off we are AND how forward we're moving —
+        // never snaps, always eases, and fades to nothing as motion turns lateral
+        const rate = Math.min(Math.abs(diff), 1) * this.recenterRate * fwdAlign;
+        this.yaw += Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
+      }
     }
 
     // ---- split-smoothed pivot (tight XZ, lazy Y) --------------------------
