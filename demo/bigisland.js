@@ -211,7 +211,7 @@ function mergeGroupGeo(groupObj) {
     SYNTY_ROCKS = rocks.length ? rocks : null;
     // whole Synty buildings (Erik) — replace the placeholder boxes at settlement lots
     const blds = [];
-    for (const n of ["01", "02", "03", "04", "05", "06"]) {
+    for (const n of ["01", "02", "03", "04", "04_Alt", "05", "06", "07", "08", "09", "10", "11", "12", "13"]) {
       const r = await loadProp(`models/wasteland/SM_Bld_Building_${n}.FBX`, GW).catch(() => null);
       if (r && r.group) blds.push({ group: r.group, size: r.size });
     }
