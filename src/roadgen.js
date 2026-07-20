@@ -209,4 +209,28 @@ export class RoadGraph {
       }
     return false;
   }
+
+  /** nearest road CENTERLINE point + distance to (x,z) — for CARVING the terrain
+   *  to the road (heightAt flatten, so the road sits in a leveled cut instead of
+   *  draping over lumpy ground). Fast: only the local 3x3 cells. Returns
+   *  { dist, cx, cz, hw } or null if no road is within `maxPad` of the point. */
+  roadInfo(x, z, maxPad = 8) {
+    if (!this._grid) this._buildIndex();
+    const C = this._cell, gcx = Math.floor(x / C), gcz = Math.floor(z / C);
+    let best = null, bd = Infinity;
+    for (let gx = gcx - 1; gx <= gcx + 1; gx++)
+      for (let gz = gcz - 1; gz <= gcz + 1; gz++) {
+        const segs = this._grid.get(gx + "," + gz);
+        if (!segs) continue;
+        for (const s of segs) {
+          const dx = s.bx - s.ax, dz = s.bz - s.az, l2 = dx * dx + dz * dz;
+          let t = l2 ? ((x - s.ax) * dx + (z - s.az) * dz) / l2 : 0;
+          t = t < 0 ? 0 : t > 1 ? 1 : t;
+          const cx = s.ax + t * dx, cz = s.az + t * dz;
+          const d = Math.hypot(x - cx, z - cz);
+          if (d < bd) { bd = d; best = { dist: d, cx, cz, hw: s.hw }; }
+        }
+      }
+    return best && best.dist <= best.hw + maxPad ? best : null;
+  }
 }

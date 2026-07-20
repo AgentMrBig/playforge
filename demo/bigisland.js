@@ -96,6 +96,10 @@ RUN.h = Math.max(settleHeight(RUN.x0 + RUN.len / 2, RUN.z), SEA + 2.5);
 const inRunway = (x, z, pad = 0) =>
   x > RUN.x0 - pad && x < RUN.x0 + RUN.len + pad && Math.abs(z - RUN.z) < RUN.w / 2 + pad;
 
+// road auto-sculpt hook (Ember) — set once the road graph exists (see below).
+// null-until-set means road routing samples raw terrain (no recursion).
+let _roadFlatten = null;
+const ROAD_SHOULDER = 7;                                 // metres of terrain blend beyond the road edge
 function heightAt(x, z) {
   let h = settleHeight(x, z);
   // runway flattens the land like a settlement pad, but rectangular
@@ -107,6 +111,10 @@ function heightAt(x, z) {
     const t = 1 - d / m, s = t * t * (3 - 2 * t);
     h = h + (RUN.h - h) * s;
   }
+  // road auto-sculpt (Ember): carve the terrain to the road so it sits in a level
+  // cut instead of draping over lumps (Erik). null until roads exist (below), so
+  // road ROUTING samples raw terrain — no route<->height recursion.
+  if (_roadFlatten) { const rf = _roadFlatten(x, z, h); if (rf !== null) h = rf; }
   return h;
 }
 
@@ -1039,6 +1047,22 @@ world.spawn("minimap").add({ update() {
 // laid on the terrain through Ninja's RoadNetwork; RoadGraph exposed on __pf so traffic
 // AI (Ember) can snap + follow lanes. Routes dodge water/steep ground (see roadgen.js).
 const { roads: roadLayout, graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
+// AUTO TERRAIN SCULPT (Ember 2026-07-20): now the roads exist, carve the terrain
+// to them — level to the road's centerline height across the width + a smoothstep
+// shoulder (Erik: "one side too high, the other too low; make it look like the
+// road is supposed to be there"). centerH uses settleHeight (raw) at the road
+// center so there's no recursion. Set BEFORE the ribbon builds so the ribbon, the
+// streamed terrain mesh, and physics all sample the SAME flattened height → the
+// road sits in a clean level cut with no z-fighting. Runway keeps its own pad.
+_roadFlatten = (x, z, h) => {
+  const ri = roadGraph.roadInfo(x, z, ROAD_SHOULDER);
+  if (!ri) return null;
+  const centerH = settleHeight(ri.cx, ri.cz);
+  const over = Math.max(ri.dist - ri.hw, 0);            // how far past the road edge
+  const t = 1 - Math.min(over / ROAD_SHOULDER, 1);
+  const s = t * t * (3 - 2 * t);                        // smoothstep the shoulder
+  return h + (centerH - h) * s;
+};
 // The asphalt COLOR is baked into the terrain surface (colorAt → roadGraph.isRoad)
 // so there's a flush base with ZERO float. ON TOP we lay a textured RoadNetwork
 // ribbon — real Synty asphalt with a double-yellow center + dashed lane markings
