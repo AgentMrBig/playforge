@@ -72,9 +72,21 @@ export class Ragdoll {
     this._tmp = {
       v1: new THREE.Vector3(), v2: new THREE.Vector3(), v3: new THREE.Vector3(),
       q1: new THREE.Quaternion(), q2: new THREE.Quaternion(), q3: new THREE.Quaternion(),
+      qA: new THREE.Quaternion(), qB: new THREE.Quaternion(),
       m1: new THREE.Matrix4(),
     };
     this.totalMass = totalMass;
+
+    // ═══ 3-TIER MUSCLE STACK (Erik's RDR2 §2A) ═══
+    // Every PD joint target = TIER 1 base (the animation pose, what we track today)
+    // ⊗ TIER 2 procedural (micro-adjust deltas: lean, look-at, hill-compensation)
+    // ⊗ TIER 3 reflex (behavior-brain overrides: fall-brace, stumble-catch). Deltas are
+    // world-space quaternions applied per-segment with a 0..1 weight. With NO layers set
+    // this is byte-identical to the old single-tier PD — the death ragdoll + get-up are
+    // untouched by default. `useLayers=false` is a hard A/B kill switch. Live at __rag.
+    this.layers = { procedural: Object.create(null), reflex: Object.create(null) };
+    this.useLayers = true;
+    this._hasLayers = false;          // fast gate: skip composition entirely when empty
   }
 
   /** build bodies + joints at the skeleton's CURRENT world pose */
@@ -250,16 +262,55 @@ export class Ragdoll {
     s.body.applyImpulse({ x: n.x, y: n.y, z: n.z }, true);
   }
 
+  /** ═══ 3-TIER MUSCLE STACK API ═══
+   * Set a per-segment target adjustment. `deltaQ` is a WORLD-space rotation applied on
+   * top of the animation pose; `weight` 0..1 scales it (slerp from identity). Pass a
+   * falsy deltaQ or weight<=0 to clear that segment's layer.
+   *   TIER 2 — procedural: rag.setProcedural("chest", qLeanDelta, 0.6)
+   *   TIER 3 — reflex:     rag.setReflex("upperArmL", qBraceDelta, 1.0)
+   * Segment names: pelvis, chest, head, upperArm[L/R], forearm[L/R], thigh[L/R], shin[L/R]. */
+  setProcedural(segName, deltaQ, weight = 1) { this._setLayer("procedural", segName, deltaQ, weight); }
+  setReflex(segName, deltaQ, weight = 1) { this._setLayer("reflex", segName, deltaQ, weight); }
+  clearProcedural(segName) { if (segName) delete this.layers.procedural[segName]; else this.layers.procedural = Object.create(null); this._refreshHasLayers(); }
+  clearReflex(segName) { if (segName) delete this.layers.reflex[segName]; else this.layers.reflex = Object.create(null); this._refreshHasLayers(); }
+  clearLayers() { this.layers.procedural = Object.create(null); this.layers.reflex = Object.create(null); this._hasLayers = false; }
+
+  _setLayer(kind, segName, deltaQ, weight) {
+    const bag = this.layers[kind];
+    if (!deltaQ || weight <= 0) { delete bag[segName]; this._refreshHasLayers(); return; }
+    const e = bag[segName] ?? (bag[segName] = { q: new THREE.Quaternion(), weight: 0 });
+    e.q.copy(deltaQ); e.weight = Math.min(1, weight);
+    this._hasLayers = true;
+  }
+  _refreshHasLayers() {
+    this._hasLayers = Object.keys(this.layers.procedural).length > 0 || Object.keys(this.layers.reflex).length > 0;
+  }
+
+  /** compose the 3 tiers into a world-space target for one segment (mutates + returns baseW).
+   * reflex is applied outermost so it dominates the procedural nudge, which dominates base. */
+  _composeTarget(segName, baseW) {
+    const T = this._tmp;
+    const p = this.layers.procedural[segName];
+    if (p && p.weight > 0) baseW.premultiply(T.qA.identity().slerp(p.q, p.weight));   // ⊗ procedural
+    const r = this.layers.reflex[segName];
+    if (r && r.weight > 0) baseW.premultiply(T.qB.identity().slerp(r.q, r.weight));   // ⊗ reflex
+    return baseW;
+  }
+
   /** per fixed step: capture animation targets + apply PD muscle torques */
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
     if (this.muscle) this._anchorStep();
     const T = this._tmp;
     for (const s of this.segments) {
-      // target = where the ANIMATION wants this bone (the Animator keeps
-      // playing underneath; its pose is the muscle target)
+      // TIER 1 base: where the ANIMATION wants this bone (the Animator keeps
+      // playing underneath; its pose is the muscle target). Then compose the
+      // procedural + reflex tiers on top (skipped entirely when no layers set,
+      // so the default death-ragdoll path is byte-identical).
       s.bone.updateWorldMatrix(true, false);
-      s.targetQ.copy(s.bone.getWorldQuaternion(T.q1)).multiply(s.qOff.clone().invert());
+      let worldTarget = s.bone.getWorldQuaternion(T.q1);
+      if (this.useLayers && this._hasLayers) worldTarget = this._composeTarget(s.name, worldTarget);
+      s.targetQ.copy(worldTarget).multiply(s.qOff.clone().invert());
       const q = s.body.rotation();
       const cur = T.q2.set(q.x, q.y, q.z, q.w);
       const err = T.q3.copy(s.targetQ).multiply(cur.clone().invert());
