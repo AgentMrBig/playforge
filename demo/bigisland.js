@@ -13,6 +13,7 @@ import {
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health spawner
+import { initLoadingScreen } from "../src/loadingscreen.js";   // Ember: hold reveal until built
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -630,7 +631,6 @@ loadCharacter("models/character/humanoid_male.fbx", {
     const cb = () => player.components.find((c) => c.ctrl && c.velocity);
     let wasMuscle = false;   // 🫀 muscle mode (Euphoria layer): re-enable the capsule on exit
     let getup = null;        // { timer } while a get-up clip plays him up out of the ragdoll
-    const gv = new THREE.Vector3();
     player.add({
       fixedUpdate(dt) {
         // NATURAL GET-UP: ragdoll settled → play a get-up clip (face-up vs face-down picked
@@ -639,16 +639,11 @@ loadCharacter("models/character/humanoid_male.fbx", {
         if (getup) {
           window.__pfGetup = true;
           cb()?.setEnabled(false);
-          // GROUND-FOLLOW: the clip's root motion is stripped, which pins his hips at STANDING
-          // height — so the lying pose floats waist-high (Erik). Glue the lowest of hips/feet to
-          // the terrain each frame so he lies ON the ground and the animation rises him naturally.
-          player.object3d.updateMatrixWorld(true);
-          let lowest = Infinity;
-          for (const bn of ["Hips", "LeftFoot", "RightFoot"]) {
-            const bb = ch.bones[bn]; if (!bb) continue;
-            const wy = bb.getWorldPosition(gv).y; if (wy < lowest) lowest = wy;
-          }
-          if (lowest < Infinity) player.position.y += heightAt(player.position.x, player.position.z) - lowest;
+          // SAFE ground-pin: keep the feet-origin exactly on the terrain the whole get-up so he
+          // can NEVER get shoved into / through the map (Erik). NOTE: the clip's vertical root
+          // motion is stripped, so his LYING pose still hangs at hip height — the proper float fix
+          // (keep the hips Y motion, scaled) is a focused pass; this at least makes it not dangerous.
+          player.position.y = heightAt(player.position.x, player.position.z);
           getup.timer -= dt;
           if (getup.timer <= 0) {
             getup = null; window.__pfGetup = false;
@@ -663,9 +658,10 @@ loadCharacter("models/character/humanoid_male.fbx", {
           // but skip the follow/settle/stand-up recovery (the hips are anchored to the
           // animation). Disable the capsule so it can't fight the ragdoll bodies.
           if (rag.muscle) { cb()?.setEnabled(false); return; }
-          // camera + world logic follow the flying body
+          // camera + world logic follow the flying body — but never let the follow point sink
+          // far under the terrain (when he settles flat the pelvis is low → camera in the ground)
           const p = rag.pelvisPos();
-          player.position.set(p.x, p.y - 0.9, p.z);
+          player.position.set(p.x, Math.max(heightAt(p.x, p.z) - 0.2, p.y - 0.9), p.z);
           const body = cb();
           if (body) body._lastSynced.copy(player.position);   // no teleport-fight
           if (rag.settled(1.3)) {                             // get up naturally
@@ -1127,6 +1123,16 @@ try {
 
 engine.start();
 window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
+// LOADING SCREEN (Ember): hold the reveal until physics is up + the initial tiles
+// and async decorations have had a beat to stream, so the player drops into a
+// finished island instead of watching it pop in. The overlay auto-reveals on a
+// hard timeout too, so it can never trap the player.
+initLoadingScreen();
+physReady.then(() => {
+  let f = 0;
+  const settle = () => { if (++f > 40) window.__pfReady = true; else requestAnimationFrame(settle); };
+  requestAnimationFrame(settle);
+});
 window.__pfLoadProp = loadProp;   // Synty asset integration — load+atlas a prop from the console
 window.__pfLoadVehicle = loadVehicle;   // + vehicle rig loader (wheels/suspension) for Synty car tests
 
