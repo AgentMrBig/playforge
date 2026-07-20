@@ -15,20 +15,26 @@ import * as THREE from "three";
  * Pair with RoadEditor for click-to-place authoring.
  */
 export class RoadNetwork {
-  constructor({ ground = () => 0, lift = 0.14, segPerNode = 12 } = {}) {
+  constructor({ ground = () => 0, lift = 0.05, segPerNode = 12,
+                texUrl = "textures/T_Road_Clean_01.png", tileLen = 20 } = {}) {
     this.ground = ground;
     this.lift = lift;
     this.segPerNode = segPerNode;
+    this.tileLen = tileLen;             // metres of road per texture repeat (dash spacing)
     this.roads = [];                    // { nodes:[Vec3], width, group }
     this.group = new THREE.Group();
-    // real asphalt instead of a flat fill: a generated speckled texture with a
-    // worn/polished center strip + hairline cracks (Erik: upgrade the roads).
-    // Tiled along the ribbon via generated UVs; weathered to match the Wasteland.
-    const asphalt = this._makeAsphalt();
-    this._surfMat = new THREE.MeshStandardMaterial({ map: asphalt, color: 0xcfcfcf, roughness: 0.96, metalness: 0 });
+    // Real Synty road texture (Erik: make the roads look better): 2-lane asphalt
+    // with a double-yellow center line + dashed lane markings baked in. UVs map
+    // width→across (0..1) and length→along (tiled every tileLen m). polygonOffset
+    // keeps the flush ribbon from z-fighting the baked-asphalt terrain under it —
+    // so the markings come from the texture, no procedural lines needed.
+    const tex = new THREE.TextureLoader().load(texUrl);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = 8; tex.colorSpace = THREE.SRGBColorSpace;
+    this._roadTex = tex;
+    this._surfMat = new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.95, metalness: 0,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     this._surfMat._shared = true;
-    this._lineMat = new THREE.MeshStandardMaterial({ color: 0xcfc9b6, roughness: 1 });
-    this._dashMat = new THREE.MeshStandardMaterial({ color: 0xd8b431, roughness: 1 });
     // pale concrete curb/gutter strip that runs the road edges (real streets have one)
     this._curbMat = new THREE.MeshStandardMaterial({ color: 0x8c8a83, roughness: 1 });
     this._curbMat._shared = true;
@@ -112,7 +118,7 @@ export class RoadNetwork {
       const R = new THREE.Vector3().copy(pts[i]).addScaledVector(nrm, -hw);
       surfPos.push(L.x, L.y, L.z, R.x, R.y, R.z);
       if (i > 0) arc += pts[i].distanceTo(pts[i - 1]);
-      const vtex = arc / road.width;                    // ~square asphalt tiling
+      const vtex = arc / this.tileLen;                  // texture repeats every tileLen m (dash spacing)
       surfUV.push(0, vtex, 1, vtex);
       if (i > 0) {
         const v = (i - 1) * 2;
@@ -135,12 +141,10 @@ export class RoadNetwork {
     const surfMesh = new THREE.Mesh(surf, this._surfMat);
     surfMesh.receiveShadow = true;
     road.group.add(surfMesh);
-    // concrete curbs sit a touch proud of the asphalt (raised yBias)
+    // lane lines + center stripe now come from the texture; keep the concrete
+    // curbs that run the road edges (they sit a touch proud of the asphalt).
     road.group.add(this._ribbon(curbL, this._curbMat, 0.055));
     road.group.add(this._ribbon(curbR, this._curbMat, 0.055));
-    road.group.add(this._ribbon(dash, this._dashMat, 0.02));
-    road.group.add(this._ribbon(edgeL, this._lineMat, 0.03));
-    road.group.add(this._ribbon(edgeR, this._lineMat, 0.03));
   }
 
   // build a thin ribbon from [a,b,normal,offset,halfWidth?] spans

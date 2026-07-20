@@ -1038,11 +1038,17 @@ world.spawn("minimap").add({ update() {
 // ROAD NETWORK (General slice): procedural roads wiring the settlements + runway spur,
 // laid on the terrain through Ninja's RoadNetwork; RoadGraph exposed on __pf so traffic
 // AI (Ember) can snap + follow lanes. Routes dodge water/steep ground (see roadgen.js).
-const { graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
-// roads are BAKED into the terrain surface (colorAt → roadGraph.isRoad) so they
-// follow every bump with ZERO float — the old lifted RoadNetwork ribbon sat proud
-// of the ground and tires clipped through it (Erik 2026-07-20). The graph still
-// drives decoration-skip (onRoad) + traffic AI. Markings return as a flush pass.
+const { roads: roadLayout, graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
+// The asphalt COLOR is baked into the terrain surface (colorAt → roadGraph.isRoad)
+// so there's a flush base with ZERO float. ON TOP we lay a textured RoadNetwork
+// ribbon — real Synty asphalt with a double-yellow center + dashed lane markings
+// (Erik 2026-07-20: make the roads look better). It rides the terrain via heightAt
+// with a small lift + polygonOffset so it sits flush without z-fighting or tire
+// clip (the old bug was a 14 cm lift). Graph still drives decoration-skip + traffic.
+const roadNet = new RoadNetwork({ ground: heightAt, lift: 0.05 });
+for (const r of roadLayout) roadNet.addRoad(r.points, { width: r.width });
+world.spawn("roads").add(roadNet);
+window.__roadNet = roadNet;
 
 // TOWN CENTER — REMOVED (Erik 2026-07-20): the old fabpack Demonstration.fbx town was the
 // "leftover junk" + "strange ground textures" (scrambled MAIN ST / COLOR ME street decals).
