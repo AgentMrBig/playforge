@@ -25,8 +25,17 @@
   #pf-loading .pf-fill { height: 100%; width: 35%; border-radius: 4px;
     background: linear-gradient(90deg, #ffd75e, #ff8a3c); animation: pf-slide 1.1s ease-in-out infinite; }
   @keyframes pf-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  #pf-loading .pf-tag { margin-top: -8px; opacity: .55; font-size: 13px; letter-spacing: .3em; text-transform: uppercase; }
+  /* start screen: Play button appears once the world is built (loadingscreen.js) */
+  #pf-play { margin-top: 6px; padding: 13px 40px; border: 0; border-radius: 999px; cursor: pointer;
+    font: 700 17px/1 system-ui, sans-serif; letter-spacing: .06em; color: #1a1205;
+    background: linear-gradient(90deg, #ffd75e, #ff9a3c); box-shadow: 0 6px 26px rgba(255,170,60,.4);
+    opacity: 0; transform: translateY(6px); transition: opacity .35s ease, transform .35s ease, box-shadow .2s ease; }
+  #pf-play.pf-show { opacity: 1; transform: translateY(0); }
+  #pf-play:hover { box-shadow: 0 8px 34px rgba(255,170,60,.6); }
+  #pf-play:active { transform: translateY(1px); }
 </style>
-  <script type="module" crossorigin src="./assets/main-DNEeH3N6.js"></script>
+  <script type="module" crossorigin src="./assets/main-qKYl8HwB.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/streamworld-CFMq7AIf.js">
   <link rel="modulepreload" crossorigin href="./assets/character-DsRiylU0.js">
   <link rel="modulepreload" crossorigin href="./assets/noise-CFAVajEv.js">
@@ -34,8 +43,10 @@
 <body>
 <div id="pf-loading">
   <div class="pf-title">PLAYFORGE</div>
-  <div class="pf-bar"><div class="pf-fill"></div></div>
+  <div class="pf-tag">Big Island</div>
+  <div class="pf-bar" id="pf-loading-bar"><div class="pf-fill"></div></div>
   <div class="pf-sub" id="pf-loading-msg">Building the island…</div>
+  <button id="pf-play" type="button">▶ PLAY</button>
 </div>
 <canvas id="game"></canvas>
 <div id="hud"><b>PLAYFORGE</b> — Big Island · seed <span id="seed"></span><br>
