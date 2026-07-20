@@ -9,6 +9,7 @@ import {
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
   CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers, MotionRecorder,
+  spawnPedestrians,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -470,6 +471,24 @@ const player = world.spawn("player")
   .at(RUN.x0 + 4, RUN.h + 1.5, RUN.z + RUN.w / 2 + 4)
   .add(new CharacterBody({ radius: 0.32, height: 1.7 }))   // real capsule vs EVERYTHING
   .add(new PlayerMove());
+
+// NPC pedestrians — bring the towns alive (Erik). Same base guy, cloned + wandering.
+// v1: a crowd around the spawn/runway + the start settlement so they're visible on load.
+spawnPedestrians(world, {
+  model: "models/character/humanoid_male.fbx",
+  targetHeight: 1.8,
+  animations: [
+    { name: "idle", url: "models/character/anims/idle.fbx" },
+    { name: "walk", url: "models/character/anims/walking.fbx" },
+    { name: "run", url: "models/character/anims/running.fbx" },
+  ],
+  heightAt,
+  clusters: [
+    { x: RUN.x0 + 20, z: RUN.z + RUN.w / 2 + 8, radius: 14, count: 6 },  // right by spawn
+    { x: start.x, z: start.z, radius: 22, count: 8 },                     // the start town
+  ],
+}).then((npcs) => { window.__pfNpcs = npcs; console.log("[npc] spawned", npcs.length, "pedestrians"); })
+  .catch((e) => console.warn("[npc] spawn failed:", e.message));
 // the player is the ORIGINAL guy again (Erik: "I kind of like him more").
 // The citizen + retarget pipeline stays for NPCs — swap the url + retargetFrom
 // back to models/fabpack/SK_citizen_male_28.fbx to flip.
