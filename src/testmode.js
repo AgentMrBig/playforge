@@ -126,7 +126,14 @@ export class TestMode {
 
   /** select an IK effector; drag then moves that limb instead of orbiting. null = back to orbit */
   selectLimb(limb) {
+    const prev = this.limb;
     this.limb = this.limb === limb ? null : limb;      // toggle
+    // leaving a sticky limb: pin its anchor to where it is RIGHT NOW so it stays exactly
+    // where you left it (Erik: sticky must never snap back to the activation point)
+    if (prev && this.limb !== prev && this.stickyAnchors[prev]) {
+      const c = limbChain(this.player.object3d, prev);
+      if (c) c.eff.getWorldPosition(this.stickyAnchors[prev]);
+    }
     this._ikTarget = null;
     if (this.limb) this.setPaused(true);               // posing needs a still skeleton
     this.panel.querySelectorAll("[data-limb]").forEach((b) => b.classList.toggle("pf-sel", b.dataset.limb === this.limb));
