@@ -222,11 +222,28 @@ function mergeGroupGeo(groupObj) {
   } catch (e) { console.warn("[synty env] load failed (falls back):", e.message); }
 })();
 
+// road mask — keep decoration (trees/grass) off Ember's roads (Erik: "trees and
+// grass on the roads"). Queries the road graph; a cheap tile-level gate means only
+// tiles a road actually crosses pay the per-item cost.
+function onRoad(x, z, pad = 1.5) {
+  if (!roadGraph) return false;
+  const n = roadGraph.nearestOnRoad(x, z);
+  if (!n) return false;
+  const w = roadGraph.roads[n.roadId]?.width ?? 6;
+  return n.dist <= w * 0.5 + pad;
+}
+
 function decorate(tile, group) {
   const { x0, z0, size } = tile;
   const r = mulberry((seed ^ (tile.ix * 668265263) ^ (tile.iz * 374761393)) >>> 0);
   tile.physBoxes = [];                                 // → Rapier box statics in onTile
   tile.physMeshes = [];                                // → Rapier TRIMESH statics in onTile (walls solid, doorways open)
+  // does any road cross this tile? if not, skip all per-item road checks below
+  let tileNearRoad = false;
+  if (roadGraph) {
+    const nc = roadGraph.nearestOnRoad(x0 + size / 2, z0 + size / 2);
+    tileNearRoad = !!nc && nc.dist < size * 0.72 + 8;
+  }
 
   // ---- forests ------------------------------------------------------------
   if (tile.res >= 24) {
@@ -237,6 +254,7 @@ function decorate(tile, group) {
       const h = heightAt(x, z);
       if (h < SEA + 2 || h > 34) continue;
       if (inRunway(x, z, 8)) continue;
+      if (tileNearRoad && onRoad(x, z, 3)) continue;     // no trees on the asphalt
       if (settlements.some((s) => Math.hypot(x - s.x, z - s.z) < s.r * 1.15)) continue;
       spots.push([x, h, z, 0.7 + r() * 0.9]);
     }
@@ -288,6 +306,7 @@ function decorate(tile, group) {
       if (h < SEA + 1.8 || h > 34) continue;
       if (Math.abs(heightAt(x + 1.5, z) - h) > 1.1) continue;   // too steep
       if (inRunway(x, z, 2)) continue;
+      if (tileNearRoad && onRoad(x, z, 1)) continue;     // no grass poking through the road
       if (settlements.some((s) => Math.hypot(x - s.x, z - s.z) < s.r)) continue;
       pts.push([x, h, z, 0.7 + r() * 0.7, r() * Math.PI, 0.28 + r() * 0.07, 0.28 + r() * 0.14]);
     }
