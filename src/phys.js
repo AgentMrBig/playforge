@@ -384,9 +384,20 @@ export class RapierVehicle extends VehicleBody {
       // (Erik's spec — punchy backing up, low terminal speed)
       else engine = t * F * Math.max(0, 1 - Math.abs(fwdSpeed) / this.reverseSpeed);
     }
-    this.ctrl.setWheelEngineForce(2, engine / 2);
-    this.ctrl.setWheelEngineForce(3, engine / 2);
-    for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
+    // PARKING / AUTO-HOLD (Erik: unmanned cars roll away on hills). With no throttle and
+    // nearly stopped, lock the wheels AND bleed off horizontal creep so the car holds on a
+    // slope; any throttle input releases it instantly. Self-contained — parked or driven.
+    const holding = Math.abs(t) < 0.02 && !this.handbrake && Math.abs(fwdSpeed) < 0.9;
+    if (holding) {
+      this.ctrl.setWheelEngineForce(2, 0); this.ctrl.setWheelEngineForce(3, 0);
+      for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, this.mass * this.brakePower * 0.016);
+      const lv = this.rb.linvel();
+      this.rb.setLinvel({ x: lv.x * 0.15, y: lv.y, z: lv.z * 0.15 }, true);   // kill slope creep
+    } else {
+      this.ctrl.setWheelEngineForce(2, engine / 2);
+      this.ctrl.setWheelEngineForce(3, engine / 2);
+      for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
+    }
     // handbrake: LOCK the rears. Erik's spec (and physics): the handbrake
     // does NOT tighten the turn — it drops rear traction until the slide
     // STARTS, and the car carries on along its momentum while rotating.
