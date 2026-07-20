@@ -598,6 +598,7 @@ loadCharacter("models/character/humanoid_male.fbx", {
     const cb = () => player.components.find((c) => c.ctrl && c.velocity);
     let wasMuscle = false;   // 🫀 muscle mode (Euphoria layer): re-enable the capsule on exit
     let getup = null;        // { timer } while a get-up clip plays him up out of the ragdoll
+    const gv = new THREE.Vector3();
     player.add({
       fixedUpdate(dt) {
         // NATURAL GET-UP: ragdoll settled → play a get-up clip (face-up vs face-down picked
@@ -606,6 +607,16 @@ loadCharacter("models/character/humanoid_male.fbx", {
         if (getup) {
           window.__pfGetup = true;
           cb()?.setEnabled(false);
+          // GROUND-FOLLOW: the clip's root motion is stripped, which pins his hips at STANDING
+          // height — so the lying pose floats waist-high (Erik). Glue the lowest of hips/feet to
+          // the terrain each frame so he lies ON the ground and the animation rises him naturally.
+          player.object3d.updateMatrixWorld(true);
+          let lowest = Infinity;
+          for (const bn of ["Hips", "LeftFoot", "RightFoot"]) {
+            const bb = ch.bones[bn]; if (!bb) continue;
+            const wy = bb.getWorldPosition(gv).y; if (wy < lowest) lowest = wy;
+          }
+          if (lowest < Infinity) player.position.y += heightAt(player.position.x, player.position.z) - lowest;
           getup.timer -= dt;
           if (getup.timer <= 0) {
             getup = null; window.__pfGetup = false;
