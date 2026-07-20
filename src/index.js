@@ -38,6 +38,7 @@ export { DayNight } from "./daynight.js";
 export { solveTwoBone, limbChain } from "./ik.js";
 export { BlendController, splitClip } from "./animblend.js";
 export { BehaviorTimeline, BehaviorPlayer, BehaviorTriggers } from "./animtimeline.js";
+export { MotionRecorder } from "./motionrec.js";
 export { FootPlant } from "./footplant.js";
 export { ControlRig } from "./controlrig.js";
 export * as THREE from "three";

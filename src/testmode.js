@@ -105,8 +105,10 @@ export class TestMode {
     if (on) this.pan.set(0, 0, 0);                   // start each session centered
     this.panel.style.display = on ? "block" : "none";   // "block" exactly — DayNight's auto-freeze checks it
     if (this.poseLib) { this.poseLib.style.display = on ? "" : "none"; if (on) this._refreshPoseLib(); }
+    if (on) this._refreshMoments();
     this.btn.classList.toggle("pf-on", on);
     if (!on && this._muscleOn) this.toggleMuscle(false);   // leaving test mode ends muscle mode
+    if (!on && this._momentScrub) this.exitMomentScrub();  // and ends moment scrub
     if (!on && this.livePlay) this.toggleLivePlay(false);  // and ends live-play
     if (!on) this.anim = null;                       // hand animation back to the game
   }
@@ -117,6 +119,7 @@ export class TestMode {
   toggleLivePlay(on = !this.livePlay) {
     this.livePlay = on;
     if (on) {
+      if (this._momentScrub) this.exitMomentScrub();  // can't scrub a moment while playing live
       if (this._muscleOn) this.toggleMuscle(false);   // can't WASD a ragdoll
       if (this.limb) this.selectLimb(this.limb);      // drop any grabbed limb
       this.rigControl = null; this.attachGizmo(null);
@@ -550,6 +553,17 @@ export class TestMode {
       }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
+    // 🎥 MOMENT SCRUB owns the skeleton — drive playback (with slow-mo) and paint the frame's
+    // pose; then the pose tools (IK/gizmo/📸) work on whatever frame you're parked on.
+    if (this._momentScrub && this._moment) {
+      if (this._momentPlaying) {
+        this._momentT += dt * (this._momentSpeed || 1);
+        if (this._momentT >= this._moment.dur) { this._momentT = this._moment.dur; this._momentPlaying = false; }
+        this._momentSyncUI();
+      }
+      window.__pfRec && window.__pfRec.applyAtTime(this._moment, this._momentT);
+      this._placeCamera(p); return;
+    }
     // 🫀 MUSCLE MODE owns the skeleton — physics drives every bone, so skip all the pose/
     // IK/rig/sticky/weld editing below and just fly the camera to watch it react.
     if (window.__rag && window.__rag.muscle) { this._placeCamera(p); return; }
@@ -708,6 +722,58 @@ export class TestMode {
     rag.shove({ x: Math.cos(a), y: 0.2, z: Math.sin(a) }, mag);
   }
 
+  // ═══ 🎥 MOMENT CAPTURE + TIME CONTROL (Erik) ═══
+  // Freeze the last seconds of real gameplay into a scrubbable moment, then rewind / slow-mo
+  // / frame-step it and pose-edit any frame into a behavior (the spinning-jump-kick workflow).
+  captureMoment(seconds = 12) {
+    const rec = window.__pfRec; if (!rec) return;
+    const m = rec.captureLast(seconds); if (!m) return;
+    const name = `moment_${Date.now() % 100000}`;
+    rec.save(name, m); this._loadMoment(name); this._refreshMoments();
+  }
+  toggleRec() {
+    const rec = window.__pfRec; if (!rec) return;
+    if (rec.recording) { const m = rec.stopRec(); if (m) { const name = `take_${Date.now() % 100000}`; rec.save(name, m); this._loadMoment(name); this._refreshMoments(); } }
+    else rec.startRec();
+    this.panel.querySelector('[data-act="momrec"]')?.classList.toggle("pf-sel", rec.recording);
+    this.panel.querySelector('[data-act="momrec"]') && (this.panel.querySelector('[data-act="momrec"]').textContent = rec.recording ? "⏹ stop take" : "⏺ record take");
+  }
+  _loadMoment(name) {
+    const rec = window.__pfRec; if (!rec) return;
+    const m = rec.load(name); if (!m) return;
+    this._moment = m; this._momentName = name; this._momentT = 0; this._momentPlaying = false; this._momentSpeed = 1;
+    this._momentScrub = true;
+    this.setPaused(true);
+    const anim = window.__ch && window.__ch.animator; if (anim) { anim.mixer.stopAllAction(); anim.current = null; }
+    this.anim = null;
+    const c = this.panel.querySelector(".pf-mom-controls"); if (c) c.style.display = "";
+    rec.applyAtTime(m, 0); this._momentSyncUI();
+  }
+  exitMomentScrub() {
+    if (!this._momentScrub) return;
+    this._momentScrub = false; this._moment = null; this._momentPlaying = false;
+    const anim = window.__ch && window.__ch.animator; if (anim) anim.play && anim.play("idle", { fade: 0.3 });
+    const c = this.panel.querySelector(".pf-mom-controls"); if (c) c.style.display = "none";
+    this.panel.querySelector('[data-act="momclose"]');
+  }
+  _momentPlayPause() { if (!this._moment) return; if (this._momentT >= this._moment.dur - 1e-3) this._momentT = 0; this._momentPlaying = !this._momentPlaying; this._momentSyncUI(); }
+  _momentStep(dir) {
+    if (!this._moment) return; this._momentPlaying = false;
+    const fdt = this._moment.dur / Math.max(1, this._moment.frames.length - 1);
+    this._momentT = Math.max(0, Math.min(this._moment.dur, this._momentT + dir * fdt));
+    window.__pfRec?.applyAtTime(this._moment, this._momentT); this._momentSyncUI();
+  }
+  _momentSyncUI() {
+    if (!this.panel || !this._moment) return;
+    const s = this.panel.querySelector(".pf-mom-scrub"); if (s) { s.max = this._moment.dur; s.value = this._momentT; }
+    const lab = this.panel.querySelector(".pf-mom-time"); if (lab) lab.textContent = `${this._momentT.toFixed(2)} / ${this._moment.dur.toFixed(2)}s`;
+    const pp = this.panel.querySelector('[data-act="momplay"]'); if (pp) pp.textContent = this._momentPlaying ? "⏸" : "▶";
+  }
+  _refreshMoments() {
+    const sel = this.panel?.querySelector(".pf-mom-load"); const rec = window.__pfRec; if (!sel || !rec) return;
+    sel.innerHTML = `<option value="">load moment…</option>` + rec.list().map((n) => `<option>${n}</option>`).join("");
+  }
+
   _buildUI() {
     if (!document.getElementById("pf-test-style")) {
       const s = document.createElement("style");
@@ -838,6 +904,21 @@ export class TestMode {
         <div class="pf-grp-h">🎞 Timeline</div>
         <div class="pf-grp-b"><button data-act="timeline">🎞 timeline (NLA)</button></div>
       </div>
+      <div class="pf-grp pf-collapsed" data-grp="moment">
+        <div class="pf-grp-h">🎥 Moment</div>
+        <div class="pf-grp-b">
+          <button data-act="momcap" title="freeze the last ~12s of gameplay into a scrubbable moment">🎥 capture moment</button>
+          <button data-act="momrec" title="record a deliberate take: start, then stop">⏺ record take</button>
+          <select class="pf-mom-load"><option value="">load moment…</option></select>
+          <div class="pf-mom-controls" style="display:none">
+            <div class="pf-grip-row"><span>time</span><input type="range" class="pf-mom-scrub" min="0" max="1" step="0.001" value="0" style="flex:1"></div>
+            <div class="pf-grip-row"><b data-act="momback" title="frame back">◀</b><b data-act="momplay" title="play/pause">▶</b><b data-act="momfwd" title="frame fwd">▶|</b><b class="pf-mom-time" style="flex:2;cursor:default;font-size:9.5px">0 / 0s</b></div>
+            <div class="pf-grip-row"><span>speed</span><input type="range" class="pf-mom-speed" min="0.1" max="1.5" step="0.05" value="1" style="flex:1"><b class="pf-mom-spd" style="flex:0 0 30px;cursor:default">1.0×</b></div>
+            <button data-act="momclose">↩ back to live</button>
+            <div class="pf-test-hint" style="margin-top:3px">scrub to a frame, pose it with the tools, 📸 capture — build a move from real motion.</div>
+          </div>
+        </div>
+      </div>
       <div class="pf-grp pf-collapsed" data-grp="muscle">
         <div class="pf-grp-h">🫀 Muscle</div>
         <div class="pf-grp-b">
@@ -874,6 +955,15 @@ export class TestMode {
     this.panel.querySelector('[data-act="stickyfeet"]').addEventListener("click", () => this.setSticky("foot"));
     this.panel.querySelector('[data-act="stickyhands"]').addEventListener("click", () => this.setSticky("hand"));
     this.panel.querySelector('[data-act="liveplay"]').addEventListener("click", () => this.toggleLivePlay());
+    this.panel.querySelector('[data-act="momcap"]').addEventListener("click", () => this.captureMoment());
+    this.panel.querySelector('[data-act="momrec"]').addEventListener("click", () => this.toggleRec());
+    this.panel.querySelector(".pf-mom-load").addEventListener("change", (e) => { if (e.target.value) this._loadMoment(e.target.value); });
+    this.panel.querySelector('[data-act="momplay"]').addEventListener("click", () => this._momentPlayPause());
+    this.panel.querySelector('[data-act="momback"]').addEventListener("click", () => this._momentStep(-1));
+    this.panel.querySelector('[data-act="momfwd"]').addEventListener("click", () => this._momentStep(1));
+    this.panel.querySelector('[data-act="momclose"]').addEventListener("click", () => this.exitMomentScrub());
+    this.panel.querySelector(".pf-mom-scrub").addEventListener("input", (e) => { this._momentPlaying = false; this._momentT = +e.target.value; window.__pfRec && this._moment && window.__pfRec.applyAtTime(this._moment, this._momentT); this._momentSyncUI(); });
+    this.panel.querySelector(".pf-mom-speed").addEventListener("input", (e) => { this._momentSpeed = +e.target.value; const el = this.panel.querySelector(".pf-mom-spd"); if (el) el.textContent = this._momentSpeed.toFixed(2).replace(/0$/, "") + "×"; });
     this.panel.querySelector('[data-act="muscle"]').addEventListener("click", () => this.toggleMuscle());
     this.panel.querySelector('[data-act="shove"]').addEventListener("click", () => this.shoveTest());
     this.panel.querySelector(".pf-musc-slider").addEventListener("input", (e) => this.setMuscleTone(+e.target.value));

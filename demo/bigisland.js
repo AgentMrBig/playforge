@@ -8,7 +8,7 @@ import {
   loadVehicle, VehicleRig, loadCharacter, CarCollisions,
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
-  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers,
+  CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers, MotionRecorder,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -418,6 +418,10 @@ loadCharacter("models/character/humanoid_male.fbx", {
   window.__pfBPlayer = bPlayer;
   window.__pfPlayBehavior = (n) => bPlayer.play(n);
   new BehaviorTriggers(bPlayer);   // key-bound behaviors fire in normal gameplay
+  // 🎥 motion recorder — always sampling the character so "capture moment" grabs the last
+  // ~15s of real gameplay (Erik). Skips while a captured moment is being scrubbed in Anima.
+  const motionRec = new MotionRecorder(ch.visual, player);
+  world.spawn("motionrec").add({ update(dt) { if (!(window.__pfTest && window.__pfTest._momentScrub)) motionRec.update(dt); } });
   world.spawn("behaviorplayer").add({ update(dt) { bPlayer.update(dt); } });
 
   const footPlant = new FootPlant({ playerObj: ch.visual, player, heightAt });
