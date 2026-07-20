@@ -164,4 +164,49 @@ export class RoadGraph {
     // push the target to the right-hand lane center
     return [adv.point[0] + tz * w * 0.25, adv.point[1] - tx * w * 0.25];
   }
+
+  // ---- fast road membership test — for BAKING roads into the terrain surface
+  // (vertex-color in colorAt) + skipping decoration on roads. nearestOnRoad is
+  // O(all samples); this is O(nearby segments) via a spatial hash of segments,
+  // cheap enough to call per terrain vertex. Roads become part of the map, not
+  // a floating mesh (Erik 2026-07-20). ------------------------------------------
+  _buildIndex() {
+    const CELL = 24;                                    // > max road width; 3x3 neighborhood covers any hit
+    this._cell = CELL;
+    this._grid = new Map();
+    const add = (cx, cz, seg) => { const k = cx + "," + cz; let a = this._grid.get(k); if (!a) { a = []; this._grid.set(k, a); } a.push(seg); };
+    for (const road of this.roads) {
+      const hw = road.width * 0.5;
+      for (let i = 0; i < road.samples.length - 1; i++) {
+        const a = road.samples[i], b = road.samples[i + 1];
+        const seg = { ax: a.x, az: a.z, bx: b.x, bz: b.z, hw };
+        const minx = Math.min(a.x, b.x) - hw, maxx = Math.max(a.x, b.x) + hw;
+        const minz = Math.min(a.z, b.z) - hw, maxz = Math.max(a.z, b.z) + hw;
+        for (let cx = Math.floor(minx / CELL); cx <= Math.floor(maxx / CELL); cx++)
+          for (let cz = Math.floor(minz / CELL); cz <= Math.floor(maxz / CELL); cz++)
+            add(cx, cz, seg);
+      }
+    }
+  }
+
+  _distToSeg(px, pz, s) {
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l2 = dx * dx + dz * dz;
+    let t = l2 ? ((px - s.ax) * dx + (pz - s.az) * dz) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(px - (s.ax + t * dx), pz - (s.az + t * dz));
+  }
+
+  /** is world (x,z) on a road surface? `pad` widens the test (e.g. keep grass a
+   *  bit off the shoulder). Fast — checks only segments in the local 3x3 cells. */
+  isRoad(x, z, pad = 0) {
+    if (!this._grid) this._buildIndex();
+    const C = this._cell, cx = Math.floor(x / C), cz = Math.floor(z / C);
+    for (let gx = cx - 1; gx <= cx + 1; gx++)
+      for (let gz = cz - 1; gz <= cz + 1; gz++) {
+        const segs = this._grid.get(gx + "," + gz);
+        if (!segs) continue;
+        for (const s of segs) if (this._distToSeg(x, z, s) <= s.hw + pad) return true;
+      }
+    return false;
+  }
 }
