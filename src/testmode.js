@@ -482,15 +482,19 @@ export class TestMode {
     if (ptr) {
       if (this._mmb && !this._uiDrag && (ptr.dx || ptr.dy)) { this.yaw -= ptr.dx * 0.008; this.pitch = Math.max(-1.2, Math.min(1.35, this.pitch + ptr.dy * 0.006)); }
       if (ptr.rightDown && !this._uiDrag && !this._gizmoDragging && (ptr.dx || ptr.dy)) {
-        // RMB drag = PAN, STRICTLY screen axes (Erik: 'no forward/back at all — that's zoom').
-        // X = the camera's right flattened to horizontal, Y = pure world up — so a pitched
-        // camera can never leak drag into the view axis (that leak read as zooming).
-        const cam = this.world.camera;
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
-        right.y = 0; right.normalize();
+        // RMB drag = PAN in the camera's IMAGE PLANE (Erik: L/R must pan sideways, never zoom).
+        // ★ Build the basis ANALYTICALLY from yaw/pitch — NOT from cam.quaternion. This code
+        // runs before this frame's lookAt (line ~620), so in the live loop cam.quaternion is
+        // stale and collapses `right` to world-X, leaking the drag into the view axis = the
+        // "left/right zooms" bug. The analytic basis is always exactly perpendicular to view,
+        // so neither axis can ever zoom. (Verified real-drag: viewForward ≈ 0 on both.)
+        const cp = Math.cos(this.pitch);
+        const fwd = new THREE.Vector3(-Math.sin(this.yaw) * cp, -Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
+        const sRight = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+        const sUp = new THREE.Vector3().crossVectors(sRight, fwd).normalize();
         const k = 0.0016 * this.dist;
-        this.pan.addScaledVector(right, ptr.dx * k);   // L/R inverted per Erik 15:25
-        this.pan.y += ptr.dy * k;
+        this.pan.addScaledVector(sRight, ptr.dx * k);   // horizontal → screen-right (no zoom)
+        this.pan.addScaledVector(sUp, ptr.dy * k);      // vertical → true screen-up (no zoom)
       }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
