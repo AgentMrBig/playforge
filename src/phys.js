@@ -820,6 +820,7 @@ export class CharacterBody {
       this.rb.setNextKinematicTranslation({ x: p.x, y: p.y + half, z: p.z });
       this._lastSynced.copy(p);
       this.velocity.set(0, 0, 0);
+      this._ipCurr = null;              // re-enter (ragdoll get-up / car exit): snap
     }
   }
 
@@ -832,6 +833,7 @@ export class CharacterBody {
       this.rb.setNextKinematicTranslation({ x: p.x, y: p.y + half, z: p.z });
       this._lastSynced.copy(p);
       this.velocity.y = 0;
+      this._ipCurr = null;              // teleport: snap the interp, don't slide
       return;
     }
     this.velocity.y += this.gravity * dt;
@@ -887,8 +889,36 @@ export class CharacterBody {
         this._groundRb = body;                       // the moving frame we ride next step
       }
     }
-    entity.position.set(nx, ny - half, nz);
+    const fx = nx, fy = ny - half, fz = nz;
+    entity.position.set(fx, fy, fz);
     this._lastSynced.copy(entity.position);
+    // RENDER INTERPOLATION (Ember 2026-07-20, General handed this over): the
+    // kinematic controller writes the feet position at a FIXED 60Hz, but the
+    // frame renders every rAF — so at fps != 60 the player/NPCs froze on 0-step
+    // frames and lurched on 2-step frames, same judder the cars had. Stash prev
+    // + current FEET pos here; update() blends the VISUAL by the accumulator
+    // alpha. Physics untouched (movement is driven off this.rb, not this value),
+    // rotation/animation already run per-render so only position needs blending.
+    if (!this._ipCurr) {
+      this._ipPrev = new THREE.Vector3(fx, fy, fz);
+      this._ipCurr = new THREE.Vector3(fx, fy, fz);
+    } else {
+      this._ipPrev.copy(this._ipCurr); this._ipCurr.set(fx, fy, fz);
+    }
+  }
+
+  // render-frame visual interpolation between the last two fixed-step feet
+  // positions (see _move). Shares the vehicle's window.__pfInterp A/B toggle.
+  update(dt, ctx) {
+    if (!this._ipCurr || !this._entity) return;
+    if (typeof window !== "undefined" && window.__pfInterp === false) {
+      this._entity.object3d.position.copy(this._ipCurr);
+      return;
+    }
+    const FIXED = ctx?.engine?.constructor?.FIXED_DT ?? (1 / 60);
+    const accum = ctx?.engine?._accum ?? 0;
+    const alpha = accum <= 0 ? 0 : accum >= FIXED ? 1 : accum / FIXED;
+    this._entity.object3d.position.lerpVectors(this._ipPrev, this._ipCurr, alpha);
   }
 
   dispose() {
