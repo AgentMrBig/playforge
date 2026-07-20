@@ -1128,11 +1128,9 @@ window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, se
 // finished island instead of watching it pop in. The overlay auto-reveals on a
 // hard timeout too, so it can never trap the player.
 initLoadingScreen();
-physReady.then(() => {
-  let f = 0;
-  const settle = () => { if (++f > 40) window.__pfReady = true; else requestAnimationFrame(settle); };
-  requestAnimationFrame(settle);
-});
+// ready once physics is up + a short settle for the initial tiles/decorations to
+// stream (time-based so it's predictable even if fps dips during asset loading).
+physReady.then(() => setTimeout(() => { window.__pfReady = true; }, 900));
 window.__pfLoadProp = loadProp;   // Synty asset integration — load+atlas a prop from the console
 window.__pfLoadVehicle = loadVehicle;   // + vehicle rig loader (wheels/suspension) for Synty car tests
 
