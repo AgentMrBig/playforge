@@ -224,7 +224,8 @@ function mergeGroupGeo(groupObj) {
 function decorate(tile, group) {
   const { x0, z0, size } = tile;
   const r = mulberry((seed ^ (tile.ix * 668265263) ^ (tile.iz * 374761393)) >>> 0);
-  tile.physBoxes = [];                                 // → Rapier statics in onTile
+  tile.physBoxes = [];                                 // → Rapier box statics in onTile
+  tile.physMeshes = [];                                // → Rapier TRIMESH statics in onTile (walls solid, doorways open)
 
   // ---- forests ------------------------------------------------------------
   if (tile.res >= 24) {
@@ -324,12 +325,11 @@ function decorate(tile, group) {
         bld.rotation.y = Math.floor(sr() * 4) * (Math.PI / 2);
         bld.traverse((o) => { if (o.isMesh) o.castShadow = tile.res >= 24; });
         group.add(bld);
-        // Erik: many buildings are OPEN — walk inside. Our on-foot collision is AABB-only
-        // (can't do walls-with-doorways), so NO solid player box here → you can enter. Cars
-        // still bump the shell via a physBox so you can't drive through them.
-        const sz = pick.size || { x: 8, y: 8, z: 8 };
-        const fw = (bld.rotation.y % Math.PI === 0) ? sz.x : sz.z, fd = (bld.rotation.y % Math.PI === 0) ? sz.z : sz.x;
-        tile.physBoxes.push({ half: [fw / 2, sz.y / 2, fd / 2], center: [bx, gy + sz.y / 2, bz] });
+        // Erik: many buildings are OPEN — walk inside them. The player is a Rapier CAPSULE
+        // (CharacterBody), so instead of a solid box we bake the building MESH as a Rapier
+        // TRIMESH collider: walls are solid, doorways/openings are passable — for the player
+        // AND cars, from one collider. Deferred to onTile (needs phys.world + world matrix).
+        tile.physMeshes.push(bld);
         continue;
       }
       // fallback placeholder box (until buildings load)
@@ -373,6 +373,7 @@ function attachTilePhysics(tile, mesh) {
   if (tile.dead) return;
   const cols = phys.addMeshCollider(mesh);             // the tile mesh IS the collider
   for (const b of tile.physBoxes ?? []) cols.push(phys.addBox(b.half, b.center));
+  for (const bm of tile.physMeshes ?? []) cols.push(...phys.addMeshCollider(bm)); // buildings → trimesh (walls solid, doorways open)
   tile.cleanup.push(() => cols.forEach((c) => phys.removeCollider(c)));
 }
 world.spawn("terrain").add(terrain);
