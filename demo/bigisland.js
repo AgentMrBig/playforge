@@ -422,6 +422,7 @@ class PlayerMove {
     const body = entity.components.find((c) => c.velocity && c.onGround !== undefined);
     if (!body) return;
     if (drivingCar) { body.velocity.x = 0; body.velocity.z = 0; return; }
+    if (window.__pfGetup) { body.velocity.x = 0; body.velocity.z = 0; return; }   // getting up — don't drive/turn
     // Anima tools mode (test open, live-play OFF) freezes the character so WASD can't drive
     // it off while you pose; live-play ON falls through to normal movement (Erik's toggle)
     if (window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay) { body.velocity.x = 0; body.velocity.z = 0; return; }
@@ -581,7 +582,7 @@ loadCharacter("models/character/humanoid_male.fbx", {
     const inp = engine.input;
     const stick = inp.stick ? inp.stick("left") : { x: 0, y: 0 };
     const moving = Math.hypot(inp.axis("KeyA", "KeyD") + stick.x, inp.axis("KeyS", "KeyW") - stick.y);
-    const free = !drivingCar && !(window.__pfTest && window.__pfTest.active) && !(window.__rag && window.__rag.active);
+    const free = !drivingCar && !window.__pfGetup && !(window.__pfTest && window.__pfTest.active) && !(window.__rag && window.__rag.active);
     const standing = body && body.onGround && moving < 0.1 && free;
     const walking = body && body.onGround && moving >= 0.1 && free;
     footPlant.update(standing, walking);
@@ -596,8 +597,23 @@ loadCharacter("models/character/humanoid_male.fbx", {
     window.__rag = rag;
     const cb = () => player.components.find((c) => c.ctrl && c.velocity);
     let wasMuscle = false;   // 🫀 muscle mode (Euphoria layer): re-enable the capsule on exit
+    let getup = null;        // { timer } while a get-up clip plays him up out of the ragdoll
     player.add({
       fixedUpdate(dt) {
+        // NATURAL GET-UP: ragdoll settled → play a get-up clip (face-up vs face-down picked
+        // from the resting pose) that RISES to standing, capsule OFF so physics can't fight,
+        // then hand to idle + control. Replaces the old teleport-to-standing pop (Erik).
+        if (getup) {
+          window.__pfGetup = true;
+          cb()?.setEnabled(false);
+          getup.timer -= dt;
+          if (getup.timer <= 0) {
+            getup = null; window.__pfGetup = false;
+            const b = cb(); if (b) { b.setEnabled(true); b.velocity.set(0, 0, 0); }
+            ch.animator.play("idle", { fade: 0.3 });
+          }
+          return;
+        }
         if (rag.active) {
           rag.fixedUpdate(dt);
           // 🫀 muscle mode = a LIVE authoring layer, not death: physics drives the bones,
@@ -609,16 +625,22 @@ loadCharacter("models/character/humanoid_male.fbx", {
           player.position.set(p.x, p.y - 0.9, p.z);
           const body = cb();
           if (body) body._lastSynced.copy(player.position);   // no teleport-fight
-          if (rag.settled(1.3)) {                             // stand back up
+          if (rag.settled(1.3)) {                             // get up naturally
+            const o = rag.groundOrientation();                // face-up/down + ground heading
             rag.exit();
-            // get up WHERE the body came to rest — never below the terrain,
-            // but keep the pelvis height when it settled on top of something
-            // (snapping to raw terrain read as a teleport-respawn to Erik)
             const p2 = rag.pelvisPos();
             const g = heightAt(p2.x, p2.z);
-            player.at(p2.x, Math.max(g + 0.2, p2.y - 0.55), p2.z);
-            cb()?.setEnabled(true);
-            ch.animator.play("idle", { fade: 0.55 });         // slow rise, not a pop
+            player.at(p2.x, g, p2.z);                         // feet on the ground for the rise
+            player.object3d.rotation.y = o.yaw;
+            const b = cb();
+            if (b) { b.setEnabled(false); b.velocity.set(0, 0, 0); b._lastSynced.copy(player.position); }
+            const clip = o.faceUp ? "getupBack" : "getupFront";
+            const dur = ch.animator.clips[clip]?.duration ?? 2.0;
+            ch.animator.play(clip, { fade: 0.12, once: true });
+            // cap the control-lock: a long clip (getupBack is 8.9s!) must not freeze the
+            // player for that whole time — hand back after ~2.6s max even if the clip runs on
+            getup = { timer: Math.min(dur, 2.8) * 0.92 };
+            window.__pfGetup = true;
           }
           return;
         }

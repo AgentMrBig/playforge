@@ -449,6 +449,25 @@ export class Ragdoll {
   /** resting long enough to stand back up? */
   settled(after = 1.2) { return this.active && (this._settleT ?? 0) > after; }
 
+  /** orientation of the settled body — pick the get-up clip + which way to stand.
+   * faceUp = belly toward the sky (play the back get-up); yaw = the ground heading
+   * (head direction) to orient the stand toward. Signs are best-guess (Erik confirms). */
+  groundOrientation() {
+    const T = this._tmp;
+    const chest = this._byName.chest, pelvis = this._byName.pelvis;
+    if (!chest || !pelvis) return { faceUp: true, yaw: 0 };
+    const pc = chest.body.translation(), pp = pelvis.body.translation();
+    const spine = T.v1.set(pc.x - pp.x, pc.y - pp.y, pc.z - pp.z);      // pelvis→chest
+    const aR = this._byName.upperArmR, aL = this._byName.upperArmL;
+    let faceUp = spine.y > -0.15;
+    if (aR && aL) {
+      const pr = aR.body.translation(), pl = aL.body.translation();
+      const shoulder = T.v2.set(pr.x - pl.x, pr.y - pl.y, pr.z - pl.z);  // L→R
+      faceUp = T.v3.copy(shoulder).cross(spine).y > 0;                   // ventral normal up?
+    }
+    return { faceUp, yaw: Math.atan2(spine.x, spine.z) };
+  }
+
   /** pelvis world position (respawn the capsule here) */
   pelvisPos() {
     const t = this._byName.pelvis?.body.translation();
