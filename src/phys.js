@@ -580,6 +580,24 @@ export class RapierVehicle extends VehicleBody {
   _sync(entity) {
     if (!this.rb) return;
     const t = this.rb.translation(), q = this.rb.rotation();
+    // RENDER INTERPOLATION (Ember 2026-07-20): the engine steps physics at a
+    // FIXED 60Hz but renders every rAF frame with NO blending between steps.
+    // At any framerate != 60 some render frames run 0 physics steps (car froze)
+    // and others run 2 (car lurched) — measured 33% visual-displacement jitter
+    // at 78 km/h, worse as load drops fps off 60 (Erik: "extreme jitter, basically
+    // broken"). The rigid body itself is smooth. Fix: stash prev + current pose
+    // here (fixed step); update() lerps the visual by the accumulator alpha each
+    // render frame, so motion is smooth at ANY fps. Physics untouched; the wheels
+    // are object3d children so they ride the blend automatically.
+    if (!this._ipCurrP) {
+      this._ipPrevP = new THREE.Vector3(t.x, t.y, t.z);
+      this._ipCurrP = new THREE.Vector3(t.x, t.y, t.z);
+      this._ipPrevQ = new THREE.Quaternion(q.x, q.y, q.z, q.w);
+      this._ipCurrQ = new THREE.Quaternion(q.x, q.y, q.z, q.w);
+    } else {
+      this._ipPrevP.copy(this._ipCurrP); this._ipCurrP.set(t.x, t.y, t.z);
+      this._ipPrevQ.copy(this._ipCurrQ); this._ipCurrQ.set(q.x, q.y, q.z, q.w);
+    }
     entity.object3d.position.set(t.x, t.y, t.z);
     entity.object3d.quaternion.set(q.x, q.y, q.z, q.w);
 
@@ -674,6 +692,25 @@ export class RapierVehicle extends VehicleBody {
 
   fixedUpdate() { /* everything runs through the Physics step hooks */ }
 
+  // RENDER-FRAME visual interpolation between the last two physics poses (see
+  // _sync). alpha = how far this render frame sits between the previous and the
+  // current fixed step (engine._accum / FIXED_DT). Kills the fixed-timestep
+  // judder without touching the sim. Toggle off for A/B: window.__pfInterp=false.
+  update(dt, ctx) {
+    if (!this._ipCurrP) return;
+    if (typeof window !== "undefined" && window.__pfInterp === false) {
+      ctx.entity.object3d.position.copy(this._ipCurrP);
+      ctx.entity.object3d.quaternion.copy(this._ipCurrQ);
+      return;
+    }
+    const FIXED = ctx?.engine?.constructor?.FIXED_DT ?? (1 / 60);
+    const accum = ctx?.engine?._accum ?? 0;
+    const alpha = accum <= 0 ? 0 : accum >= FIXED ? 1 : accum / FIXED;
+    const o = ctx.entity.object3d;
+    o.position.lerpVectors(this._ipPrevP, this._ipCurrP, alpha);
+    o.quaternion.copy(this._ipPrevQ).slerp(this._ipCurrQ, alpha);
+  }
+
   /** Ember's seam — now a REAL impulse on a real rigid body */
   applyImpulse(impulse, point) {
     this.rb?.applyImpulseAtPoint(
@@ -703,6 +740,7 @@ export class RapierVehicle extends VehicleBody {
     this.rb.setRotation(quatY(yaw), true);
     this.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this._ipCurrP = null;   // teleport: reset interpolation so the visual snaps, not slides
   }
 
   dispose() {
