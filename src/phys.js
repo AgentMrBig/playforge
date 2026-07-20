@@ -367,6 +367,18 @@ export class RapierVehicle extends VehicleBody {
       for (const child of entity.object3d.children) child.position.y -= this._restRide;
     }
 
+    // live airborne-gravity tuner (Ember) — dial ramp/jump hang-time by feel:
+    //   __pfAirGrav(0.5)   0=floaty moon jumps · 1=full snappy 2x gravity in air
+    if (typeof window !== "undefined" && !window.__pfAirGrav) {
+      window.__pfAirGrav = (k = 0.5) => {
+        for (const c of (window.__pf?.cars || [])) {
+          const rv = c.components?.find((x) => x.constructor?.name === "RapierVehicle");
+          if (rv) rv._airGrav = k;
+        }
+        return k;
+      };
+    }
+
     this._preHook = (dt) => this._drive(dt);
     this._postHook = () => this._sync(entity);
     P._pre.push(this._preHook); P._post.push(this._postHook);
@@ -650,6 +662,15 @@ export class RapierVehicle extends VehicleBody {
       this.wheelContacts[key] = cp ? { x: cp.x, y: cp.y, z: cp.z } : null;
     });
     this.onGround = grounded >= 2;
+    // AIRBORNE FEEL (Ember): world gravity is a snappy 2x real (-20) so grounded
+    // handling + suspension feel tight — but in the AIR that made the car drop
+    // like a rock off ramps (Erik: "fell like it weighed 50k lbs"). Ease the
+    // car's gravity toward real while airborne (more hang time, natural arc);
+    // full snappy gravity the instant it lands. Live-tune: window.__pfAirGrav(k).
+    if (this.rb.setGravityScale) {
+      const airK = this._airGrav ?? 0.5;                 // 0.5 => ~real gravity in air (world is 2x)
+      this.rb.setGravityScale(this.onGround ? 1 : airK, false);
+    }
     // hard-landing signal (m/s of fall absorbed) — crash audio reads this
     this.justLanded = !wasGrounded && this.onGround && prevVy < -4 ? -prevVy : 0;
 
