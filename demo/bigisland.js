@@ -12,6 +12,7 @@ import {
   spawnPedestrians, TrajectoryLean,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health spawner
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -535,6 +536,9 @@ loadCharacter("models/character/humanoid_male.fbx", {
     { name: "rifleIdle", url: "models/character/anims/rifle_idle.fbx" },
     { name: "pistolIdle", url: "models/character/anims/pistol_idle.fbx" },
     { name: "firingRifle", url: "models/character/anims/firing_rifle.fbx" },
+    // get-up from ragdoll (Erik's Mixamo drop) — front = face-down, back = face-up
+    { name: "getupFront", url: "models/character/anims/getup_front.fbx" },
+    { name: "getupBack", url: "models/character/anims/getup_back.fbx" },
   ],
 }).then((ch) => {
   player.mesh(ch.visual).add(ch.animator);
@@ -992,6 +996,28 @@ const { graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISL
     window.__gw = [dump.group, barrel.group];
   }).catch((e) => console.warn("[synty] prop load failed (game continues):", e.message));
 }
+
+// PICKUPS (Ember 2026-07-20) — a SPAWNER, not ground-scatter (Erik): guns/ammo/
+// health at defined points near spawn, each floats + spins + is walk-over-grabbed
+// and grants through the combat seam (window.__pfCombat). Data-driven in
+// src/pickups.js. Defensive: a bad asset or missing seam never breaks the boot.
+{
+  const pp = player.position;
+  mountPickups(
+    { world, loadProp, player, heightAt, phys, physReady },
+    [
+      { type: "pistol", x: pp.x + 6, z: pp.z + 2 },
+      { type: "shotgun", x: pp.x + 9, z: pp.z - 2 },
+      { type: "smg", x: pp.x + 7, z: pp.z + 5 },
+      { type: "rifle", x: pp.x + 12, z: pp.z + 3 },
+      { type: "ammo_small", x: pp.x + 6, z: pp.z - 4 },
+      { type: "ammo_large", x: pp.x + 10, z: pp.z + 6 },
+      { type: "ammo_shells", x: pp.x + 9, z: pp.z + 1 },
+      { type: "health", x: pp.x + 14, z: pp.z - 1 },
+    ],
+  ).catch((e) => console.warn("[pickups] mount failed (game continues):", e.message));
+}
+
 
 // COMBAT (General slice, first pass): equip a weapon + shoot. Ranged raycasts from the
 // camera (crosshair = screen center); hits feed damage into Ember's car lane (entity.damage
