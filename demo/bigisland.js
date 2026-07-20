@@ -480,11 +480,16 @@ const NPC_ANIMS = [
   { name: "walk", url: "models/character/anims/walking.fbx" },
   { name: "run", url: "models/character/anims/running.fbx" },
 ];
-const GW_CHAR = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/gangwarfare", flipY: false, retargetFrom: "models/character/humanoid_male.fbx", animations: NPC_ANIMS };
+// flipY TRUE for these Synty character UVs — false sampled the dark half of the palette
+// atlas and crushed the skin near-black (Erik: "gangsters too black"); see character.js.
+const GW_CHAR = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/gangwarfare", flipY: true, retargetFrom: "models/character/humanoid_male.fbx", animations: NPC_ANIMS };
 spawnPedestrians(world, {
+  // a diverse street crowd, not all dark gang members (Erik): gangsters of a few
+  // ethnicities + civilians (cooks, plainclothes) for skin-tone + outfit variety.
   models: [
     "SK_Chr_GangMember_Male_01", "SK_Chr_GangMember_Male_02", "SK_Chr_GangMember_Female_01",
-    "SK_Chr_GangBoss_01", "SK_Chr_StreetGirl_01", "SK_Chr_British_Gangster_Male_01",
+    "SK_Chr_StreetGirl_01", "SK_Chr_Asian_Gangster_Male_01", "SK_Chr_Italian_Gangster_01",
+    "SK_Chr_Cook_Male_01", "SK_Chr_Cook_Female_01", "SK_Chr_DEA_Plainclothes_Male_01",
   ].map((n) => ({ model: `models/gangwarfare/${n}.FBX`, ...GW_CHAR })),
   heightAt,
   clusters: [
