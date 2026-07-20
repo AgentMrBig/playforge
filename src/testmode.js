@@ -1053,36 +1053,75 @@ export class TestMode {
   }
 
   _buildTimelineUI() {
+    this._tlZoom = 1;
     const s = document.createElement("style");
     s.textContent = `
-      .pf-tl { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 46; width: min(760px, 92vw);
-        background: rgba(16,20,26,.92); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
-        padding: 9px 12px; font: 12px system-ui; color: #dfe6ec; }
+      .pf-tl { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 46; width: min(1080px, 96vw);
+        background: linear-gradient(180deg, rgba(20,25,32,.96), rgba(13,16,21,.97)); border: 1px solid rgba(255,255,255,.14);
+        border-radius: 12px; padding: 8px 10px; font: 12px system-ui; color: #dfe6ec; box-shadow: 0 12px 44px rgba(0,0,0,.55); }
       .pf-tl-row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-      .pf-tl select, .pf-tl input[type=text] { background: #232a33; color: #eef2f6; border: 0; border-radius: 6px; padding: 4px 6px; font: 12px system-ui; }
+      .pf-tl-toolbar { flex-wrap: wrap; }
+      .pf-tl select, .pf-tl input[type=text] { background: #232a33; color: #eef2f6; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 4px 6px; font: 12px system-ui; }
       .pf-tl select option { background: #232a33; color: #eef2f6; }
-      .pf-tl button { border: 0; border-radius: 7px; background: rgba(255,255,255,.1); color: #eef2f6; padding: 5px 9px; cursor: pointer; font: 12px system-ui; }
-      .pf-tl button:hover { background: rgba(90,170,255,.4); }
-      .pf-tl input[type=range] { flex: 1; }
-      .pf-tl-track { position: relative; height: 12px; margin: 1px 2px 2px; }
-      .pf-tl-track i { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%;
-        background: #ffa53b; cursor: pointer; opacity: .65; }
-      .pf-tl-track i.pf-sel-m { opacity: 1; box-shadow: 0 0 0 2px #fff; }
-      .pf-tl-time { min-width: 84px; text-align: right; opacity: .8; }`;
+      .pf-tl button { border: 1px solid rgba(255,255,255,.08); border-radius: 7px; background: rgba(255,255,255,.08); color: #eef2f6; padding: 5px 9px; cursor: pointer; font: 12px system-ui; }
+      .pf-tl button:hover { background: rgba(90,170,255,.35); }
+      .pf-tl button.pf-on { background: rgba(90,170,255,.5); }
+      .pf-tl-sep { width: 1px; height: 18px; background: rgba(255,255,255,.14); margin: 0 3px; }
+      .pf-tl-time { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .85; padding: 0 4px; }
+      .pf-tl-editor { display: flex; margin-top: 4px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; overflow: hidden; background: rgba(0,0,0,.28); }
+      .pf-tl-labels { flex: 0 0 62px; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.03); }
+      .pf-tl-lbl { height: 26px; display: flex; align-items: center; padding-left: 8px; font-size: 11px; opacity: .7; border-bottom: 1px solid rgba(255,255,255,.05); }
+      .pf-tl-lbl.rule { height: 18px; }
+      .pf-tl-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; }
+      .pf-tl-lanes { position: relative; min-width: 100%; }
+      .pf-tl-ruler { position: relative; height: 18px; border-bottom: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.02); cursor: pointer; }
+      .pf-tl-ruler .tk { position: absolute; top: 0; height: 100%; border-left: 1px solid rgba(255,255,255,.13); font-size: 9px; color: #89a; padding-left: 3px; box-sizing: border-box; }
+      .pf-tl-lane { position: relative; height: 26px; border-bottom: 1px solid rgba(255,255,255,.05); cursor: pointer; }
+      .pf-tl-lane:last-of-type { border-bottom: 0; }
+      .pf-tl-clipbar { position: absolute; top: 5px; height: 16px; left: 0; border-radius: 4px; background: linear-gradient(180deg, rgba(90,140,220,.5), rgba(70,110,190,.4)); border: 1px solid rgba(140,180,255,.5); font-size: 10px; line-height: 15px; color: #dfeaff; padding: 0 6px; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
+      .pf-tl-win { position: absolute; top: 15px; height: 8px; background: rgba(255,176,59,.16); border-radius: 4px; pointer-events: none; }
+      .pf-tl-key { position: absolute; top: 13px; width: 12px; height: 12px; margin-left: -6px; background: #ffb03b; border: 1px solid #7a4a00; transform: rotate(45deg); cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+      .pf-tl-key.sel { background: #7fd0ff; border-color: #fff; box-shadow: 0 0 0 2px rgba(127,208,255,.55); }
+      .pf-tl-badge { display: inline-block; margin: 4px 3px 0 5px; padding: 2px 7px; border-radius: 5px; font-size: 10px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); opacity: .45; }
+      .pf-tl-badge.on { opacity: 1; background: rgba(120,220,140,.24); border-color: rgba(120,220,140,.5); }
+      .pf-tl-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #ff5a7a; pointer-events: none; z-index: 5; }
+      .pf-tl-phhead { position: absolute; top: -1px; left: -5px; width: 11px; height: 9px; background: #ff5a7a; border-radius: 2px 2px 0 0; pointer-events: auto; cursor: ew-resize; }`;
     document.head.appendChild(s);
     this.bar = document.createElement("div");
     this.bar.className = "pf-tl"; this.bar.style.display = "none";
     this.bar.innerHTML = `
-      <div class="pf-tl-row">
+      <div class="pf-tl-row pf-tl-toolbar">
         <select class="pf-tl-clip">${this.anims.map((a) => `<option>${a}</option>`).join("")}</select>
         <button data-tl="play">▶ play</button>
-        <button data-tl="marker">+ marker</button>
-        <button data-tl="setpose">📸 set pose</button>
-        <button data-tl="delmarker">✕ marker</button>
+        <button data-tl="frameback" title="step back one frame">⏮</button>
+        <button data-tl="framefwd" title="step forward one frame">⏭</button>
+        <span class="pf-tl-sep"></span>
+        <button data-tl="marker" title="add a pose keyframe at the playhead">✚ key</button>
+        <button data-tl="setpose" title="capture the current pose into the selected key">📸 set pose</button>
+        <button data-tl="delmarker" title="delete the selected key">🗑 key</button>
+        <span class="pf-tl-sep"></span>
+        <button data-tl="zoomout" title="zoom out">➖</button>
+        <button data-tl="zoomfit" title="fit clip to view">fit</button>
+        <button data-tl="zoomin" title="zoom in">➕</button>
         <span class="pf-tl-time">0.00 / 0.00s</span>
       </div>
-      <div class="pf-tl-row"><input type="range" class="pf-tl-scrub" min="0" max="1" step="0.005" value="0"></div>
-      <div class="pf-tl-track"></div>
+      <div class="pf-tl-editor">
+        <div class="pf-tl-labels">
+          <div class="pf-tl-lbl rule"></div>
+          <div class="pf-tl-lbl">Base</div>
+          <div class="pf-tl-lbl">Poses</div>
+          <div class="pf-tl-lbl">Layers</div>
+        </div>
+        <div class="pf-tl-scroll">
+          <div class="pf-tl-lanes">
+            <div class="pf-tl-ruler"></div>
+            <div class="pf-tl-lane pf-lane-base"><div class="pf-tl-clipbar"></div></div>
+            <div class="pf-tl-lane pf-lane-pose"></div>
+            <div class="pf-tl-lane pf-lane-layer"></div>
+            <div class="pf-tl-playhead"><div class="pf-tl-phhead"></div></div>
+          </div>
+        </div>
+      </div>
       <div class="pf-tl-row">
         <input type="text" class="pf-tl-name" placeholder="behavior name" style="flex:1">
         <button data-tl="save">💾 save</button>
@@ -1094,8 +1133,25 @@ export class TestMode {
     const tl = this.timeline;
     const q = (sel) => this.bar.querySelector(sel);
     q(".pf-tl-clip").addEventListener("change", (e) => { tl.setBase(e.target.value); this._tlSync(); });
-    q(".pf-tl-scrub").addEventListener("input", (e) => { tl.pause(); tl.scrub(+e.target.value * tl.duration()); this._tlSync(false); });
-    q('[data-tl="play"]').addEventListener("click", () => { tl.playing ? tl.pause() : tl.play(); });
+    q('[data-tl="play"]').addEventListener("click", () => { tl.playing ? tl.pause() : tl.play(); this._tlSync(false); });
+    q('[data-tl="frameback"]').addEventListener("click", () => { tl.pause(); tl.scrub(tl.time - 1 / 30); this._tlSync(false); });
+    q('[data-tl="framefwd"]').addEventListener("click", () => { tl.pause(); tl.scrub(tl.time + 1 / 30); this._tlSync(false); });
+    q('[data-tl="zoomin"]').addEventListener("click", () => { this._tlZoom = Math.min(8, this._tlZoom * 1.6); this._tlSync(); });
+    q('[data-tl="zoomout"]').addEventListener("click", () => { this._tlZoom = Math.max(1, this._tlZoom / 1.6); this._tlSync(); });
+    q('[data-tl="zoomfit"]').addEventListener("click", () => { this._tlZoom = 1; this._tlSync(); });
+    // scrub by clicking/dragging the ruler, base lane, empty pose lane, or the playhead head
+    const lanesEl = q(".pf-tl-lanes");
+    const timeFromX = (clientX) => { const rect = lanesEl.getBoundingClientRect(); const w = lanesEl.clientWidth || 1; const x = Math.max(0, Math.min(w, clientX - rect.left)); return x / w * (tl.duration() || 1); };
+    const startScrub = (e) => {
+      tl.pause(); tl.scrub(timeFromX(e.clientX)); this._tlSync(false);
+      const mv = (ev) => { tl.scrub(timeFromX(ev.clientX)); this._tlSync(false); };
+      const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+      window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+    };
+    q(".pf-tl-ruler").addEventListener("pointerdown", startScrub);
+    q(".pf-lane-base").addEventListener("pointerdown", startScrub);
+    q(".pf-tl-phhead").addEventListener("pointerdown", (e) => { e.stopPropagation(); startScrub(e); });
+    q(".pf-lane-pose").addEventListener("pointerdown", (e) => { if (!e.target.classList.contains("pf-tl-key")) startScrub(e); });
     q('[data-tl="marker"]').addEventListener("click", () => { tl.addMarker(); this._tlSync(); });
     q('[data-tl="setpose"]').addEventListener("click", () => { q('[data-tl="setpose"]').textContent = tl.capturePoseToMarker() ? "📸 saved!" : "select a marker"; setTimeout(() => q('[data-tl="setpose"]').textContent = "📸 set pose", 900); });
     q('[data-tl="delmarker"]').addEventListener("click", () => { tl.deleteMarker(); this._tlSync(); });
@@ -1124,16 +1180,50 @@ export class TestMode {
     sel.innerHTML = `<option value="">load…</option>` + BehaviorTimeline.list().map((n) => `<option>${n}</option>`).join("");
   }
 
-  /** refresh the bar from timeline state; full=true also rebuilds marker dots */
+  /** refresh the dope-sheet from timeline state; full=true also rebuilds ruler + keys */
   _tlSync(full = true) {
     const tl = this.timeline; if (!tl || !this.bar) return;
     const dur = tl.duration() || 1;
+    const lanes = this.bar.querySelector(".pf-tl-lanes");
+    const scroll = this.bar.querySelector(".pf-tl-scroll");
+    const w = Math.max(scroll.clientWidth || 600, Math.round((scroll.clientWidth || 600) * this._tlZoom));
+    lanes.style.width = w + "px";
+    const pxs = w / dur;                                   // pixels per second
     this.bar.querySelector(".pf-tl-time").textContent = `${tl.time.toFixed(2)} / ${dur.toFixed(2)}s`;
-    if (!this._scrubbing) this.bar.querySelector(".pf-tl-scrub").value = String(tl.time / dur);
-    this.bar.querySelector('[data-tl="play"]').textContent = tl.playing ? "⏸ pause" : "▶ play";
+    const playBtn = this.bar.querySelector('[data-tl="play"]');
+    playBtn.textContent = tl.playing ? "⏸ pause" : "▶ play"; playBtn.classList.toggle("pf-on", tl.playing);
+    this.bar.querySelector(".pf-tl-playhead").style.left = (tl.time * pxs).toFixed(1) + "px";
     if (!full) return;
-    const track = this.bar.querySelector(".pf-tl-track");
-    track.innerHTML = tl.markers.map((m, i) => `<i style="left:${(m.t / dur * 100).toFixed(1)}%" data-mi="${i}" class="${i === tl.selected ? "pf-sel-m" : ""}"></i>`).join("");
-    track.querySelectorAll("i").forEach((dot) => dot.addEventListener("click", () => { tl.selected = +dot.dataset.mi; tl.pause(); tl.scrub(tl.markers[tl.selected].t); this._tlSync(); }));
+    // ruler ticks — choose a step that keeps ~≤12 labels
+    const ruler = this.bar.querySelector(".pf-tl-ruler");
+    const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10]; let step = 1;
+    for (const st of steps) { if (dur / st <= 12) { step = st; break; } }
+    let rk = ""; for (let t = 0; t <= dur + 1e-4; t += step) rk += `<div class="tk" style="left:${(t * pxs).toFixed(1)}px">${t.toFixed(step < 1 ? 1 : 0)}</div>`;
+    ruler.innerHTML = rk;
+    // base clip span (+ keep the clip dropdown in sync, e.g. after loading a behavior)
+    if (tl.base) this.bar.querySelector(".pf-tl-clip").value = tl.base;
+    const cb = this.bar.querySelector(".pf-tl-clipbar");
+    cb.style.width = w + "px"; cb.textContent = tl.base || "(no clip)";
+    // pose keyframes + their blend windows (diamonds draggable to retime)
+    const lane = this.bar.querySelector(".pf-lane-pose");
+    lane.innerHTML = tl.markers.map((m, i) => {
+      const x = m.t * pxs, ww = (m.window || 0) * pxs;
+      return `<div class="pf-tl-win" style="left:${(x - ww / 2).toFixed(1)}px;width:${ww.toFixed(1)}px"></div>`
+        + `<div class="pf-tl-key ${i === tl.selected ? "sel" : ""}" data-mi="${i}" style="left:${x.toFixed(1)}px"></div>`;
+    }).join("");
+    lane.querySelectorAll(".pf-tl-key").forEach((k) => {
+      k.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        const m = tl.markers[+k.dataset.mi]; tl.selected = +k.dataset.mi; tl.pause(); tl.scrub(m.t); this._tlSync();
+        const rect = lanes.getBoundingClientRect(), lw = lanes.clientWidth || 1;
+        const mv = (ev) => { const t = Math.max(0, Math.min(dur, (ev.clientX - rect.left) / lw * dur)); m.t = t; tl.scrub(t); this._tlSync(); };
+        const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); tl.markers.sort((a, b) => a.t - b.t); tl.selected = tl.markers.indexOf(m); this._tlSync(); };
+        window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+      });
+    });
+    // layer indicators — which authoring layers are contributing to the pose
+    const welds = tl.welds && Object.keys(tl.welds).length;
+    this.bar.querySelector(".pf-lane-layer").innerHTML =
+      `<span class="pf-tl-badge ${welds ? "on" : ""}">🔗 weld</span><span class="pf-tl-badge">🎯 aim</span><span class="pf-tl-badge">🦶 foot</span>`;
   }
 }
