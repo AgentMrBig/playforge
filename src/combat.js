@@ -73,6 +73,12 @@ export class CombatSystem {
     this.onHitCar = onHitCar || (() => {}); this.effect = effect || (() => {}); this.sound = sound || (() => {});
     this.idx = 0; this.weaponId = WEAPON_ORDER[0]; this.weapon = WEAPONS[this.weaponId];
     this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0; this._model = null; this.enabled = true;
+    // INVENTORY + typed ammo reserves — Ember's pickups grant through give()/addAmmo().
+    // owned = weapons you have (seeded with ALL today so nothing changes; flip to a starter
+    // set when we want pickups to gate weapon access). reserve = spare rounds by ammo type.
+    this.owned = new Set(WEAPON_ORDER);
+    this.reserve = { small: 0, large: 0, shells: 0 };
+    this._ammoType = { pistol: "small", smg: "small", machinegun: "small", shotgun: "shells", rifle: "large" };
     // grip = how the weapon sits in the hand. PER-WEAPON, persisted: the test tool's grip
     // editor nudges it live and 📸 CAPTURE saves to localStorage (pf.grip.<id>) — "locked in
     // until changed via our testing tool" (Erik). DEFAULT_GRIP is the verified baseline.
@@ -87,7 +93,10 @@ export class CombatSystem {
 
   async equip(id) {
     if (!WEAPONS[id]) return;
-    this.weaponId = id; this.weapon = WEAPONS[id]; this.ammo = this.weapon.ammo ?? Infinity; this._cool = 0;
+    this.weaponId = id; this.weapon = WEAPONS[id]; this._cool = 0;
+    this.ammo = this.weapon.ammo ?? Infinity;
+    const _at = this._ammoType?.[id];                    // pull banked spare ammo into the mag
+    if (_at && this.reserve?.[_at] > 0 && Number.isFinite(this.ammo)) { this.ammo += this.reserve[_at]; this.reserve[_at] = 0; }
     this.hold = this._loadGrip(id);              // per-weapon grip (captured via the test tool)
     if (this.loadProp && this.player?.object3d) {
       try {
@@ -156,7 +165,29 @@ export class CombatSystem {
     try { localStorage.removeItem(this._gripKey(this.weaponId)); } catch {}
     this.hold = this._loadGrip(this.weaponId); this.setHold(this.hold.pos, this.hold.rot);
   }
-  cycle(dir = 1) { this.idx = (this.idx + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length; return this.equip(WEAPON_ORDER[this.idx]); }
+  /** ── PICKUP GRANT SEAM (Ember's pickups call these) ── */
+  give(id, ammo = 0) {                                   // unlock a weapon + arm it + bank starter ammo
+    if (!WEAPONS[id]) return false;
+    this.owned.add(id);
+    const at = this._ammoType[id];
+    if (at) this.reserve[at] = (this.reserve[at] || 0) + ammo;
+    this.equip(id);                                       // equip pulls the reserve → you're armed
+    return true;
+  }
+  addAmmo(type, n) {                                      // typed reserve top-up (small/large/shells)
+    if (!(type in this.reserve)) this.reserve[type] = 0;
+    if (this._ammoType[this.weaponId] === type && Number.isFinite(this.ammo)) this.ammo += n;  // held gun matches → top up now
+    else this.reserve[type] += n;                         // else bank it until you equip that type
+    return true;
+  }
+  cycle(dir = 1) {                                        // cycle only weapons you OWN
+    const list = WEAPON_ORDER.filter((w) => this.owned.has(w));
+    if (!list.length) return;
+    let i = list.indexOf(this.weaponId); if (i < 0) i = 0;
+    i = (i + dir + list.length) % list.length;
+    this.idx = WEAPON_ORDER.indexOf(list[i]);
+    return this.equip(list[i]);
+  }
 
   update(dt) {
     this._updateFX(dt);                 // FX fade runs even while driving/disabled
