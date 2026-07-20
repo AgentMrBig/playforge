@@ -100,6 +100,7 @@ export class TestMode {
     this.panel.style.display = on ? "block" : "none";   // "block" exactly — DayNight's auto-freeze checks it
     if (this.poseLib) { this.poseLib.style.display = on ? "" : "none"; if (on) this._refreshPoseLib(); }
     this.btn.classList.toggle("pf-on", on);
+    if (!on && this._muscleOn) this.toggleMuscle(false);   // leaving test mode ends muscle mode
     if (!on) this.anim = null;                       // hand animation back to the game
   }
 
@@ -519,6 +520,9 @@ export class TestMode {
       }
       if (ptr.wheel) this.dist = Math.max(1.4, Math.min(14, this.dist + ptr.wheel * 0.5));
     }
+    // 🫀 MUSCLE MODE owns the skeleton — physics drives every bone, so skip all the pose/
+    // IK/rig/sticky/weld editing below and just fly the camera to watch it react.
+    if (window.__rag && window.__rag.muscle) { this._placeCamera(p); return; }
     // control rig: keep handles glued to bones; route drags on hips/chest/head
     // ring-edit tweaks survive a PLAYING clip: the mixer just stamped the clip pose,
     // re-apply the accumulated offsets on top (paused = the direct edit already sticks)
@@ -636,6 +640,11 @@ export class TestMode {
       }
     }
 
+    this._placeCamera(p);
+  }
+
+  /** orbit-camera positioning from yaw/pitch/dist/pan around the character */
+  _placeCamera(p) {
     const cam = this.world.camera;
     const cy = Math.cos(this.pitch), h = 1.05;
     const fx = p.x + this.pan.x, fy = p.y + h + this.pan.y, fz = p.z + this.pan.z;
@@ -644,6 +653,29 @@ export class TestMode {
       fy + Math.sin(this.pitch) * this.dist,
       fz + Math.cos(this.yaw) * cy * this.dist);
     cam.lookAt(fx, fy, fz);
+  }
+
+  /** 🫀 MUSCLE MODE (our Euphoria layer): the character becomes a physically-simulated,
+   * muscle-driven body that tracks the animation and reacts to shoves, then recovers.
+   * Toggling on enters the active ragdoll with the hips anchored; the stiffness slider is
+   * the muscle tension; 👊 shove pokes it. Off hands the skeleton back to the animator. */
+  toggleMuscle(on = !this._muscleOn) {
+    const rag = window.__rag;
+    if (!rag) return;
+    this._muscleOn = on;
+    if (on) { this.setPaused(false); rag.enterMuscle(this._muscleTone || 8); }
+    else rag.exitMuscle();
+    this.panel.querySelector('[data-act="muscle"]')?.classList.toggle("pf-sel", on);
+  }
+  setMuscleTone(v) {
+    this._muscleTone = v;
+    if (window.__rag) window.__rag.tone = v;
+    const el = this.panel?.querySelector(".pf-musc-val"); if (el) el.textContent = v.toFixed(1);
+  }
+  shoveTest(mag = 7) {
+    const rag = window.__rag; if (!rag || !rag.muscle) return;
+    const a = Math.random() * Math.PI * 2;
+    rag.shove({ x: Math.cos(a), y: 0.2, z: Math.sin(a) }, mag);
   }
 
   _buildUI() {
@@ -768,6 +800,17 @@ export class TestMode {
         <div class="pf-grp-h">🎞 Timeline</div>
         <div class="pf-grp-b"><button data-act="timeline">🎞 timeline (NLA)</button></div>
       </div>
+      <div class="pf-grp pf-collapsed" data-grp="muscle">
+        <div class="pf-grp-h">🫀 Muscle</div>
+        <div class="pf-grp-b">
+          <button data-act="muscle" title="become a physically-simulated, muscle-driven body that tracks the animation and reacts to shoves">🫀 muscle mode</button>
+          <div class="pf-grip-row"><span>tone</span>
+            <input type="range" class="pf-musc-slider" min="0" max="16" step="0.5" value="8" style="flex:1">
+            <b class="pf-musc-val" style="flex:0 0 26px; cursor:default">8.0</b></div>
+          <button data-act="shove">👊 shove</button>
+          <div class="pf-test-hint" style="margin-top:4px">high tone = tracks the clip &amp; recovers · low = goes limp. our Euphoria, layer 1.</div>
+        </div>
+      </div>
       <div class="pf-grp pf-collapsed" data-grp="physics">
         <div class="pf-grp-h">💥 Physics</div>
         <div class="pf-grp-b"><button data-act="ragdoll">💥 ragdoll (B)</button></div>
@@ -792,6 +835,9 @@ export class TestMode {
     this.panel.querySelector('[data-act="weld"]').addEventListener("click", () => this.toggleWeld());
     this.panel.querySelector('[data-act="stickyfeet"]').addEventListener("click", () => this.setSticky("foot"));
     this.panel.querySelector('[data-act="stickyhands"]').addEventListener("click", () => this.setSticky("hand"));
+    this.panel.querySelector('[data-act="muscle"]').addEventListener("click", () => this.toggleMuscle());
+    this.panel.querySelector('[data-act="shove"]').addEventListener("click", () => this.shoveTest());
+    this.panel.querySelector(".pf-musc-slider").addEventListener("input", (e) => this.setMuscleTone(+e.target.value));
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;
       if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];

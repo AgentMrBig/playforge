@@ -437,10 +437,15 @@ loadCharacter("models/character/humanoid_male.fbx", {
     const rag = new Ragdoll(ch.bones, phys, { tone: 1.6 });
     window.__rag = rag;
     const cb = () => player.components.find((c) => c.ctrl && c.velocity);
+    let wasMuscle = false;   // 🫀 muscle mode (Euphoria layer): re-enable the capsule on exit
     player.add({
       fixedUpdate(dt) {
         if (rag.active) {
           rag.fixedUpdate(dt);
+          // 🫀 muscle mode = a LIVE authoring layer, not death: physics drives the bones,
+          // but skip the follow/settle/stand-up recovery (the hips are anchored to the
+          // animation). Disable the capsule so it can't fight the ragdoll bodies.
+          if (rag.muscle) { cb()?.setEnabled(false); return; }
           // camera + world logic follow the flying body
           const p = rag.pelvisPos();
           player.position.set(p.x, p.y - 0.9, p.z);
@@ -485,7 +490,11 @@ loadCharacter("models/character/humanoid_male.fbx", {
           break;
         }
       },
-      update() { rag.update(); },                             // physics → bones
+      update() {
+        rag.update();                                         // physics → bones
+        if (wasMuscle && !rag.muscle) { cb()?.setEnabled(true); wasMuscle = false; }   // muscle ended → capsule back
+        if (rag.muscle) wasMuscle = true;
+      },
     });
   });
 }).catch((e) => console.warn("character:", e.message));

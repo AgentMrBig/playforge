@@ -204,9 +204,50 @@ export class Ragdoll {
     }
   }
 
+  /** ═══ MUSCLE MODE (our Euphoria, Layer 3) ═══
+   * The same active-ragdoll physics + PD muscles, but a LIVE authoring layer instead of a
+   * death state: the pelvis is anchored to the animated body (puppet-strings) so it stays
+   * upright, while every other segment simulates and PD-tracks the animation. Shove it and
+   * the limbs deflect then spring back — physically-reactive animation. tone = muscle tension
+   * (high → tracks the clip and recovers; low → limp). Additive over enter/exit/fixedUpdate. */
+  enterMuscle(tone = this.tone) {
+    this.tone = tone;
+    this.enter();                                   // build + activate at the current pose
+    this.muscle = true;
+    const root = this._byName.pelvis || this._byName.chest;
+    if (root) {
+      root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true);   // hips ride the animation
+      this._anchorSeg = root;
+    }
+    return true;
+  }
+  exitMuscle() {
+    if (this._anchorSeg) this._anchorSeg.body.setBodyType?.(R.RigidBodyType.Dynamic, true);
+    this.muscle = false; this._anchorSeg = null;
+    this.exit();
+  }
+  /** pin the anchored pelvis body to the animated bone each fixed step (kinematic follow) */
+  _anchorStep() {
+    const s = this._anchorSeg; if (!s) return;
+    s.bone.updateWorldMatrix(true, false);
+    const bodyQ = s.bone.getWorldQuaternion(this._tmp.q1).multiply(s.qOff.clone().invert());
+    const mid = s.bone.getWorldPosition(this._tmp.v1).sub(s.pOff.clone().applyQuaternion(bodyQ));
+    s.body.setNextKinematicTranslation({ x: mid.x, y: mid.y, z: mid.z });
+    s.body.setNextKinematicRotation({ x: bodyQ.x, y: bodyQ.y, z: bodyQ.z, w: bodyQ.w });
+  }
+  /** 👊 shove a segment (default chest) with an impulse in a world direction — the test poke */
+  shove(dir, mag = 6, segName = "chest") {
+    const s = this._byName[segName] || this._byName.chest; if (!s || !this.active) return;
+    const n = new THREE.Vector3(dir.x || 0, dir.y || 0, dir.z || 0);
+    if (n.lengthSq()) n.normalize(); else n.set(1, 0.15, 0);
+    n.multiplyScalar(mag * s.body.mass());
+    s.body.applyImpulse({ x: n.x, y: n.y, z: n.z }, true);
+  }
+
   /** per fixed step: capture animation targets + apply PD muscle torques */
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
+    if (this.muscle) this._anchorStep();            // keep the hips on the animated body
     const T = this._tmp;
     for (const s of this.segments) {
       // target = where the ANIMATION wants this bone (the Animator keeps
