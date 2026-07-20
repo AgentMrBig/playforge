@@ -196,9 +196,9 @@ function mergeGroupGeo(groupObj) {
 }
 (async () => {
   try {
-    const GW = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/wasteland", textureFlipY: true };
+    const GW = { texture: "T_PolygonApocalypseWasteland_01_A.PNG", textureDir: "models/wasteland", textureFlipY: true };   // real Wasteland atlas now (was GW stopgap)
     const treeFiles = ["SM_Env_Tree_Dead_01", "SM_Env_Tree_Dead_02", "SM_Env_Tree_Mutant_01", "SM_Env_Tree_Palm_01"];
-    const rockFiles = ["SM_Env_Rock_03", "SM_Env_Rock_05"];
+    const rockFiles = ["SM_Env_Rock_03", "SM_Env_Rock_01"];
     const trees = [], rocks = [];
     for (const f of treeFiles) {
       const r = await loadProp(`models/wasteland/${f}.FBX`, GW).catch(() => null);
