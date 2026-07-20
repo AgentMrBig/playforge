@@ -17,6 +17,7 @@ export { Animator, buildHumanoid } from "./animation.js";
 export { loadCharacter, CharacterController } from "./character.js";
 export { spawnPedestrians, Pedestrian } from "./npc.js";
 export { CharacterAim } from "./charanim.js";
+export { TrajectoryLean } from "./charlean.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { generateRoads, RoadGraph } from "./roadgen.js";

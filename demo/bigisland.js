@@ -9,7 +9,7 @@ import {
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
   CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers, MotionRecorder,
-  spawnPedestrians,
+  spawnPedestrians, TrajectoryLean,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -115,8 +115,12 @@ const SAND = new THREE.Color(0xd9c58a), GRASS = new THREE.Color(0x4c8a45);
 const DRY = new THREE.Color(0x7a9b4e), ROCK = new THREE.Color(0x7b7671);
 const SNOW = new THREE.Color(0xf2f4f7), PAVE = new THREE.Color(0x9a978f);
 const TARMAC = new THREE.Color(0x34383e);
+const ROAD = new THREE.Color(0x3b3f46);            // asphalt baked INTO the ground surface
 function colorAt(x, z, h, slope, out) {
   if (inRunway(x, z, 1)) { out.copy(TARMAC); return; }
+  // roads are PART OF THE MAP — painted onto the terrain surface (follows every
+  // bump, zero float) instead of a lifted mesh that tires clipped through (Erik).
+  if (roadGraph && roadGraph.isRoad(x, z)) { out.copy(ROAD); return; }
   for (const s of settlements) {
     if (Math.hypot(x - s.x, z - s.z) < s.r) { out.copy(PAVE); return; }
   }
@@ -546,6 +550,11 @@ loadCharacter("models/character/humanoid_male.fbx", {
     isCrouch: () => engine.input.down("ControlLeft") || engine.input.down("KeyC"),
   }));
 
+  // TRAJECTORY LEAN (General, RDR2 weight pass Step 3): lean the spine into the
+  // capsule's acceleration — tip into a run, pitch back on a hard stop, bank into
+  // turns. Pure procedural over the clip; live-tune at window.__pfLean.p (Erik drives).
+  player.add(new TrajectoryLean(ch.bones, () => player.components.find((c) => c.velocity && c.onGround !== undefined)));
+
   // FOOT PLANTING (General): standing idle, the feet LOCK to the ground while the body
   // sways above (Erik: "the feet would actually stay planted"). Own entity spawned after
   // the player so it runs AFTER the animator each frame; releases on real steps.
@@ -948,10 +957,11 @@ world.spawn("minimap").add({ update() {
 // ROAD NETWORK (General slice): procedural roads wiring the settlements + runway spur,
 // laid on the terrain through Ninja's RoadNetwork; RoadGraph exposed on __pf so traffic
 // AI (Ember) can snap + follow lanes. Routes dodge water/steep ground (see roadgen.js).
-const roadNet = new RoadNetwork({ ground: heightAt });
-const { roads: _roadLayout, graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
-_roadLayout.forEach((r) => roadNet.addRoad(r.points, { width: r.width }));
-world.spawn("roads").add(roadNet);
+const { graph: roadGraph } = generateRoads({ settlements, heightAt, islandR: ISLAND_R, sea: SEA, runway: RUN });
+// roads are BAKED into the terrain surface (colorAt → roadGraph.isRoad) so they
+// follow every bump with ZERO float — the old lifted RoadNetwork ribbon sat proud
+// of the ground and tires clipped through it (Erik 2026-07-20). The graph still
+// drives decoration-skip (onRoad) + traffic AI. Markings return as a flush pass.
 
 // TOWN CENTER — REMOVED (Erik 2026-07-20): the old fabpack Demonstration.fbx town was the
 // "leftover junk" + "strange ground textures" (scrambled MAIN ST / COLOR ME street decals).
