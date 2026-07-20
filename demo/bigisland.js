@@ -172,6 +172,46 @@ const GRASS_MAT = new THREE.MeshStandardMaterial({
 });
 GRASS_MAT._shared = true;
 
+// ── SYNTY ENVIRONMENT (Erik: replace our trees/rocks with Synty's, keep grass) ──
+// Load a few PolygonApocalypseWasteland trees + rocks ONCE, merge each into a single
+// instanceable geometry sharing the pack atlas, then the forest scatter uses them instead
+// of the old cone/cylinder trees. (Stopgap atlas = GangWarfare until the Wasteland atlas
+// is exported — Synty share a palette so the trees read right; rocks a touch warm.)
+let SYNTY_TREES = null, SYNTY_ROCKS = null, SYNTY_ENV_MAT = null;
+function mergeGroupGeo(groupObj) {
+  groupObj.updateMatrixWorld(true);
+  const geos = [];
+  groupObj.traverse((o) => {
+    if (!o.isMesh || !o.geometry) return;
+    const g = o.geometry.clone();
+    // keep only the attributes every mesh shares so mergeGeometries never throws
+    for (const a of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(a)) g.deleteAttribute(a);
+    if (!g.attributes.uv && g.attributes.position) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (g.index) g.toNonIndexed && (g.index = null);   // normalize to non-indexed for a clean merge
+    g.applyMatrix4(o.matrixWorld);
+    geos.push(g);
+  });
+  return geos.length ? mergeGeometries(geos.map((g) => g.index ? g.toNonIndexed() : g), false) : null;
+}
+(async () => {
+  try {
+    const GW = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/wasteland", textureFlipY: true };
+    const treeFiles = ["SM_Env_Tree_Dead_01", "SM_Env_Tree_Dead_02", "SM_Env_Tree_Mutant_01", "SM_Env_Tree_Palm_01"];
+    const rockFiles = ["SM_Env_Rock_03", "SM_Env_Rock_05"];
+    const trees = [], rocks = [];
+    for (const f of treeFiles) {
+      const r = await loadProp(`models/wasteland/${f}.FBX`, GW).catch(() => null);
+      if (r) { const g = mergeGroupGeo(r.group); if (g) { trees.push(g); if (!SYNTY_ENV_MAT) { r.group.traverse((o) => { if (o.isMesh && !SYNTY_ENV_MAT) SYNTY_ENV_MAT = Array.isArray(o.material) ? o.material[0] : o.material; }); } } }
+    }
+    for (const f of rockFiles) { const r = await loadProp(`models/wasteland/${f}.FBX`, GW).catch(() => null); if (r) { const g = mergeGroupGeo(r.group); if (g) rocks.push(g); } }
+    if (SYNTY_ENV_MAT) SYNTY_ENV_MAT._shared = true;
+    SYNTY_TREES = trees.length ? trees : null;
+    SYNTY_ROCKS = rocks.length ? rocks : null;
+    console.log(`[synty env] ${trees.length} trees, ${rocks.length} rocks ready`);
+  } catch (e) { console.warn("[synty env] load failed (trees fall back to none):", e.message); }
+})();
+
 function decorate(tile, group) {
   const { x0, z0, size } = tile;
   const r = mulberry((seed ^ (tile.ix * 668265263) ^ (tile.iz * 374761393)) >>> 0);
@@ -189,18 +229,41 @@ function decorate(tile, group) {
       if (settlements.some((s) => Math.hypot(x - s.x, z - s.z) < s.r * 1.15)) continue;
       spots.push([x, h, z, 0.7 + r() * 0.9]);
     }
-    if (spots.length) {
-      const crowns = new THREE.InstancedMesh(TREE_GEO, TREE_MAT, spots.length);
-      const trunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MAT, spots.length);
-      const m = new THREE.Matrix4(), s3 = new THREE.Vector3();
-      spots.forEach(([x, h, z, sc], i) => {
-        m.identity().setPosition(x, h + 2.6 * sc, z); m.scale(s3.set(sc, sc, sc));
-        crowns.setMatrixAt(i, m);
-        m.identity().setPosition(x, h + 0.7 * sc, z); m.scale(s3.set(sc, sc, sc));
-        trunks.setMatrixAt(i, m);
-        tile.physBoxes.push({ half: [0.35 * sc, 2.2 * sc, 0.35 * sc], center: [x, h + 2.2 * sc, z] });
+    if (spots.length && SYNTY_TREES) {
+      // Synty trees: group the spots by tree variant, one InstancedMesh per variant.
+      // loadProp already scaled to meters (~9m trees); base pivot sits on the ground.
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+      const pos = new THREE.Vector3(), scl = new THREE.Vector3();
+      const byVar = SYNTY_TREES.map(() => []);
+      spots.forEach((sp) => { byVar[(Math.abs(sp[0] * 13 + sp[2] * 7) | 0) % SYNTY_TREES.length].push(sp); });
+      byVar.forEach((list, vi) => {
+        if (!list.length) return;
+        const im = new THREE.InstancedMesh(SYNTY_TREES[vi], SYNTY_ENV_MAT, list.length);
+        list.forEach(([x, h, z, sc], i) => {
+          const s = 0.45 * sc;                                  // ~9m mesh → 3-6m trees
+          q.setFromAxisAngle(up, (x * 3 + z) % (Math.PI * 2));
+          m.compose(pos.set(x, h, z), q, scl.set(s, s, s));
+          im.setMatrixAt(i, m);
+          tile.physBoxes.push({ half: [0.3, 2.4 * sc, 0.3], center: [x, h + 2.4 * sc, z] });
+        });
+        group.add(im);
       });
-      group.add(crowns, trunks);
+    }
+    // sparse Synty rocks on the same forest tiles
+    if (spots.length && SYNTY_ROCKS) {
+      const rockSpots = spots.filter((_, i) => i % 9 === 0);
+      if (rockSpots.length) {
+        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+        const pos = new THREE.Vector3(), scl = new THREE.Vector3();
+        const im = new THREE.InstancedMesh(SYNTY_ROCKS[(tile.ix + tile.iz) % SYNTY_ROCKS.length], SYNTY_ENV_MAT, rockSpots.length);
+        rockSpots.forEach(([x, h, z, sc], i) => {
+          const s = 0.5 * sc;
+          q.setFromAxisAngle(up, (x + z * 2) % (Math.PI * 2));
+          m.compose(pos.set(x, h, z), q, scl.set(s, s, s));
+          im.setMatrixAt(i, m);
+        });
+        group.add(im);
+      }
     }
   }
 
