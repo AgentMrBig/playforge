@@ -15,7 +15,7 @@ import * as THREE from "three";
  * Pair with RoadEditor for click-to-place authoring.
  */
 export class RoadNetwork {
-  constructor({ ground = () => 0, lift = 0.08, segPerNode = 28,
+  constructor({ ground = () => 0, lift = 0.02, segPerNode = 28,
                 texUrl = "textures/T_Road_Clean_01.png", tileLen = 20 } = {}) {
     this.ground = ground;
     this.lift = lift;
