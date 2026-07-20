@@ -69,7 +69,7 @@ export class TestMode {
       if (e.button === 1) { this._mmb = true; if (this.active) e.preventDefault(); }
       // drags that START on UI (timeline scrubber, panels, buttons) must never orbit or
       // move limbs (Erik: "can't control the time slider — my mouse still rotates the camera")
-      this._uiDrag = !!(e.target && e.target.closest && e.target.closest(".pf-tl, .pf-test-panel, .pf-test-btn, .pf-touch, button, input, select"));
+      this._uiDrag = !!(e.target && e.target.closest && e.target.closest(".pf-tl, .pf-test-panel, .pf-poselib, .pf-test-btn, .pf-touch, button, input, select"));
       // limb drag with the rig hidden (panel-selected limb) still needs an undo snapshot
       if (this.active && e.button === 0 && !this._uiDrag && this.limb && !(this.rig && this.rig.visible)) this.pushUndo();
     }, true);
@@ -98,6 +98,7 @@ export class TestMode {
     this.active = on;
     if (on) this.pan.set(0, 0, 0);                   // start each session centered
     this.panel.style.display = on ? "block" : "none";   // "block" exactly — DayNight's auto-freeze checks it
+    if (this.poseLib) { this.poseLib.style.display = on ? "" : "none"; if (on) this._refreshPoseLib(); }
     this.btn.classList.toggle("pf-on", on);
     if (!on) this.anim = null;                       // hand animation back to the game
   }
@@ -317,16 +318,36 @@ export class TestMode {
   }
 
   /** 📸 capture the full skeleton pose (persists + logs JSON to bake in) */
-  capturePose() {
+  capturePose(name) {
     let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
     if (!skel) return null;
     const pose = {};
     for (const b of skel.bones) pose[b.name] = b.quaternion.toArray().map((v) => +v.toFixed(4));
-    const name = `pose_${Date.now() % 100000}`;
+    name = name || `pose_${Date.now() % 100000}`;
     try { localStorage.setItem(`pf.pose.${name}`, JSON.stringify(pose)); } catch {}
     console.log(`[pose captured: ${name}]`, JSON.stringify(pose));
+    this._refreshPoseLib();
     return name;
   }
+
+  /** 📁 saved-pose library (Erik: left-side panel of saved poses) */
+  _listPoses() {
+    const out = [];
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("pf.pose.")) out.push(k.slice(8)); } } catch {}
+    return out.sort();
+  }
+  applyPose(name) {
+    let data = null; try { data = JSON.parse(localStorage.getItem(`pf.pose.${name}`) || "null"); } catch {}
+    if (!data) return false;
+    let skel = null; this.player?.object3d?.traverse((o) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
+    if (!skel) return false;
+    this.pushUndo();
+    this.rotOffsets.clear();                       // a recalled pose replaces live tweaks
+    for (const b of skel.bones) { const q = data[b.name]; if (q) b.quaternion.fromArray(q); }
+    this.setPaused(true);                          // hold it (a playing clip would stamp over it)
+    return true;
+  }
+  deletePose(name) { try { localStorage.removeItem(`pf.pose.${name}`); } catch {} this._refreshPoseLib(); }
 
   /** 🎛 control rig: clickable handles on the body (hands/feet = IK, hips = translate,
    * chest/head = rotate). Click a handle to grab it; click empty space to orbit/release. */
@@ -659,7 +680,30 @@ export class TestMode {
         .pf-grip-row b { flex: 1; text-align: center; padding: 5px 0; border-radius: 6px; font-weight: 600;
           background: rgba(255,255,255,.08); cursor: pointer; font-size: 10.5px; user-select: none; }
         .pf-grip-row b:hover { background: rgba(90,170,255,.4); }
-        .pf-grip-vals { font-size: 9.5px; opacity: .7; margin: 4px 0 5px; word-break: break-all; line-height: 1.4; }`;
+        .pf-grip-vals { font-size: 9.5px; opacity: .7; margin: 4px 0 5px; word-break: break-all; line-height: 1.4; }
+        /* 📁 left-side saved-pose library (Erik) */
+        .pf-poselib { position: fixed; left: 16px; top: 120px; z-index: 45; width: 194px;
+          background: rgba(16,20,26,.88); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
+          padding: 9px; font: 12px system-ui; color: #dfe6ec; box-sizing: border-box; max-height: calc(100vh - 140px); overflow-y: auto; }
+        .pf-poselib::-webkit-scrollbar { width: 7px; }
+        .pf-poselib::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 4px; }
+        .pf-pl-h { margin: 6px 0 6px; font: 700 11px system-ui; letter-spacing: .5px; opacity: .7; text-transform: uppercase; }
+        .pf-pl-h:first-child { margin-top: 0; }
+        .pf-pl-row { display: flex; gap: 4px; margin-bottom: 7px; }
+        .pf-pl-name { flex: 1; min-width: 0; background: #232a33; color: #eef2f6; border: 0; border-radius: 6px; padding: 6px 7px; font: 12px system-ui; }
+        .pf-pl-save { flex: 0 0 auto; background: rgba(60,160,255,.45); border: 0; border-radius: 6px; color: #fff; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+        .pf-pl-save:hover { background: rgba(60,160,255,.7); }
+        .pf-pl-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 4px; }
+        .pf-pl-item { display: flex; align-items: center; gap: 4px; }
+        .pf-pl-apply { flex: 1; min-width: 0; background: rgba(255,255,255,.08); border-radius: 6px; padding: 6px 8px; cursor: pointer;
+          font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pf-pl-apply:hover { background: rgba(90,170,255,.45); }
+        .pf-pl-del { flex: 0 0 auto; background: rgba(255,90,90,.22); border: 0; border-radius: 6px; color: #fff; padding: 6px 8px; cursor: pointer; font-size: 11px; }
+        .pf-pl-del:hover { background: rgba(255,90,90,.6); }
+        .pf-pl-empty { opacity: .45; font-size: 10.5px; padding: 3px 2px 6px; }
+        .pf-pl-tools button { display: block; width: 100%; margin: 3px 0; padding: 6px 9px; text-align: left;
+          border: 0; border-radius: 6px; background: rgba(255,255,255,.08); color: #eef2f6; font: 11.5px system-ui; cursor: pointer; }
+        .pf-pl-tools button:hover { background: rgba(255,255,255,.16); }`;
       document.head.appendChild(s);
     }
     this.btn = document.createElement("button");
@@ -731,6 +775,7 @@ export class TestMode {
       <div class="pf-test-hint">🖱️ LMB = orbit · RMB = pan · MMB = orbit<br>wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
     this.panel.addEventListener("pointerdown", (e) => e.stopPropagation());   // panel clicks don't orbit
+    this._buildPoseLib();
     // group headers toggle their own section open/closed
     this.panel.querySelectorAll(".pf-grp-h").forEach((h) =>
       h.addEventListener("click", () => h.parentElement.classList.toggle("pf-collapsed")));
@@ -785,6 +830,51 @@ export class TestMode {
   _gripReadout(note) {
     const el = this.panel?.querySelector(".pf-grip-vals"); const cs = window.__pfCombat;
     if (el && cs) el.textContent = `${cs.weaponId}: p[${cs.hold.pos.map((v) => v.toFixed(2)).join(",")}] r[${cs.hold.rot.map((v) => v.toFixed(2)).join(",")}]${note ? " · " + note : ""}`;
+  }
+
+  /** 📁 left-side saved-pose library + quick tools (Erik) */
+  _buildPoseLib() {
+    this.poseLib = document.createElement("div");
+    this.poseLib.className = "pf-poselib"; this.poseLib.style.display = "none";
+    this.poseLib.innerHTML = `
+      <div class="pf-pl-h">📁 saved poses</div>
+      <div class="pf-pl-row"><input class="pf-pl-name" placeholder="name this pose" maxlength="24"><button class="pf-pl-save" title="save the current pose">💾</button></div>
+      <div class="pf-pl-list"></div>
+      <div class="pf-pl-h">🛠 quick</div>
+      <div class="pf-pl-tools">
+        <button data-tool="idle">🧍 reset to idle</button>
+        <button data-tool="tpose">🩻 T-pose</button>
+        <button data-tool="cleartweaks">🧹 clear tweaks</button>
+      </div>`;
+    document.body.appendChild(this.poseLib);
+    this.poseLib.addEventListener("pointerdown", (e) => e.stopPropagation());   // never orbits
+    const q = (s) => this.poseLib.querySelector(s);
+    const save = () => { const n = q(".pf-pl-name").value.trim(); if (this.capturePose(n || undefined)) q(".pf-pl-name").value = ""; };
+    q(".pf-pl-save").addEventListener("click", save);
+    q(".pf-pl-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    this.poseLib.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => {
+      const t = b.dataset.tool;
+      if (t === "idle") this.set("idle");
+      else if (t === "tpose") this.set("tpose");
+      else if (t === "cleartweaks") { this.pushUndo(); this.rotOffsets.clear(); }
+    }));
+    this._refreshPoseLib();
+  }
+
+  _refreshPoseLib() {
+    if (!this.poseLib) return;
+    const list = this.poseLib.querySelector(".pf-pl-list");
+    const names = this._listPoses();
+    if (!names.length) { list.innerHTML = `<div class="pf-pl-empty">none yet — pose him, name it, 💾</div>`; return; }
+    list.innerHTML = "";
+    for (const n of names) {
+      const row = document.createElement("div"); row.className = "pf-pl-item";
+      const apply = document.createElement("span"); apply.className = "pf-pl-apply"; apply.textContent = n; apply.title = "apply this pose";
+      apply.addEventListener("click", () => this.applyPose(n));
+      const del = document.createElement("button"); del.className = "pf-pl-del"; del.textContent = "✕"; del.title = "delete";
+      del.addEventListener("click", () => this.deletePose(n));
+      row.appendChild(apply); row.appendChild(del); list.appendChild(row);
+    }
   }
 
   _buildTimelineUI() {
