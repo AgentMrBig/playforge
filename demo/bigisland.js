@@ -817,6 +817,24 @@ loadProp("models/fabpack/Demonstration.fbx").then(({ group }) => {
   window.__town = group;
 }).catch((e) => console.warn("[town] load failed (game continues):", e.message));
 
+// 🎨 SYNTY SWITCH — first assets (Erik 2026-07-20: "we're going all synty"). A few
+// PolygonGangWarfare props textured through the shared-atlas pipeline (loadProp + the pack's
+// T_..._01_A atlas) — proof it works in-world, and the seed of the full art switch.
+// Additive + defensive: never breaks the boot. Relocate live via window.__gw[i].position.
+{
+  const GW = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/gangwarfare", textureFlipY: true };
+  Promise.all([
+    loadProp("models/gangwarfare/SM_Prop_Dumpster_01.FBX", GW),
+    loadProp("models/gangwarfare/SM_Prop_Barrel_Metal_01.FBX", GW),
+  ]).then(([dump, barrel]) => {
+    const p = player.position;
+    const place = (m, dx, dz) => { m.position.set(p.x + dx, heightAt(p.x + dx, p.z + dz), p.z + dz); m.rotation.y = Math.random() * Math.PI; world.scene.add(m); };
+    place(dump.group, 3, 3.5);
+    place(barrel.group, 4.6, 3.9);
+    window.__gw = [dump.group, barrel.group];
+  }).catch((e) => console.warn("[synty] prop load failed (game continues):", e.message));
+}
+
 // COMBAT (General slice, first pass): equip a weapon + shoot. Ranged raycasts from the
 // camera (crosshair = screen center); hits feed damage into Ember's car lane (entity.damage
 // → wreck smoke). On-foot only for now. Defensive: combat must NEVER break the game boot.
@@ -860,6 +878,7 @@ try {
 
 engine.start();
 window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
+window.__pfLoadProp = loadProp;   // Synty asset integration — load+atlas a prop from the console
 
 // DEV: blow up the player to test the character damage/ragdoll system (Erik) — 💥 button + KeyB
 function blowUpPlayer() {
