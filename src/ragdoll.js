@@ -88,9 +88,10 @@ export class Ragdoll {
     this.useLayers = true;
     this._hasLayers = false;          // fast gate: skip composition entirely when empty
 
-    // Tier-3 autonomous reflexes (fall-brace, §2B). OFF by default → death ragdoll
-    // behaves exactly as before; flip __rag.reflexesEnabled=true to feel it. Params live.
-    this.reflexesEnabled = false;
+    // Tier-3 autonomous reflexes (fall-brace, §2B). ON by default now (Erik: "didn't
+    // notice any behaviors") — verified it clears on landing so the resting pose is
+    // unchanged. `__rag.reflexesEnabled=false` opts out; `__rag.braceParams` tunes feel.
+    this.reflexesEnabled = true;
     this._bracing = false;
     this.braceParams = { fallVy: -3.5, reach: 1.1, armStiff: 1.8, softStiff: 0.55, axis: "z" };
   }
