@@ -707,7 +707,7 @@ export class TestMode {
     const rag = window.__rag;
     if (!rag) return;
     this._muscleOn = on;
-    if (on) { this.setPaused(false); rag.enterMuscle(this._muscleTone || 8); }
+    if (on) { this.setPaused(false); rag.enterMuscle(this._muscleTone || 2.5); }
     else rag.exitMuscle();
     this.panel.querySelector('[data-act="muscle"]')?.classList.toggle("pf-sel", on);
   }
@@ -924,8 +924,8 @@ export class TestMode {
         <div class="pf-grp-b">
           <button data-act="muscle" title="become a physically-simulated, muscle-driven body that tracks the animation and reacts to shoves">🫀 muscle mode</button>
           <div class="pf-grip-row"><span>tone</span>
-            <input type="range" class="pf-musc-slider" min="0" max="16" step="0.5" value="8" style="flex:1">
-            <b class="pf-musc-val" style="flex:0 0 26px; cursor:default">8.0</b></div>
+            <input type="range" class="pf-musc-slider" min="0" max="12" step="0.5" value="2.5" style="flex:1">
+            <b class="pf-musc-val" style="flex:0 0 26px; cursor:default">2.5</b></div>
           <button data-act="shove">👊 shove</button>
           <div class="pf-test-hint" style="margin-top:4px">high tone = tracks the clip &amp; recovers · low = goes limp. our Euphoria, layer 1.</div>
         </div>

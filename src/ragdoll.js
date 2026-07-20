@@ -214,11 +214,12 @@ export class Ragdoll {
     this.tone = tone;
     this.enter();                                   // build + activate at the current pose
     this.muscle = true;
+    // Anchor the pelvis to the animated body (kinematic) so he's held upright while the
+    // jitter-fixed muscles hold the limb poses (feet reach down, arms hold). NOTE: true
+    // stand-on-your-feet balance (dynamic pelvis + foot support) is the next Euphoria
+    // behavior — a real balance controller, tuned by eye. This pass = stable + smooth.
     const root = this._byName.pelvis || this._byName.chest;
-    if (root) {
-      root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true);   // hips ride the animation
-      this._anchorSeg = root;
-    }
+    if (root) { root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true); this._anchorSeg = root; }
     return true;
   }
   exitMuscle() {
@@ -235,6 +236,11 @@ export class Ragdoll {
     s.body.setNextKinematicTranslation({ x: mid.x, y: mid.y, z: mid.z });
     s.body.setNextKinematicRotation({ x: bodyQ.x, y: bodyQ.y, z: bodyQ.z, w: bodyQ.w });
   }
+  /** BALANCE ASSIST via GRAVITY COMPENSATION: cancel (a tone-scaled fraction of) gravity
+   * on every dynamic segment, so the muscle PD holds the standing pose without the body
+   * sagging into a crouch — and with NO positional spring to oscillate. High tone → full
+   * support (stands on its planted feet); low tone → gravity wins (sags, goes limp). The
+   * spectrum (animated ↔ ragdoll) survives; a shove still perturbs and the muscles recover. */
   /** 👊 shove a segment (default chest) with an impulse in a world direction — the test poke */
   shove(dir, mag = 6, segName = "chest") {
     const s = this._byName[segName] || this._byName.chest; if (!s || !this.active) return;
@@ -247,7 +253,7 @@ export class Ragdoll {
   /** per fixed step: capture animation targets + apply PD muscle torques */
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
-    if (this.muscle) this._anchorStep();            // keep the hips on the animated body
+    if (this.muscle) this._anchorStep();
     const T = this._tmp;
     for (const s of this.segments) {
       // target = where the ANIMATION wants this bone (the Animator keeps
