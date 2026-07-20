@@ -73,8 +73,9 @@ export class Physics {
         const c2 = this.world.getCollider(ev.collider2());
         const v1 = this._preVel.get(ev.collider1()) ?? c1?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
         const v2 = this._preVel.get(ev.collider2()) ?? c2?.parent()?.linvel() ?? { x: 0, y: 0, z: 0 };
-        const rel = Math.hypot(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
-        if (rel < 2.2) return;
+        const dvx = v1.x - v2.x, dvy = v1.y - v2.y, dvz = v1.z - v2.z;
+        const rel = Math.hypot(dvx, dvy, dvz);
+        if (rel < 2.2) return;                           // cheap reject: nothing's moving
         const a = this._handleEnt.get(ev.collider1()) ?? null;
         const b = this._handleEnt.get(ev.collider2()) ?? null;
         const force = ev.totalForceMagnitude();
@@ -92,7 +93,16 @@ export class Physics {
             }
           });
         }
-        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, relSpeed: rel, point, normal, ev });
+        // Gate on the NORMAL closing speed, not total speed. A SCRAPE — a car
+        // dragging a cornerless chassis after a wheel comes off, or sliding on
+        // its side — is fast SIDEWAYS but ~0 INTO the surface, so it must NOT
+        // machine-gun crash impacts/sparks/sound (Erik: wheel-off "keeps making
+        // impact"). A real crash closes fast along the normal. relN is also the
+        // true impact severity (a glancing hit IS gentler). Falls back to total
+        // speed when no manifold normal is available.
+        const relN = normal ? Math.abs(dvx * normal.x + dvy * normal.y + dvz * normal.z) : rel;
+        if (relN < 2.2) return;
+        for (const cb of this._contactCbs) cb({ entityA: a, entityB: b, force, relSpeed: relN, point, normal, ev });
       });
     }
   }
