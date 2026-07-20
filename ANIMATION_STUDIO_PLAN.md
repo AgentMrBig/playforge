@@ -78,6 +78,71 @@ not only edit existing clips. (Maya-Trax → full mini-DCC.)
 environment, and NPC events select/blend behaviors. Behaviors compose into a living
 character in-game. This is where the authoring tool pays off as *gameplay*.
 
+**Phase 6 — "Our Euphoria" (procedural + physics layer).** Muscle layer (animation→physics
+via per-joint stiffness) then behavior controllers (balance/step, brace, protect, reach,
+grab, get-up) blended by context. See "Layer 3" above. The muscle layer can start early — it
+runs on our existing Rapier active ragdoll and needs no UI.
+
+## Layer 3 — "Our Euphoria": procedural + physics-driven behavior (the capstone)
+
+*Erik, 2026-07-20: "what makes it a behavior is the composite of the behavior animation WITH
+procedural animation + physics-driven active ragdoll. We need to be our own Euphoria."*
+
+### What Euphoria was (research)
+
+**NaturalMotion's Euphoria** (Oxford; founder Torsten Reil) is the physics-driven character
+tech behind **GTA IV, Red Dead Redemption, Max Payne 3, Star Wars: The Force Unleashed,
+Backbreaker, LA Noire**. Three tools: **endorphin** (offline authoring, ~2005), **euphoria**
+(the real-time runtime, ~2008), **morpheme** (animation blend-graph runtime). The core is
+**DMS — Dynamic Motion Synthesis**: the character body is *simulated* (forward-dynamics
+physics) and driven by **biomechanical behavior controllers** + a simple "nervous system,"
+so every reaction is *synthesized live and context-aware* — the way you fall depends on where
+you were shot, what's around you, and momentum. Never a canned clip; never the same twice.
+
+It "fell off" because it was punishing to author/tune and NaturalMotion pivoted to mobile
+(CSR Racing, Clumsy Ninja) before Zynga acquired them (2014). So that fidelity is genuinely
+semi-lost tech — which is exactly why owning our own version is a moat.
+
+### The composite IS the behavior
+
+A Behavior is a **stack of three layers**, blended per-joint:
+
+1. **Base clip** — raw mocap (Mixamo). *(have)*
+2. **Authored edits** — our pose keyframes, tweak layer, welds, planting. *(have)*
+3. **★ Procedural / physics layer (our Euphoria)** — active ragdoll + muscle motors +
+   behavior controllers that react to forces and surroundings. *(this section)*
+
+Layer 3 is what makes it *behave* instead of *play back*.
+
+### Mechanism (buildable on our existing Rapier active ragdoll — `window.__rag`)
+
+- **Muscle layer (the keystone, buildable first).** PD motors at each joint drive the
+  *physics* body toward the authored pose: `torque = stiffness·(targetAngle − angle) −
+  damping·angularVel`. **Stiffness = muscle tension.** High → the body tracks the animation
+  but *physically* (a shove perturbs it, then it recovers); low → it goes limp (ragdoll). The
+  entire "animated ↔ ragdoll" spectrum is just a stiffness ramp — per-joint, so you can go
+  limp in the legs while the arms still brace.
+- **Behavior controllers (procedural, prioritized, blended).** Modules that adjust joint
+  targets + stiffness from **context**: `balance + protective step` (keep COM over the
+  support polygon; step to catch), `brace for impact`, `protect head`, `reach to wound /
+  support`, `grab ledge/object` (IK + attach), `stagger`, `get up`. Each emits a weighted
+  pose-delta + stiffness change.
+- **Arbitration.** Controllers blend by priority into the muscle layer → physics. Context
+  inputs: impact force + location, balance state, wall/ground proximity, health, velocity.
+
+Example: the "rifle idle" behavior plays our tweaked idle — but shove the character and he
+staggers, steps to catch balance, braces if he hits a wall, and recovers to the idle. Shoot
+him and the hit twists the torso realistically and a hand reaches toward the wound. All
+emergent from physics + controllers, never the same twice. **That's the Euphoria feel.**
+
+### Sequencing
+
+The **muscle / pose-matching layer** is the tractable first slice and high-value on its own
+(physically-reactive animation with a stiffness dial), and we already have the substrate
+(Rapier active ragdoll + the `__rag.tone` de-floppiness dial). Behavior controllers layer on
+after. This becomes **Phase 6** — but the muscle layer can be prototyped early, in parallel
+with the UI work, because it's runtime, not UI.
+
 ## End state
 
 Every animation the character plays is a base clip **reshaped, layered, and event-driven** —
