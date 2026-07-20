@@ -87,6 +87,12 @@ export class Ragdoll {
     this.layers = { procedural: Object.create(null), reflex: Object.create(null) };
     this.useLayers = true;
     this._hasLayers = false;          // fast gate: skip composition entirely when empty
+
+    // Tier-3 autonomous reflexes (fall-brace, §2B). OFF by default → death ragdoll
+    // behaves exactly as before; flip __rag.reflexesEnabled=true to feel it. Params live.
+    this.reflexesEnabled = false;
+    this._bracing = false;
+    this.braceParams = { fallVy: -3.5, reach: 1.1, armStiff: 1.8, softStiff: 0.55, axis: "z" };
   }
 
   /** build bodies + joints at the skeleton's CURRENT world pose */
@@ -126,6 +132,7 @@ export class Ragdoll {
         // mass (mass-scaled torques spun segments ~70 rad/s per step and
         // blew up the solver)
         inertia: segMass * (3 * radius * radius + len * len) / 12,
+        stiffMul: 1,                  // per-segment PD stiffness scale (reflexes dial this)
         // orientation offset: body → bone
         qOff: quat.clone().invert().multiply(boneWorldQ),
         // bone pivot in body-local space
@@ -297,9 +304,42 @@ export class Ragdoll {
     return baseW;
   }
 
+  /** ═══ AUTONOMOUS REFLEXES (Tier 3, §2B) ═══
+   * FALL-BRACE: when a segment is falling fast, throw the arms out (reflex target) and
+   * stiffen them while softening the spine + legs, so the body physically braces for
+   * impact instead of tracking the idle pose into the ground. Fully opt-in + self-clears
+   * on landing, so the default death ragdoll is unchanged. Feel (axis/reach) = live params. */
+  _updateReflexes() {
+    if (!this.reflexesEnabled || !this.active) return;
+    const chest = this._byName.chest || this._byName.pelvis;
+    if (!chest) return;
+    const lv = chest.body.linvel();
+    // bracing while falling hard AND not yet settled (settle timer resets on impact)
+    const brace = lv.y < this.braceParams.fallVy && (this._settleT ?? 0) < 0.06;
+    if (brace && !this._bracing) this._enterBrace();
+    else if (!brace && this._bracing) this._exitBrace();
+  }
+  _enterBrace() {
+    this._bracing = true;
+    const T = this._tmp, Q = T.q1.constructor, V = T.v1.constructor, P = this.braceParams;
+    const ax = P.axis;
+    const mk = (sign) => new Q().setFromAxisAngle(new V(ax === "x" ? sign : 0, ax === "y" ? sign : 0, ax === "z" ? sign : 0).normalize(), P.reach);
+    this.setReflex("upperArmL", mk(1), 0.9);        // throw arms out to break the fall
+    this.setReflex("upperArmR", mk(-1), 0.9);
+    this._setStiff({ upperArmL: P.armStiff, upperArmR: P.armStiff, forearmL: P.armStiff * 0.9, forearmR: P.armStiff * 0.9,
+      chest: P.softStiff, pelvis: P.softStiff, thighL: P.softStiff, thighR: P.softStiff, shinL: P.softStiff, shinR: P.softStiff });
+  }
+  _exitBrace() {
+    this._bracing = false;
+    this.clearReflex("upperArmL"); this.clearReflex("upperArmR");
+    this._setStiff(null);
+  }
+  _setStiff(map) { for (const s of this.segments) s.stiffMul = map ? (map[s.name] ?? 1) : 1; }
+
   /** per fixed step: capture animation targets + apply PD muscle torques */
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
+    this._updateReflexes();
     if (this.muscle) this._anchorStep();
     const T = this._tmp;
     for (const s of this.segments) {
@@ -321,7 +361,7 @@ export class Ragdoll {
         const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
         const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3);
         const av = s.body.angvel();
-        const kp = 42 * this.tone, kd = 6 * Math.sqrt(Math.max(0.1, this.tone));
+        const kp = 42 * this.tone * (s.stiffMul ?? 1), kd = 6 * Math.sqrt(Math.max(0.1, this.tone));
         const torque = axis.multiplyScalar(kp * angle)
           .sub(T.v2.set(av.x, av.y, av.z).multiplyScalar(kd));
         const k = s.inertia * dt;                    // inertia-scaled → stable
