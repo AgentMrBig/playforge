@@ -33,6 +33,9 @@ export class TestMode {
     this.limb = null;               // selected IK effector (handR/handL/footR/footL)
     this.fkLimbs = {};              // limb → true = FK mode (drag rotates joints)
     this.limbLocks = {};            // limb → world Vector3 (pinned while posing others)
+    this.sticky = { foot: false, hand: false };  // 🦶🖐 sticky toggles — engage BOTH limbs at once
+    this.stickyAnchors = {};        // limb → world Vector3: held in place as the body moves, but a
+                                    // manual drag moves it freely AND the anchor follows (not a hard lock)
     this.poleOverrides = {};        // limb → world Vector3 (knee/elbow aim controls)
     this.welds = {};                // hand → { pos } in the held WEAPON's frame (🔗)
     this.rotOffsets = new Map();    // bone → cumulative world-frame tweak quat — survives a PLAYING clip (the mixer stamps the pose every frame; this layer re-applies your ring edits after it)
@@ -147,6 +150,38 @@ export class TestMode {
     }
   }
 
+  /** the limbs currently under sticky control (both feet and/or both hands) */
+  _stickyLimbs() {
+    const out = [];
+    if (this.sticky.foot) out.push("footL", "footR");
+    if (this.sticky.hand) out.push("handL", "handR");
+    return out;
+  }
+
+  /** 🦶🖐 STICKY (Erik): one button plants BOTH feet (or hands) in world space — as you
+   * move the body they stay put, but grab one and it moves freely (and the sticky point
+   * FOLLOWS to where you leave it). Unlike a hard 🔒 lock, it never snaps back. Off =
+   * limbs ride the rig normally. Individual 🔒 lock still works and takes precedence. */
+  setSticky(kind, on = !this.sticky[kind]) {
+    this.sticky[kind] = on;
+    const limbs = kind === "foot" ? ["footL", "footR"] : ["handL", "handR"];
+    for (const l of limbs) {
+      if (on) {
+        if (!this.stickyAnchors[l]) {                 // capture where it is right now
+          const c = limbChain(this.player.object3d, l);
+          if (c) this.stickyAnchors[l] = c.eff.getWorldPosition(new THREE.Vector3());
+        }
+      } else delete this.stickyAnchors[l];
+    }
+    this._stickySync();
+  }
+
+  _stickySync() {
+    const f = this.panel?.querySelector('[data-act="stickyfeet"]'), h = this.panel?.querySelector('[data-act="stickyhands"]');
+    if (f) f.classList.toggle("pf-sel", this.sticky.foot);
+    if (h) h.classList.toggle("pf-sel", this.sticky.hand);
+  }
+
   /** 🔗 weld the selected hand TO the held weapon: stores the hand's position in the
    * weapon's frame; every frame after animation, IK pins the hand back onto it — so
    * the support hand rides the gun through playback, not a point in space (Erik) */
@@ -180,6 +215,8 @@ export class TestMode {
       poles: Object.fromEntries(Object.entries(this.poleOverrides).map(([k, v]) => [k, v.clone()])),
       ikTarget: this._ikTarget ? this._ikTarget.clone() : null,
       rot: [...this.rotOffsets].map(([bone, q]) => [bones.indexOf(bone), q.toArray()]),
+      sticky: { ...this.sticky },
+      stickyA: Object.fromEntries(Object.entries(this.stickyAnchors).map(([k, v]) => [k, v.clone()])),
     };
   }
   _applyPose(s) {
@@ -191,7 +228,9 @@ export class TestMode {
     this.poleOverrides = Object.fromEntries(Object.entries(s.poles).map(([k, v]) => [k, v.clone()]));
     this._ikTarget = s.ikTarget ? s.ikTarget.clone() : null;
     this.rotOffsets = new Map((s.rot || []).filter(([i]) => i >= 0 && bones[i]).map(([i, q]) => [bones[i], new THREE.Quaternion().fromArray(q)]));
-    this._modeSync();
+    this.sticky = { foot: false, hand: false, ...(s.sticky || {}) };
+    this.stickyAnchors = Object.fromEntries(Object.entries(s.stickyA || {}).map(([k, v]) => [k, v.clone()]));
+    this._modeSync(); this._stickySync();
   }
   pushUndo() {
     if (this._lastPush && performance.now() - this._lastPush < 150) return;   // one push per gesture
@@ -528,6 +567,19 @@ export class TestMode {
       if (!c) continue;
       solveTwoBone({ ...c, target: this.limbLocks[l], pole: this.polePos(l), iterations: 4 });
     }
+    // 🦶🖐 sticky limbs: hold at their anchor as the body moves; the actively-dragged one
+    // is free and its anchor FOLLOWS to wherever you leave it (sticky, not locked).
+    for (const l of this._stickyLimbs()) {
+      if (this.limbLocks[l]) continue;                 // individual hard-lock owns it
+      const c = limbChain(this.player.object3d, l);
+      if (!c) continue;
+      if (l === this.limb) {                           // being posed → anchor tracks the hand/foot
+        c.eff.getWorldPosition(this.stickyAnchors[l] || (this.stickyAnchors[l] = new THREE.Vector3()));
+        continue;
+      }
+      if (!this.stickyAnchors[l]) this.stickyAnchors[l] = c.eff.getWorldPosition(new THREE.Vector3());
+      solveTwoBone({ ...c, target: this.stickyAnchors[l], pole: this.polePos(l), iterations: 4 });
+    }
     // 🔗 welded hands ride the weapon — after animation + locks, before foot collision
     if (this.welds.handL || this.welds.handR) {
       const w = { ...this.welds };
@@ -540,7 +592,7 @@ export class TestMode {
     const hAt = window.__pf?.heightAt;
     if (hAt && (this.paused || this.limb || this.rigControl || this._gizmoTarget)) {
       for (const fl of ["footL", "footR"]) {
-        if (fl === this.limb || this.limbLocks[fl]) continue;   // grabbed/locked feet already handled
+        if (fl === this.limb || this.limbLocks[fl] || this.stickyAnchors[fl]) continue;   // grabbed/locked/sticky feet already handled
         const c = limbChain(this.player.object3d, fl);
         if (!c) continue;
         const fp = c.eff.getWorldPosition(new THREE.Vector3());
@@ -629,6 +681,9 @@ export class TestMode {
           <button data-act="rig">🎛 control rig</button>
           <div class="pf-grip-row"><span>grab</span>
             <b data-limb="handL">LH</b><b data-limb="handR">RH</b><b data-limb="footL">LF</b><b data-limb="footR">RF</b></div>
+          <div class="pf-grip-row"><span>sticky</span>
+            <b data-act="stickyfeet" title="plant BOTH feet in world space — move the body and they stay; grab a foot to move it freely">🦶 feet</b>
+            <b data-act="stickyhands" title="plant BOTH hands in world space — move the body and they stay; grab a hand to move it freely">🖐 hands</b></div>
           <div class="pf-grip-row"><span>gizmo</span>
         <b data-gmode="translate" class="pf-sel" title="W">↔ move</b><b data-gmode="rotate" title="E">⟳ rotate</b><b data-gmode="scale" title="R">⤢ scale</b>
         <b data-act="undo" title="Z">↩ undo</b><b data-act="redo" title="Shift+Z">↪ redo</b></div>
@@ -679,6 +734,8 @@ export class TestMode {
     this.panel.querySelector('[data-act="undo"]').addEventListener('click', () => this.undo());
     this.panel.querySelector('[data-act="redo"]').addEventListener('click', () => this.redo());
     this.panel.querySelector('[data-act="weld"]').addEventListener("click", () => this.toggleWeld());
+    this.panel.querySelector('[data-act="stickyfeet"]').addEventListener("click", () => this.setSticky("foot"));
+    this.panel.querySelector('[data-act="stickyhands"]').addEventListener("click", () => this.setSticky("hand"));
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;
       if (this.limbLocks[this.limb]) delete this.limbLocks[this.limb];
