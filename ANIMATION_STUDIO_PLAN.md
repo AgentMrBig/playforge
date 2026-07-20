@@ -143,6 +143,37 @@ The **muscle / pose-matching layer** is the tractable first slice and high-value
 after. This becomes **Phase 6** — but the muscle layer can be prototyped early, in parallel
 with the UI work, because it's runtime, not UI.
 
+## Keys, root motion, capture (design decisions, 2026-07-20)
+
+**Markers vs keys.** Our *markers* are overlay tweaks — at a marker time we blend a base clip
+toward an authored pose over a window (great for reshaping a Mixamo clip). A *key* is the
+atom of animation: a pose (or per-bone value) pinned at a time, with the motion being the
+interpolation between keys — no base clip required. Markers stay for clip-tweaking; we ADD
+**keys** as the authoring primitive (Phase 4), so you can build original motion (a spin kick)
+from scratch or from a captured moment. A marker is just a key with a blend-window over a clip.
+
+**Root motion.** Is travel baked into the clip or added by code? *In-place*: clip cycles the
+legs, code moves the capsule by velocity (risks foot-slide). *Root motion*: the clip's root
+bone carries the displacement; the game reads that delta and moves the body by it — so
+lunges/dodges/travelling kicks move exactly as animated. Per-behavior toggle (in-place↔root).
+The motion recorder keeps the root world path, so captured moments preserve real travel.
+
+**Capture-moment (SHIPPED, MotionRecorder).** A rolling buffer always holds the last ~15s
+(all bone rotations + root pos). `captureLast()` freezes it into a scrubbable moment; start/
+stop for deliberate takes. Anima scrubs / slow-mos / frame-steps it and slerps the pose; you
+pose-edit any frame into a behavior. Root path retained.
+
+**Animation-driven locomotion (Erik's direction, 2026-07-20 — PENDING his go).** Erik wants
+the GTA4 feel: the character actually walks/runs, not a capsule sliding at a foot-matched
+speed. Two routes: (a) **root-motion clips** — re-grab walk/run from Mixamo with "in place"
+UNCHECKED; read the root delta each frame → move the capsule exactly as animated (clean baked
+travel, zero slide); (b) **procedural foot-driven root motion** — keep the stance foot planted
+in world space; the body's travel emerges from the planted foot moving back through the in-
+place clip (no new assets, inherently slide-free). Recommendation: prototype (b) on our
+existing FootPlant for an immediate win, and bring in (a)'s root-motion clips for the cleanest
+result. ★ Core-movement change — overlaps Ninja's engine/character lane; coordinate + Erik's
+eyes tune the feel.
+
 ## End state
 
 Every animation the character plays is a base clip **reshaped, layered, and event-driven** —
