@@ -324,9 +324,11 @@ function decorate(tile, group) {
         bld.rotation.y = Math.floor(sr() * 4) * (Math.PI / 2);
         bld.traverse((o) => { if (o.isMesh) o.castShadow = tile.res >= 24; });
         group.add(bld);
+        // Erik: many buildings are OPEN — walk inside. Our on-foot collision is AABB-only
+        // (can't do walls-with-doorways), so NO solid player box here → you can enter. Cars
+        // still bump the shell via a physBox so you can't drive through them.
         const sz = pick.size || { x: 8, y: 8, z: 8 };
         const fw = (bld.rotation.y % Math.PI === 0) ? sz.x : sz.z, fd = (bld.rotation.y % Math.PI === 0) ? sz.z : sz.x;
-        tile.addCollider(new Collider({ size: [fw, sz.y, fd], offset: [bx, gy + sz.y / 2, bz] }));
         tile.physBoxes.push({ half: [fw / 2, sz.y / 2, fd / 2], center: [bx, gy + sz.y / 2, bz] });
         continue;
       }
