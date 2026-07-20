@@ -387,6 +387,17 @@ export class RapierVehicle extends VehicleBody {
     this.ctrl.setWheelEngineForce(2, engine / 2);
     this.ctrl.setWheelEngineForce(3, engine / 2);
     for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, brake / 4 * 0.016);
+    // PARKING BRAKE (Ember 2026-07-20): unmanned/stopped cars must not roll away
+    // on hills — but ONLY via BRAKE FORCE, never a velocity override. The old
+    // parking brake hard-clamped velocity every step, which fought the solver
+    // into the high-frequency jerk that got it reverted. A firm holding brake
+    // on all wheels holds the car through tire friction (real physics); any
+    // throttle sets brake=0 above, releasing instantly. Also gives a natural
+    // auto-hold when you coast to a stop. Skips handbrake (its own behavior).
+    if (Math.abs(t) < 0.01 && !this.handbrake && Math.abs(fwdSpeed) < 0.6) {
+      const hold = this.mass * 0.08;               // firm hold; more gave no less creep (rest is settle, not roll)
+      for (let i = 0; i < 4; i++) this.ctrl.setWheelBrake(i, hold);
+    }
     // handbrake: LOCK the rears. Erik's spec (and physics): the handbrake
     // does NOT tighten the turn — it drops rear traction until the slide
     // STARTS, and the car carries on along its momentum while rotating.
