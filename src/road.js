@@ -15,7 +15,7 @@ import * as THREE from "three";
  * Pair with RoadEditor for click-to-place authoring.
  */
 export class RoadNetwork {
-  constructor({ ground = () => 0, lift = 0.05, segPerNode = 12,
+  constructor({ ground = () => 0, lift = 0.08, segPerNode = 28,
                 texUrl = "textures/T_Road_Clean_01.png", tileLen = 20 } = {}) {
     this.ground = ground;
     this.lift = lift;
@@ -28,12 +28,28 @@ export class RoadNetwork {
     // width→across (0..1) and length→along (tiled every tileLen m). polygonOffset
     // keeps the flush ribbon from z-fighting the baked-asphalt terrain under it —
     // so the markings come from the texture, no procedural lines needed.
-    const tex = new THREE.TextureLoader().load(texUrl);
+    const tex = new THREE.TextureLoader().load(texUrl, (t) => {
+      // lighten the asphalt a tad (Erik) WITHOUT washing the lane markings: SCREEN
+      // a dark grey over it — lifts the dark asphalt proportionally while the
+      // bright yellow/white markings stay crisp (screen barely touches brights).
+      try {
+        const img = t.image, S = img.width;
+        const cv = document.createElement("canvas"); cv.width = cv.height = S;
+        const g = cv.getContext("2d");
+        g.drawImage(img, 0, 0);
+        g.globalCompositeOperation = "screen";
+        g.fillStyle = "rgb(46,46,52)"; g.fillRect(0, 0, S, S);
+        t.image = cv; t.needsUpdate = true;
+      } catch { /* keep the raw texture if canvas isn't available */ }
+    });
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.anisotropy = 8; tex.colorSpace = THREE.SRGBColorSpace;
     this._roadTex = tex;
+    // stronger polygonOffset so the ribbon always wins the depth fight against the
+    // terrain mesh as it streams to higher LOD near the camera (Erik: terrain
+    // "creeping onto the road like lava" — that flicker was z-fighting).
     this._surfMat = new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.95, metalness: 0,
-      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -6 });
     this._surfMat._shared = true;
     // pale concrete curb/gutter strip that runs the road edges (real streets have one)
     this._curbMat = new THREE.MeshStandardMaterial({ color: 0x8c8a83, roughness: 1 });

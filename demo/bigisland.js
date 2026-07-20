@@ -1045,7 +1045,7 @@ const { roads: roadLayout, graph: roadGraph } = generateRoads({ settlements, hei
 // (Erik 2026-07-20: make the roads look better). It rides the terrain via heightAt
 // with a small lift + polygonOffset so it sits flush without z-fighting or tire
 // clip (the old bug was a 14 cm lift). Graph still drives decoration-skip + traffic.
-const roadNet = new RoadNetwork({ ground: heightAt, lift: 0.05 });
+const roadNet = new RoadNetwork({ ground: heightAt, lift: 0.08 });
 for (const r of roadLayout) roadNet.addRoad(r.points, { width: r.width });
 world.spawn("roads").add(roadNet);
 window.__roadNet = roadNet;
