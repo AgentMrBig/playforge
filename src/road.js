@@ -21,10 +21,54 @@ export class RoadNetwork {
     this.segPerNode = segPerNode;
     this.roads = [];                    // { nodes:[Vec3], width, group }
     this.group = new THREE.Group();
-    this._surfMat = new THREE.MeshStandardMaterial({ color: 0x33373d, roughness: 1 });
+    // real asphalt instead of a flat fill: a generated speckled texture with a
+    // worn/polished center strip + hairline cracks (Erik: upgrade the roads).
+    // Tiled along the ribbon via generated UVs; weathered to match the Wasteland.
+    const asphalt = this._makeAsphalt();
+    this._surfMat = new THREE.MeshStandardMaterial({ map: asphalt, color: 0xcfcfcf, roughness: 0.96, metalness: 0 });
     this._surfMat._shared = true;
-    this._lineMat = new THREE.MeshStandardMaterial({ color: 0xd8d3c3, roughness: 1 });
-    this._dashMat = new THREE.MeshStandardMaterial({ color: 0xe8c838, roughness: 1 });
+    this._lineMat = new THREE.MeshStandardMaterial({ color: 0xcfc9b6, roughness: 1 });
+    this._dashMat = new THREE.MeshStandardMaterial({ color: 0xd8b431, roughness: 1 });
+    // pale concrete curb/gutter strip that runs the road edges (real streets have one)
+    this._curbMat = new THREE.MeshStandardMaterial({ color: 0x8c8a83, roughness: 1 });
+    this._curbMat._shared = true;
+  }
+
+  /** generated weathered-asphalt texture: dark base, grit speckle, a lighter
+   *  wheel-polished center band, and a couple of hairline cracks. */
+  _makeAsphalt() {
+    const S = 256, cv = (typeof document !== "undefined") ? document.createElement("canvas") : null;
+    if (!cv) return null;
+    cv.width = cv.height = S;
+    const g = cv.getContext("2d");
+    g.fillStyle = "#3a3e45"; g.fillRect(0, 0, S, S);
+    // wheel-polished center band (vertical = along travel after UV rotate)
+    const grad = g.createLinearGradient(0, 0, S, 0);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.5, "rgba(150,150,160,0.10)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grad; g.fillRect(0, 0, S, S);
+    // grit speckle — light + dark flecks break the flat fill (the biggest win)
+    for (let i = 0; i < 9000; i++) {
+      const x = Math.random() * S, y = Math.random() * S, r = Math.random() * 1.3;
+      const v = Math.random();
+      g.fillStyle = v < 0.5 ? `rgba(20,22,26,${0.25 + Math.random() * 0.4})`
+                            : `rgba(150,152,158,${0.08 + Math.random() * 0.22})`;
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    }
+    // a few hairline cracks
+    g.strokeStyle = "rgba(15,16,19,0.55)"; g.lineWidth = 1;
+    for (let c = 0; c < 5; c++) {
+      let x = Math.random() * S, y = Math.random() * S;
+      g.beginPath(); g.moveTo(x, y);
+      for (let k = 0; k < 12; k++) { x += (Math.random() - 0.5) * 24; y += (Math.random() - 0.3) * 22; g.lineTo(x, y); }
+      g.stroke();
+    }
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
   }
 
   init(entity, world) { world.scene.add(this.group); this.world = world; }
@@ -55,10 +99,11 @@ export class RoadNetwork {
     const pts = curve.getPoints(n).map((p) => this._onGround(p));
 
     const hw = road.width * 0.5;
-    const surfPos = [], surfIdx = [];
-    const dash = [], edgeL = [], edgeR = [];
+    const surfPos = [], surfIdx = [], surfUV = [];
+    const dash = [], edgeL = [], edgeR = [], curbL = [], curbR = [];
     const up = new THREE.Vector3(0, 1, 0);
     const tan = new THREE.Vector3(), nrm = new THREE.Vector3();
+    let arc = 0;                                         // accumulated length → texture V
     for (let i = 0; i < pts.length; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
       tan.subVectors(b, a); tan.y = 0; tan.normalize();
@@ -66,24 +111,33 @@ export class RoadNetwork {
       const L = new THREE.Vector3().copy(pts[i]).addScaledVector(nrm, hw);
       const R = new THREE.Vector3().copy(pts[i]).addScaledVector(nrm, -hw);
       surfPos.push(L.x, L.y, L.z, R.x, R.y, R.z);
+      if (i > 0) arc += pts[i].distanceTo(pts[i - 1]);
+      const vtex = arc / road.width;                    // ~square asphalt tiling
+      surfUV.push(0, vtex, 1, vtex);
       if (i > 0) {
         const v = (i - 1) * 2;
         surfIdx.push(v, v + 1, v + 2, v + 1, v + 3, v + 2);
       }
-      // center dashes (every other span) + solid edge lines
+      // center dashes (every other span) + solid edge lines + concrete curbs
       if (i > 0 && i % 2 === 0) dash.push([pts[i - 1], pts[i], nrm, 0.22]);
       if (i > 0) {
         edgeL.push([pts[i - 1], pts[i], nrm, hw - 0.35, 0.12]);
         edgeR.push([pts[i - 1], pts[i], nrm, -(hw - 0.35), 0.12]);
+        curbL.push([pts[i - 1], pts[i], nrm, hw + 0.22, 0.28]);
+        curbR.push([pts[i - 1], pts[i], nrm, -(hw + 0.22), 0.28]);
       }
     }
     const surf = new THREE.BufferGeometry();
     surf.setAttribute("position", new THREE.Float32BufferAttribute(surfPos, 3));
+    surf.setAttribute("uv", new THREE.Float32BufferAttribute(surfUV, 2));
     surf.setIndex(surfIdx);
     surf.computeVertexNormals();
     const surfMesh = new THREE.Mesh(surf, this._surfMat);
     surfMesh.receiveShadow = true;
     road.group.add(surfMesh);
+    // concrete curbs sit a touch proud of the asphalt (raised yBias)
+    road.group.add(this._ribbon(curbL, this._curbMat, 0.055));
+    road.group.add(this._ribbon(curbR, this._curbMat, 0.055));
     road.group.add(this._ribbon(dash, this._dashMat, 0.02));
     road.group.add(this._ribbon(edgeL, this._lineMat, 0.03));
     road.group.add(this._ribbon(edgeR, this._lineMat, 0.03));
