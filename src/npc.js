@@ -82,25 +82,45 @@ export class Pedestrian {
   }
 }
 
-/** Load one base character and scatter cloned wanderers across the clusters. */
+/**
+ * Load one or more base characters and scatter cloned wanderers across clusters.
+ * Pass `models: [{ model, texture, textureDir, flipY, retargetFrom, animations }]`
+ * for a VARIED crowd (each NPC clones a random base) — Synty characters use the
+ * retarget pipeline (retargetFrom a Mixamo-skeleton FBX). A single `model` still
+ * works (wrapped into a one-entry list). Bases that fail to load are skipped.
+ */
 export async function spawnPedestrians(world, {
-  model, texture = null, textureDir = "", flipY = true, targetHeight = 1.8,
-  animations = null, heightAt, clusters = [], footOffset = 0, scaleJitter = 0.08,
+  models = null, model = null, texture = null, textureDir = "", flipY = true,
+  targetHeight = 1.8, animations = null, retargetFrom = null,
+  heightAt, clusters = [], footOffset = 0, scaleJitter = 0.08,
 } = {}) {
-  const base = await loadCharacter(model, { texture, textureDir, flipY, targetHeight, animations });
-  const clips = base.animator.clips;
-  const names = Object.keys(clips);
-  const walk = clips.walk ? "walk" : (names.find((n) => /walk/i.test(n)) || names[0]);
-  const idle = clips.idle ? "idle" : (names.find((n) => /idle/i.test(n)) || walk);
+  const specs = models || [{ model, texture, textureDir, flipY, targetHeight, animations, retargetFrom }];
+  const bases = [];
+  for (const s of specs) {
+    try {
+      const base = await loadCharacter(s.model, {
+        texture: s.texture ?? null, textureDir: s.textureDir ?? "", flipY: s.flipY ?? true,
+        targetHeight: s.targetHeight ?? targetHeight, animations: s.animations ?? animations,
+        retargetFrom: s.retargetFrom ?? null,
+      });
+      const clips = base.animator.clips;
+      const names = Object.keys(clips);
+      base._walk = clips.walk ? "walk" : (names.find((n) => /walk/i.test(n)) || names[0]);
+      base._idle = clips.idle ? "idle" : (names.find((n) => /idle/i.test(n)) || base._walk);
+      bases.push(base);
+    } catch (e) { console.warn("[npc] base failed:", s.model, e.message); }
+  }
+  if (!bases.length) return [];
 
   const made = [];
   for (const c of clusters) {
     for (let i = 0; i < (c.count || 0); i++) {
+      const base = bases[Math.floor(Math.random() * bases.length)];
       const visual = skeletonClone(base.visual);
       const s = 1 + (Math.random() * 2 - 1) * scaleJitter;
       visual.scale.multiplyScalar(s);
       visual.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; o.frustumCulled = true; } });
-      const anim = new Animator(visual, clips);
+      const anim = new Animator(visual, base.animator.clips);
 
       const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * (c.radius || 16);
       const x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d;
@@ -111,10 +131,10 @@ export async function spawnPedestrians(world, {
         .add(anim)
         .add(new Pedestrian({
           heightAt, center: { x: c.x, z: c.z }, radius: c.radius || 16,
-          speed: 1.0 + Math.random() * 0.7, clips: { walk, idle }, footOffset,
+          speed: 1.0 + Math.random() * 0.7, clips: { walk: base._walk, idle: base._idle }, footOffset,
         }));
       // desync the crowd — advance each mixer a random beat so they don't lockstep
-      anim.play(walk); anim.update(Math.random() * 1.8);
+      anim.play(base._walk); anim.update(Math.random() * 1.8);
       made.push(e);
     }
   }

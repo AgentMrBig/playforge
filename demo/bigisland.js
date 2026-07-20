@@ -472,16 +472,20 @@ const player = world.spawn("player")
   .add(new CharacterBody({ radius: 0.32, height: 1.7 }))   // real capsule vs EVERYTHING
   .add(new PlayerMove());
 
-// NPC pedestrians — bring the towns alive (Erik). Same base guy, cloned + wandering.
-// v1: a crowd around the spawn/runway + the start settlement so they're visible on load.
+// NPC pedestrians — bring the towns alive (Erik). A VARIED Synty crowd: gang
+// members, civilians, the boss, a street girl — each retargeted onto the Mixamo
+// anims (retargetFrom the demo skeleton) and textured off the GangWarfare atlas.
+const NPC_ANIMS = [
+  { name: "idle", url: "models/character/anims/idle.fbx" },
+  { name: "walk", url: "models/character/anims/walking.fbx" },
+  { name: "run", url: "models/character/anims/running.fbx" },
+];
+const GW_CHAR = { texture: "T_PolygonGangWarfare_01_A.PNG", textureDir: "models/gangwarfare", flipY: false, retargetFrom: "models/character/humanoid_male.fbx", animations: NPC_ANIMS };
 spawnPedestrians(world, {
-  model: "models/character/humanoid_male.fbx",
-  targetHeight: 1.8,
-  animations: [
-    { name: "idle", url: "models/character/anims/idle.fbx" },
-    { name: "walk", url: "models/character/anims/walking.fbx" },
-    { name: "run", url: "models/character/anims/running.fbx" },
-  ],
+  models: [
+    "SK_Chr_GangMember_Male_01", "SK_Chr_GangMember_Male_02", "SK_Chr_GangMember_Female_01",
+    "SK_Chr_GangBoss_01", "SK_Chr_StreetGirl_01", "SK_Chr_British_Gangster_Male_01",
+  ].map((n) => ({ model: `models/gangwarfare/${n}.FBX`, ...GW_CHAR })),
   heightAt,
   clusters: [
     { x: RUN.x0 + 20, z: RUN.z + RUN.w / 2 + 8, radius: 14, count: 6 },  // right by spawn
