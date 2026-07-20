@@ -2,5 +2,5 @@
 dist/
 
 # Raw Synty asset drop — huge, converted GLBs go in public/models instead
-Assets/
-Asset Drop/
+/Assets/
+/Asset Drop/
