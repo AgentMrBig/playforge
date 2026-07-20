@@ -719,7 +719,16 @@ world.spawn("carCollisions").add(new CarCollisions({ audio }));  // Ember's dama
 // a palette-symmetry coincidence, same as the props)
 const AV = (len) => ({ targetLength: len, textureDir: "models/fabpack", textureFlipY: true,
   textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG", policecar: "T_colorPalette2048.PNG" } });
+// Synty GangWarfare vehicles: the FBX export left generic "Fbx Default Material N" names, so
+// map on "material" → the pack's Vehicle atlas (Erik's all-Synty switch). Loads drivable
+// (loadVehicle finds the separate wheel meshes + suspension), textured off the vehicle atlas.
+const GWV = (len) => ({ targetLength: len, textureDir: "models/gangwarfare", textureFlipY: true,
+  textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } });
 const FLEET = [
+  // ── Synty GangWarfare (Erik's all-Synty switch) — drivable + textured ──
+  { name: "GW_LowCar",     file: "models/gangwarfare/SK_Veh_LowCar_01.FBX",      dz: -40, hp: 400, ep: 15, top: 58, siren: 0, opts: GWV(4.7) },
+  { name: "GW_LowCar2",    file: "models/gangwarfare/SK_Veh_LowCar_02.FBX",      dz: -34, hp: 400, ep: 15, top: 58, siren: 0, opts: GWV(4.7) },
+  { name: "GW_Van",        file: "models/gangwarfare/SK_Veh_Van_01.FBX",         dz: -28, hp: 260, ep: 11, top: 46, siren: 0, mass: 2100, opts: GWV(5.0) },
   { name: "Sedan",         file: "models/fabpack/SK_veh_Sedan_01.fbx",           dz: -40, hp: 280, ep: 12, top: 50, siren: 0, opts: AV(4.9) },
   { name: "Muscle",        file: "models/fabpack/SK_veh_Muscle_01.fbx",          dz: -35, hp: 450, ep: 16, top: 62, siren: 0, opts: AV(5.0) },
   { name: "SportClassic",  file: "models/fabpack/SK_veh_SportClassic_01.fbx",    dz: -30, hp: 400, ep: 15, top: 60, siren: 0, opts: AV(4.6) },
@@ -746,7 +755,7 @@ const FLEET = [
 // TEST MODE (Erik): only spawn a truck + a sports car — 18 cars slow the reload.
 // Full fleet back with ?cars=all (each spec stays intact above).
 const wantCars = new URLSearchParams(location.search).get("cars");
-const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) => s.name === "Pickup" || s.name === "SportClassic");
+const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) => s.name === "GW_LowCar" || s.name === "GW_LowCar2" || s.name === "GW_Van");
 const cars = [];
 for (const spec of SPAWN) {
   Promise.all([physReady, loadVehicle(spec.file, spec.opts)])
@@ -942,6 +951,7 @@ try {
 engine.start();
 window.__pf = { engine, world, audio, player, cars, terrain, phys, physReady, settlements, heightAt, RUN, roadGraph, get drivingCar() { return drivingCar; } };
 window.__pfLoadProp = loadProp;   // Synty asset integration — load+atlas a prop from the console
+window.__pfLoadVehicle = loadVehicle;   // + vehicle rig loader (wheels/suspension) for Synty car tests
 
 // DEV: blow up the player to test the character damage/ragdoll system (Erik) — 💥 button + KeyB
 function blowUpPlayer() {
