@@ -177,7 +177,7 @@ GRASS_MAT._shared = true;
 // instanceable geometry sharing the pack atlas, then the forest scatter uses them instead
 // of the old cone/cylinder trees. (Stopgap atlas = GangWarfare until the Wasteland atlas
 // is exported — Synty share a palette so the trees read right; rocks a touch warm.)
-let SYNTY_TREES = null, SYNTY_ROCKS = null, SYNTY_ENV_MAT = null;
+let SYNTY_TREES = null, SYNTY_ROCKS = null, SYNTY_ENV_MAT = null, SYNTY_BLDS = null;
 function mergeGroupGeo(groupObj) {
   groupObj.updateMatrixWorld(true);
   const geos = [];
@@ -208,8 +208,17 @@ function mergeGroupGeo(groupObj) {
     if (SYNTY_ENV_MAT) SYNTY_ENV_MAT._shared = true;
     SYNTY_TREES = trees.length ? trees : null;
     SYNTY_ROCKS = rocks.length ? rocks : null;
-    console.log(`[synty env] ${trees.length} trees, ${rocks.length} rocks ready`);
-  } catch (e) { console.warn("[synty env] load failed (trees fall back to none):", e.message); }
+    // whole Synty buildings (Erik) — replace the placeholder boxes at settlement lots
+    const blds = [];
+    for (const n of ["01", "02", "03", "04", "05", "06"]) {
+      const r = await loadProp(`models/wasteland/SM_Bld_Building_${n}.FBX`, GW).catch(() => null);
+      if (r && r.group) blds.push({ group: r.group, size: r.size });
+    }
+    SYNTY_BLDS = blds.length ? blds : null;
+    // spawn tiles decorated before this finished → rebuild them so buildings appear immediately
+    if (SYNTY_BLDS && terrain && terrain.rebuild) terrain.rebuild(world);
+    console.log(`[synty env] ${trees.length} trees, ${rocks.length} rocks, ${blds.length} buildings ready`);
+  } catch (e) { console.warn("[synty env] load failed (falls back):", e.message); }
 })();
 
 function decorate(tile, group) {
@@ -305,11 +314,27 @@ function decorate(tile, group) {
       const d = (s.type === "city" ? 0.25 + 0.65 * sr() : 0.3 + 0.55 * sr()) * s.r;
       const bx = s.x + Math.cos(a) * d, bz = s.z + Math.sin(a) * d;
       if (bx < x0 || bx >= x0 + size || bz < z0 || bz >= z0 + size) continue;
+      const gy = heightAt(bx, bz);
+      if (SYNTY_BLDS) {
+        // real Synty building at this lot (Erik). Clone shares geometry+atlas material (cheap);
+        // sits base-on-ground, random facing; collision box from its footprint.
+        const pick = SYNTY_BLDS[Math.floor(sr() * SYNTY_BLDS.length)];
+        const bld = pick.group.clone();
+        bld.position.set(bx, gy, bz);
+        bld.rotation.y = Math.floor(sr() * 4) * (Math.PI / 2);
+        bld.traverse((o) => { if (o.isMesh) o.castShadow = tile.res >= 24; });
+        group.add(bld);
+        const sz = pick.size || { x: 8, y: 8, z: 8 };
+        const fw = (bld.rotation.y % Math.PI === 0) ? sz.x : sz.z, fd = (bld.rotation.y % Math.PI === 0) ? sz.z : sz.x;
+        tile.addCollider(new Collider({ size: [fw, sz.y, fd], offset: [bx, gy + sz.y / 2, bz] }));
+        tile.physBoxes.push({ half: [fw / 2, sz.y / 2, fd / 2], center: [bx, gy + sz.y / 2, bz] });
+        continue;
+      }
+      // fallback placeholder box (until buildings load)
       const big = s.type === "city" && sr() < 0.6;
       const w = big ? 8 + sr() * 6 : 5 + sr() * 3;
       const dep = big ? 8 + sr() * 6 : 5 + sr() * 3;
       const hgt = big ? 9 + sr() * 22 : 3.2 + sr() * 2.4;
-      const gy = heightAt(bx, bz);
       const bld = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, dep), BLD_MATS[Math.floor(sr() * BLD_MATS.length)]);
       bld.position.set(bx, gy + hgt / 2, bz);
       bld.castShadow = tile.res >= 24;

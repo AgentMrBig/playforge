@@ -184,6 +184,12 @@ export class StreamedTerrain {
     }
     if (!tileOverride) this._tiles.delete(key);
   }
+
+  /** dispose all current tiles so update() re-decorates them — used when async content
+   * (e.g. Synty buildings) finishes loading after the spawn tiles already decorated. */
+  rebuild(world) {
+    for (const key of [...this._tiles.keys()]) this._dispose(world, key);
+  }
 }
 
 const TERRAIN_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
