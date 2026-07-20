@@ -50,7 +50,7 @@ export class VehicleTestMode {
     document.exitPointerLock?.();                      // free the mouse for the panel
     this.btn.classList.toggle("pf-on", on);
     this.panel.style.display = on ? "block" : "none";
-    if (on) this._refresh();
+    if (on) { this._refresh(); this._syncSliders(); }
   }
 
   _hit(sev) { const c = this.car; if (c && this.dmgSys) { this.dmgSys.testHit(c, sev, this.side); this._refresh(); } }
@@ -106,9 +106,14 @@ export class VehicleTestMode {
           background: rgba(20,24,32,.85); color: #fff; border: 1px solid rgba(255,255,255,.25);
           border-radius: 8px; font: 600 13px system-ui; cursor: pointer; }
         .pf-vtest-btn.pf-on { background: rgba(230,120,40,.85); }
-        .pf-vtest-panel { position: fixed; top: 92px; left: 10px; z-index: 30; width: 200px;
+        .pf-vtest-panel { position: fixed; top: 92px; left: 10px; z-index: 30; width: 234px;
+          max-height: calc(100vh - 110px); overflow-y: auto;
           background: rgba(20,24,32,.88); color: #fff; border: 1px solid rgba(255,255,255,.2);
           border-radius: 10px; padding: 10px; font: 500 12px system-ui; }
+        .pf-vtest-panel label.pf-slide { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 11px; }
+        .pf-vtest-panel label.pf-slide b { width: 78px; opacity: .72; font-weight: 600; }
+        .pf-vtest-panel label.pf-slide input[type=range] { flex: 1; accent-color: #e67828; min-width: 0; }
+        .pf-vtest-panel label.pf-slide span { width: 32px; text-align: right; opacity: .85; font-variant-numeric: tabular-nums; }
         .pf-vtest-panel h4 { margin: 6px 0 4px; font-size: 11px; opacity: .7; text-transform: uppercase; }
         .pf-vtest-panel button { display: inline-block; margin: 2px 2px 2px 0; padding: 6px 8px;
           background: rgba(255,255,255,.08); color: #fff; border: 1px solid rgba(255,255,255,.18);
@@ -145,6 +150,15 @@ export class VehicleTestMode {
       <div class="pf-row">
         <button data-smoke="0">clean</button><button data-smoke="12">wisps</button><button data-smoke="30">plume</button>
       </div>
+      <h4>🎛️ tuning · live · all cars</h4>
+      <label class="pf-slide"><b>Engine</b><input type="range" data-knob="enginePower" min="4" max="24" step="0.5"><span data-kv="enginePower"></span></label>
+      <label class="pf-slide"><b>Top speed</b><input type="range" data-knob="topSpeed" min="15" max="70" step="1"><span data-kv="topSpeed"></span></label>
+      <label class="pf-slide"><b>Brakes</b><input type="range" data-knob="brakePower" min="5" max="30" step="0.5"><span data-kv="brakePower"></span></label>
+      <label class="pf-slide"><b>Grip</b><input type="range" data-knob="sideFriction" min="0.3" max="1.5" step="0.05"><span data-kv="sideFriction"></span></label>
+      <label class="pf-slide"><b>Drift (rear)</b><input type="range" data-knob="rearGripMul" min="0.3" max="1.6" step="0.05"><span data-kv="rearGripMul"></span></label>
+      <label class="pf-slide"><b>Air hang</b><input type="range" data-knob="_airGrav" min="0" max="1" step="0.05"><span data-kv="_airGrav"></span></label>
+      <label class="pf-slide"><b>Suspension</b><input type="range" data-knob="suspStiff" min="15" max="70" step="1"><span data-kv="suspStiff"></span></label>
+      <div class="pf-row" style="margin-top:4px"><button data-act="tunereset">↺ reset tuning</button></div>
       <div class="pf-row" style="margin-top:8px">
         <button data-act="reset">♻ reset car</button>
       </div>`;
@@ -155,8 +169,54 @@ export class VehicleTestMode {
       else if (b.dataset.wheel) this._cycleWheel(+b.dataset.wheel);
       else if (b.dataset.smoke !== undefined) { const c = this.car; if (c) c.smokeDmg = +b.dataset.smoke; }
       else if (b.dataset.act === "reset") { const c = this.car; if (c && this.dmgSys) this.dmgSys.resetCar(c); }
+      else if (b.dataset.act === "tunereset") {
+        for (const [k, v] of Object.entries(VehicleTestMode.KNOB_DEFAULTS)) this._setKnob(k, v);
+        this._syncSliders();
+      }
       this._refresh();
+    });
+    // live tuning sliders — dial the car feel while driving (Erik)
+    this.panel.addEventListener("input", (e) => {
+      const el = e.target.closest("input[type=range]"); if (!el) return;
+      const knob = el.dataset.knob, val = +el.value;
+      this._setKnob(knob, val);
+      this._kvText(knob, val);
     });
     document.body.appendChild(this.panel);
   }
+
+  // decimals for the readout: fine knobs show 2 places, coarse show whole numbers
+  _kvText(knob, val) {
+    const fine = knob === "sideFriction" || knob === "rearGripMul" || knob === "_airGrav";
+    const kv = this.panel.querySelector(`[data-kv="${knob}"]`);
+    if (kv) kv.textContent = (+val).toFixed(fine ? 2 : 0);
+  }
+
+  /** apply a tuning knob to EVERY car (so it sticks whichever one Erik drives).
+   *  Most are read live by _drive/_sync; suspension needs a controller re-apply. */
+  _setKnob(knob, val) {
+    for (const c of (window.__pf?.cars ?? [])) {
+      const vb = c.components?.find((x) => x.rb && x.suspension);
+      if (!vb) continue;
+      if (knob === "suspStiff") { vb.suspStiff = val; for (let i = 0; i < 4; i++) vb.ctrl?.setWheelSuspensionStiffness(i, val); }
+      else vb[knob] = val;
+    }
+  }
+
+  /** set every slider + readout to the driven car's current values */
+  _syncSliders() {
+    const vb = this._vb(this.car); if (!vb) return;
+    for (const knob of Object.keys(VehicleTestMode.KNOB_DEFAULTS)) {
+      const cur = knob === "_airGrav" ? (vb._airGrav ?? VehicleTestMode.KNOB_DEFAULTS._airGrav) : vb[knob];
+      if (cur == null) continue;
+      const inp = this.panel.querySelector(`input[data-knob="${knob}"]`);
+      if (inp) inp.value = cur;
+      this._kvText(knob, cur);
+    }
+  }
 }
+
+VehicleTestMode.KNOB_DEFAULTS = {
+  enginePower: 10, topSpeed: 38, brakePower: 15,
+  sideFriction: 0.8, rearGripMul: 1, _airGrav: 0.5, suspStiff: 42,
+};
