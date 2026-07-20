@@ -48,10 +48,15 @@ export class BlendController {
 
   /** engage a layered blend (or null to clear back to normal whole-clip playback) */
   set(layers, { fade = 0.18 } = {}) {
+    // any set() supersedes a pending clear-stop (below): a rapid clear→engage (double-tap
+    // while armed) must NOT let the delayed stop() kill the freshly-started blend — that
+    // dropped the upper body to bind pose = the "T-pose / torso twist on the second press"
+    const gen = this._gen = (this._gen || 0) + 1;
     if (!layers) {
       if (this.active) {
         for (const k in this._split) this._split[k].fadeOut(fade);
-        setTimeout(() => { for (const k in this._split) this._split[k].stop(); }, fade * 1000 + 50);
+        // only stop if NOTHING re-engaged in the meantime (gen still matches)
+        setTimeout(() => { if (this._gen === gen) for (const k in this._split) this._split[k].stop(); }, fade * 1000 + 50);
         this.active = null;
         this.animator.current = null;      // force the next whole-clip play to restart cleanly
       }
