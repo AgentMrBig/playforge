@@ -143,7 +143,7 @@ export class BehaviorTriggers {
     window.__pfTriggers = this;
     window.addEventListener("keydown", (e) => {
       if (e.repeat || /input|textarea|select/i.test(e.target?.tagName)) return;
-      if (window.__pfTest && window.__pfTest.active) return;   // workshop owns keys there
+      if (window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay) return;   // workshop owns keys — but in live play, triggers fire
       const name = this.map[e.code];
       if (name && !this.player.active) this.player.play(name);
     });

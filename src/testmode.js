@@ -44,12 +44,18 @@ export class TestMode {
     this.yaw = 0.6; this.pitch = 0.35; this.dist = 4.2;   // orbit state
     this.pan = new THREE.Vector3();                        // LMB drag = pan offset (Erik)
     this.anims = anims || ["idle", "walk", "run", "jump", "rifleIdle", "pistolIdle", "firingRifle"];
+    this.livePlay = false;          // Erik: toggle — ON = keyboard drives the game (WASD),
+                                    // tool shortcuts locked; OFF = tools active, character frozen
     this._buildUI();
-    window.addEventListener("keydown", (e) => { if (e.code === "KeyT" && !e.repeat) this.toggle(); if (e.key === "Shift") this._shift = true; });
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "KeyT" && !e.repeat) this.toggle();
+      if (e.code === "Backquote" && !e.repeat && this.active) this.toggleLivePlay();   // ` toggles live play (works even while the game holds the mouse)
+      if (e.key === "Shift") this._shift = true;
+    });
     // Maya tool shortcuts (Erik): W=move E=rotate R=scale — CAPTURE phase so the game's
     // E (enter car) / R (new island) / W (walk) never fire while the workshop is open
     window.addEventListener("keydown", (e) => {
-      if (!this.active || e.repeat) return;
+      if (!this.active || this.livePlay || e.repeat) return;   // live-play hands keys to the game
       const t = e.target && e.target.tagName;
       if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
       if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey) && e.shiftKey) { this.redo(); e.preventDefault(); e.stopImmediatePropagation(); return; }
@@ -101,7 +107,28 @@ export class TestMode {
     if (this.poseLib) { this.poseLib.style.display = on ? "" : "none"; if (on) this._refreshPoseLib(); }
     this.btn.classList.toggle("pf-on", on);
     if (!on && this._muscleOn) this.toggleMuscle(false);   // leaving test mode ends muscle mode
+    if (!on && this.livePlay) this.toggleLivePlay(false);  // and ends live-play
     if (!on) this.anim = null;                       // hand animation back to the game
+  }
+
+  /** ▶ LIVE PLAY toggle (Erik): ON hands the keyboard to the GAME (WASD moves the character,
+   * mouselook, follow camera, combat) and locks out the tool shortcuts; OFF freezes the
+   * character and returns the Anima tools. The gates elsewhere read window.__pfTest.livePlay. */
+  toggleLivePlay(on = !this.livePlay) {
+    this.livePlay = on;
+    if (on) {
+      if (this._muscleOn) this.toggleMuscle(false);   // can't WASD a ragdoll
+      if (this.limb) this.selectLimb(this.limb);      // drop any grabbed limb
+      this.rigControl = null; this.attachGizmo(null);
+      this.anim = null;                               // let gameplay drive locomotion
+      this.setPaused(false);
+    } else {
+      this.pan.set(0, 0, 0);                          // recenter the orbit cam
+    }
+    this.btn.textContent = on ? "▶ LIVE ( \` )" : "🎬 Anima (T)";
+    this.btn.classList.toggle("pf-live", on);
+    this.panel.querySelector('[data-act="liveplay"]')?.classList.toggle("pf-sel", on);
+    this.panel.classList.toggle("pf-dim", on);        // dim the tool panel while playing
   }
 
   /** force a state; null returns control to the game's anim logic. "tpose" freezes the bind pose. */
@@ -490,6 +517,9 @@ export class TestMode {
   /** per-frame: orbit camera around the character (runs after the rig → wins) */
   update(dt = 0.016) {
     if (!this.active || !this.player) return;
+    // ▶ LIVE PLAY: the game runs normally (WASD/mouselook/camera). Anima does nothing —
+    // no camera takeover, no pointer-lock release, tools idle — until you toggle it off.
+    if (this.livePlay) return;
     // cursor must stay VISIBLE + clickable in test mode (Erik) — break pointer lock the
     // instant anything re-grabs it (same treatment Ember gave the vehicle rig)
     if (typeof document !== "undefined" && document.pointerLockElement) document.exitPointerLock();
@@ -686,6 +716,12 @@ export class TestMode {
         .pf-test-btn { position: fixed; left: 16px; top: 64px; z-index: 45; padding: 10px 16px; border-radius: 10px;
           border: 0; background: #2c6e8fdd; color: #fff; font: 700 14px system-ui; cursor: pointer; }
         .pf-test-btn.pf-on { background: #1d9b6cdd; }
+        .pf-test-btn.pf-live { background: #c23b3bdd; }
+        /* live play dims + locks the TOOL groups, but the live-play button stays clickable */
+        .pf-test-panel.pf-dim .pf-grp, .pf-test-panel.pf-dim .pf-anima-title, .pf-test-panel.pf-dim .pf-test-hint { opacity: .35; pointer-events: none; }
+        .pf-test-panel.pf-dim [data-act="liveplay"] { background: #c23b3b88; }
+        .pf-anima-title { font: 800 13px system-ui; letter-spacing: 1.5px; color: #7fd4ff; margin: 0 0 7px; text-align: center; }
+        .pf-anima-title small { display: block; font: 600 8.5px system-ui; letter-spacing: 1px; color: #ffffff66; margin-top: 1px; }
         .pf-test-panel { position: fixed; right: 16px; top: 205px; z-index: 45; width: 184px;   /* below the minimap */
           background: rgba(16,20,26,.88); border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
           padding: 8px; font: 12px system-ui; color: #dfe6ec; box-sizing: border-box;
@@ -739,7 +775,7 @@ export class TestMode {
       document.head.appendChild(s);
     }
     this.btn = document.createElement("button");
-    this.btn.className = "pf-test-btn"; this.btn.textContent = "🧪 TEST (T)";
+    this.btn.className = "pf-test-btn"; this.btn.textContent = "🎬 Anima (T)";
     this.btn.addEventListener("click", () => this.toggle());
     document.body.appendChild(this.btn);
 
@@ -751,6 +787,8 @@ export class TestMode {
     // tidy rows instead of a wall. Regroups DOM only — every data-act/anim/limb
     // is untouched, so all the existing handlers below still bind (General's trap #3).
     this.panel.innerHTML = `
+      <div class="pf-anima-title">🎬 ANIMA<small>character studio</small></div>
+      <button data-act="liveplay" title="hand the keyboard to the game — WASD moves the character; tool shortcuts lock. Toggle off to pose.">▶ live play</button>
       <div class="pf-grp pf-collapsed" data-grp="anim">
         <div class="pf-grp-h">🎬 Animation</div>
         <div class="pf-grp-b">
@@ -835,6 +873,7 @@ export class TestMode {
     this.panel.querySelector('[data-act="weld"]').addEventListener("click", () => this.toggleWeld());
     this.panel.querySelector('[data-act="stickyfeet"]').addEventListener("click", () => this.setSticky("foot"));
     this.panel.querySelector('[data-act="stickyhands"]').addEventListener("click", () => this.setSticky("hand"));
+    this.panel.querySelector('[data-act="liveplay"]').addEventListener("click", () => this.toggleLivePlay());
     this.panel.querySelector('[data-act="muscle"]').addEventListener("click", () => this.toggleMuscle());
     this.panel.querySelector('[data-act="shove"]').addEventListener("click", () => this.shoveTest());
     this.panel.querySelector(".pf-musc-slider").addEventListener("input", (e) => this.setMuscleTone(+e.target.value));

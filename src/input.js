@@ -66,7 +66,7 @@ export class Input {
       // the character workshop needs a FREE cursor — a lock request mid-gizmo-drag
       // throws InvalidStateError inside TransformControls' setPointerCapture and
       // freezes clientX/Y, killing the drag (Erik: "it knows how it SHOULD move")
-      if (window.__pfTest && window.__pfTest.active) return;
+      if (window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay) return;   // live play needs the lock for mouselook
       if (document.pointerLockElement !== this.target) this.target.requestPointerLock();
     };
     this.target.addEventListener("pointerdown", req);

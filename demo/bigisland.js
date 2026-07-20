@@ -306,6 +306,9 @@ class PlayerMove {
     const body = entity.components.find((c) => c.velocity && c.onGround !== undefined);
     if (!body) return;
     if (drivingCar) { body.velocity.x = 0; body.velocity.z = 0; return; }
+    // Anima tools mode (test open, live-play OFF) freezes the character so WASD can't drive
+    // it off while you pose; live-play ON falls through to normal movement (Erik's toggle)
+    if (window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay) { body.velocity.x = 0; body.velocity.z = 0; return; }
     const cam = world.camera;
     const f = new THREE.Vector3(); cam.getWorldDirection(f); f.y = 0; f.normalize();
     const rt = new THREE.Vector3().crossVectors(f, new THREE.Vector3(0, 1, 0));
@@ -843,7 +846,7 @@ try {
   combat.equip("rifle").then(() => { combat.ammo = Infinity; });   // infinite ammo for the first-pass feel test
   world.spawn("combat").add({
     update(dt) {
-      combat.enabled = !drivingCar && !(window.__pfTest && window.__pfTest.active);  // on foot, and not in test mode (mouse = camera there)
+      combat.enabled = !drivingCar && !(window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay);  // on foot; off in Anima tools mode (mouse = inspector), ON in live play
       combat.update(dt);
       combatHud.update({ name: combat.weapon.name, ammo: combat.ammo, maxAmmo: combat.weapon.ammo, kind: combat.weapon.kind });
     },
