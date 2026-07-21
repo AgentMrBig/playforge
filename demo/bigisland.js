@@ -485,11 +485,25 @@ class PlayerMove {
     const ix = input.axis("KeyA", "KeyD") + stick.x;
     const iz = input.axis("KeyS", "KeyW") - stick.y;
     const run = input.down("ShiftLeft") ? 9.3 : 5.0;  // walk trimmed to match the anim (Erik: still a touch fast)
-    const wish = f.multiplyScalar(iz).addScaledVector(rt, ix);
+    const wish = f.multiplyScalar(iz).addScaledVector(rt, ix);   // horizontal intent (also faces the character below)
     if (wish.lengthSq() > 1) wish.normalize();
-    body.velocity.x = wish.x * run;
-    body.velocity.z = wish.z * run;
-    if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
+    // FLY MODE (Erik: "give our main character the ability to fly") — G toggles.
+    // Then W/S fly along your look (incl. pitch up/down), A/D strafe, Space up,
+    // Ctrl/C down, Shift boosts. CharacterBody skips gravity while body.flying.
+    if (input.pressed("KeyG")) { body.flying = !body.flying; body.velocity.y = 0; audio.play("click"); }
+    if (body.flying) {
+      const look = new THREE.Vector3(); cam.getWorldDirection(look);          // full 3D look dir
+      const rt3 = new THREE.Vector3().crossVectors(look, new THREE.Vector3(0, 1, 0)).normalize();
+      const flySpd = input.down("ShiftLeft") ? 26 : 13;
+      const w = new THREE.Vector3().addScaledVector(look, iz).addScaledVector(rt3, ix);
+      if (input.down("Space")) w.y += 1;                  // Space = ascend; look down + W to descend
+      if (w.lengthSq() > 1) w.normalize();
+      body.velocity.set(w.x * flySpd, w.y * flySpd, w.z * flySpd);
+    } else {
+      body.velocity.x = wish.x * run;
+      body.velocity.z = wish.z * run;
+      if (input.pressed("Space") && body.onGround) { body.velocity.y = 9; audio.play("jump"); }
+    }
     // ARMED: face where you're aiming (GTA-style). Else: ease toward movement dir.
     const armed = !!(window.__pfCombat && window.__pfCombat.enabled);
     if (armed) {

@@ -884,7 +884,7 @@ export class CharacterBody {
       this._ipCurr = null;              // teleport: snap the interp, don't slide
       return;
     }
-    this.velocity.y += this.gravity * dt;
+    if (!this.flying) this.velocity.y += this.gravity * dt;   // fly mode: no gravity, velocity.y is player-driven (Erik)
     // CAR RIDING (Erik): standing on a dynamic body means moving WITH it —
     // the ground under your feet is a moving frame. Carry the platform's
     // velocity at the foot contact (linear + ω×r, so a turning car swings
@@ -915,7 +915,7 @@ export class CharacterBody {
     const fallVy = this.velocity.y;
     this.onGround = this.ctrl.computedGrounded();
     const justLanded = !wasGrounded && this.onGround && fallVy < -2;
-    if (this.onGround && this.velocity.y < 0) this.velocity.y = 0;
+    if (!this.flying && this.onGround && this.velocity.y < 0) this.velocity.y = 0;
     // standing WEIGHT: a kinematic capsule is infinitely heavy to the solver,
     // so a person on a car hood pressed nothing (Erik: "it needs to feel my
     // weight"). Apply his real weight (m·g) to whatever dynamic body he
