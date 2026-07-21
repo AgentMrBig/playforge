@@ -28,10 +28,32 @@ export class Pedestrian {
     this.speed = speed;
     this.clipWalk = clips.walk;
     this.clipIdle = clips.idle;
+    this.clipRun = clips.run || clips.walk;
     this.footOffset = footOffset;
     this.target = null;
     this.pauseT = 0;
+    this.state = "stroll";         // stroll | idle | flee
+    this.fleeFrom = null; this.fleeT = 0;
     this.yaw = Math.random() * Math.PI * 2;
+  }
+
+  /** ambient brain: is there something to run FROM right now? (gunfire nearby, a fast car
+   * bearing down). Returns the danger {x,z} to flee away from, or null. */
+  _danger(p) {
+    const pf = (typeof window !== "undefined") && window.__pf;
+    if (!pf) return null;
+    const cs = typeof window !== "undefined" && window.__pfCombat;
+    if (cs && cs.lastFireAt && performance.now() - cs.lastFireAt < 700 && pf.player) {
+      const pp = pf.player.position;
+      if (Math.hypot(p.x - pp.x, p.z - pp.z) < 20) return { x: pp.x, z: pp.z };   // shots near → scatter
+    }
+    for (const car of pf.cars || []) {
+      const vb = car.components && car.components.find((c) => c.rb && c.velocity);
+      if (!vb) continue;
+      const cp = car.position, spd = vb.velocity.length ? vb.velocity.length() : 0;
+      if (spd > 8 && Math.hypot(p.x - cp.x, p.z - cp.z) < 11) return { x: cp.x, z: cp.z };  // car incoming → dive away
+    }
+    return null;
   }
 
   init(entity) {
@@ -60,11 +82,30 @@ export class Pedestrian {
     const anim = entity.get(Animator);
     const p = entity.position;
 
+    // ── FLEE: bolt away from gunfire / a speeding car ──
+    const danger = this._danger(p);
+    if (danger) { this.fleeFrom = danger; this.fleeT = 1.6 + Math.random(); this.state = "flee"; this.pauseT = 0; }
+    if (this.state === "flee") {
+      this.fleeT -= dt;
+      let dx = p.x - this.fleeFrom.x, dz = p.z - this.fleeFrom.z; const d = Math.hypot(dx, dz) || 1;
+      const nx = dx / d, nz = dz / d, run = this.speed * 2.6;
+      if (this.body) { this.body.velocity.x = nx * run; this.body.velocity.z = nz * run; }
+      else { p.x += nx * run * dt; p.z += nz * run * dt; this._clamp(p); }
+      this.yaw = Math.atan2(nx, nz); this._faceTo(entity, this.yaw, dt * 2);
+      anim?.play(this.clipRun, { fade: 0.15, speed: 1.15 });
+      if (this.fleeT <= 0 && !danger) { this.state = "stroll"; this._pick(); }
+      return;
+    }
+
     if (this.pauseT > 0) {
       this.pauseT -= dt;
       this._drive(0, 0);
       anim?.play(this.clipIdle, { fade: 0.3 });
-      this._faceTo(entity, this.yaw, dt);
+      // REACT: if you're standing close, glance at you instead of staring into space
+      const pf = (typeof window !== "undefined") && window.__pf;
+      if (pf && pf.player && Math.hypot(p.x - pf.player.position.x, p.z - pf.player.position.z) < 7) {
+        this._faceTo(entity, Math.atan2(pf.player.position.x - p.x, pf.player.position.z - p.z), dt * 1.5);
+      } else this._faceTo(entity, this.yaw, dt);
       if (!this.body) this._clamp(p);
       return;
     }
@@ -128,6 +169,7 @@ export async function spawnPedestrians(world, {
       const names = Object.keys(clips);
       base._walk = clips.walk ? "walk" : (names.find((n) => /walk/i.test(n)) || names[0]);
       base._idle = clips.idle ? "idle" : (names.find((n) => /idle/i.test(n)) || base._walk);
+      base._run = clips.run ? "run" : (names.find((n) => /run/i.test(n)) || base._walk);
       bases.push(base);
     } catch (e) { console.warn("[npc] base failed:", s.model, e.message); }
   }
@@ -155,7 +197,7 @@ export async function spawnPedestrians(world, {
       if (usePhysics) e.add(new CharacterBody({ radius: 0.28, height: 1.7, massKg: 70 }));
       e.add(new Pedestrian({
         heightAt, center: { x: c.x, z: c.z }, radius: c.radius || 16,
-        speed: 1.0 + Math.random() * 0.7, clips: { walk: base._walk, idle: base._idle }, footOffset,
+        speed: 1.0 + Math.random() * 0.7, clips: { walk: base._walk, idle: base._idle, run: base._run }, footOffset,
       }));
       // desync the crowd — advance each mixer a random beat so they don't lockstep
       anim.play(base._walk); anim.update(Math.random() * 1.8);
