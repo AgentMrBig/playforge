@@ -1027,7 +1027,13 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyE") {
     if (flyingPlane) {                                   // exit plane → hop out beside it
       const rt = new THREE.Vector3(1, 0, 0).applyQuaternion(flyingPlane.object3d.quaternion);
-      player.at(flyingPlane.position.x + rt.x * 4.5, flyingPlane.position.y + 0.6, flyingPlane.position.z + rt.z * 4.5);
+      const ex = flyingPlane.position.x + rt.x * 4.5, ez = flyingPlane.position.z + rt.z * 4.5;
+      const ey = Math.max(flyingPlane.position.y + 0.4, heightAt(ex, ez) + 1.0);   // stand clear, on ground if the plane's low
+      player.at(ex, ey, ez);
+      // re-enable the walker collider (disabled on entry) with zero velocity so
+      // it doesn't get flung out of the plane's box
+      const pb = player.components.find((c) => c.onGround !== undefined && c.setEnabled);
+      if (pb) { pb.velocity?.set?.(0, 0, 0); pb.setEnabled(true); }
       player.object3d.visible = true; rig.target = player; rig.distance = 6.5; flyingPlane = null;
     } else if (drivingCar) {
       drivingCar.components.find((c) => c.rpm !== undefined)?.stop();
@@ -1046,6 +1052,10 @@ window.addEventListener("keydown", (e) => {
         rig.target = best; rig.distance = 9.5;
       } else if (planeEntity.position.distanceTo(player.position) < 9) {   // ✈️ hop into the plane
         flyingPlane = planeEntity; player.object3d.visible = false; audio.play("click");
+        // pull the walker collider out of the way — otherwise it blocks the plane
+        // on the runway ("wouldn't do anything") and ejects the player on exit
+        planeEntity.components.find((c) => c.rb)?.rb?.wakeUp?.();
+        player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
         rig.target = planeEntity; rig.distance = 16;
       }
     }

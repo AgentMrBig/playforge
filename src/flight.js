@@ -155,7 +155,7 @@ export class PlaneControls {
     if (!this.active()) { f.pitchIn = f.rollIn = f.yawIn = 0; return; }
     // throttle lever: W raise, S lower, holds its value
     const dth = (input.down("KeyW") ? 1 : 0) - (input.down("KeyS") ? 1 : 0);
-    f.throttle = THREE.MathUtils.clamp(f.throttle + dth * dt * 0.7, 0, 1);
+    f.throttle = THREE.MathUtils.clamp(f.throttle + dth * dt * 1.1, 0, 1);   // ~1s to full — responsive but still a lever
     f.pitchIn = input.axis("ArrowUp", "ArrowDown");   // ArrowDown = pull back = nose up
     f.rollIn = input.axis("KeyA", "KeyD");            // D = roll right
     f.yawIn = input.axis("KeyQ", "KeyE");             // E = yaw right
