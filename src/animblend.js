@@ -75,9 +75,10 @@ export class BlendController {
     const lo = this._action(lower, "lower"), up = this._action(upper, "upper");
     for (const a of [lo, up]) {
       if (!a) continue;
-      if (!a.isRunning()) { a.reset(); a.play(); }
       a.enabled = true;
-      a.fadeIn(fade);                        // fade in from whatever weight (0 if just cleared)
+      if (!a.isRunning()) { a.reset(); a.play(); a.fadeIn(fade); }   // brand new → fade in from 0
+      else if (a.getEffectiveWeight() < 0.5) a.fadeIn(fade);         // faded-out (from a clear) → fade back in
+      else a.setEffectiveWeight(1);                                  // already at full → HOLD it (fadeIn would reset to 0 = 1-frame T-pose)
     }
     this.active = { lower, upper };
   }
