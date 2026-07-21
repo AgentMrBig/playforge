@@ -959,6 +959,10 @@ export class CharacterBody {
   // positions (see _move). Shares the vehicle's window.__pfInterp A/B toggle.
   update(dt, ctx) {
     if (!this._ipCurr || !this._entity) return;
+    // stand down when the capsule is disabled — the ragdoll / get-up / muscle mode OWNS the
+    // entity position then; interpolating stale feet pos here pinned him to the blow-up spot
+    // so the camera locked onto it while the ragdoll flew off, and fought the get-up ground-fix.
+    if (this.enabled === false) return;
     if (typeof window !== "undefined" && window.__pfInterp === false) {
       this._entity.object3d.position.copy(this._ipCurr);
       return;
