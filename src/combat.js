@@ -89,6 +89,19 @@ export class CombatSystem {
     this._swing = null;                                            // active melee swing animation
     input.bind?.("attack", ["Mouse0", "KeyJ"]);
     input.bind?.("nextWeapon", ["KeyQ"]);
+    this._preloadWeapons();   // warm the model cache at startup so a pickup never stalls the game
+  }
+
+  /** Preload every weapon model into loadModel's cache, spread across startup frames, so
+   * equipping a picked-up weapon is an instant cached clone instead of a blocking FBX parse
+   * mid-game (Erik: "pickups pause the game ~1 sec — I don't want pickups to slow it down"). */
+  async _preloadWeapons() {
+    if (!this.loadProp) return;
+    for (const id of WEAPON_ORDER) {
+      const url = WEAPONS[id]?.url; if (!url) continue;
+      try { await this.loadProp(url); } catch {}
+      await new Promise((r) => setTimeout(r, 0));   // yield between parses so boot stays smooth
+    }
   }
 
   async equip(id) {
