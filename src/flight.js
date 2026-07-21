@@ -27,7 +27,7 @@ export class FlightModel {
       dragCoef: 5.5,         // drag = dragCoef · speed · velocity
       stallSpeed: 26,        // m/s below which lift fades (need speed to fly)
       pitchTorque: 15000, rollTorque: 50000, yawTorque: 15000,   // pitch toned down — Erik could nearly flip at 24000
-      stabilize: 1600,       // passive weathervane: tail points nose into airflow
+      stabilize: 1600,       // YAW-only weathervane: vertical tail tracks heading into the airflow (no pitch auto-level)
       halfExtents: [3.4, 0.5, 3.2],   // collider box (placeholder plane)
     }, o);
     this.throttle = 0; this.pitchIn = 0; this.rollIn = 0; this.yawIn = 0;
@@ -88,18 +88,29 @@ export class FlightModel {
     const fz = this._nose.z * th + this._up.z * liftMag - this._v.z * dragS;
     rb.applyImpulse({ x: fx * dt, y: fy * dt, z: fz * dt }, true);
 
-    // PASSIVE STABILITY — weathervane: the tail pushes the nose toward the
-    // airflow (restoring torque ∝ how far the nose points off the velocity
-    // vector, scaled by airspeed). This is what keeps a real plane tracking
-    // straight without input; it also stops the ground-roll from wobbling.
+    // PASSIVE STABILITY — weathervane, YAW ONLY. A real vertical tail keeps the
+    // nose tracking the airflow HORIZONTALLY (and steadies the takeoff roll), but
+    // it must NOT auto-level pitch — a full-axis weathervane makes the plane fly
+    // itself and fight the pilot (Erik: "tap W and it takes off + flies forever,
+    // you can't actually fly it"). Pitch is now 100% the pilot's: pull back and it
+    // STAYS there; manage your airspeed or you'll stall and drop. No autopilot.
     if (speed > 1.5) {
       const vdx = this._v.x / speed, vdy = this._v.y / speed, vdz = this._v.z / speed;
-      // nose × velDir → rotation axis that swings the nose toward velocity
-      const sx = this._nose.y * vdz - this._nose.z * vdy;
+      const sx = this._nose.y * vdz - this._nose.z * vdy;   // nose × velDir (restoring axis)
       const sy = this._nose.z * vdx - this._nose.x * vdz;
       const sz = this._nose.x * vdy - this._nose.y * vdx;
-      const k = this.stabilize * speed * dt;
-      rb.applyTorqueImpulse({ x: sx * k, y: sy * k, z: sz * k }, true);
+      if (this.airborne) {
+        // IN THE AIR: yaw only. Pitch is the pilot's — no auto-level, no autopilot.
+        const yaw = sx * this._up.x + sy * this._up.y + sz * this._up.z;
+        const k = this.stabilize * speed * dt * yaw;
+        rb.applyTorqueImpulse({ x: this._up.x * k, y: this._up.y * k, z: this._up.z * k }, true);
+      } else {
+        // ON THE GROUND: full weathervane damps the takeoff-roll wobble so it
+        // tracks straight and builds speed cleanly (this is what yaw-only alone
+        // couldn't hold — the roll pitch/roll-wobbled and scrubbed speed).
+        const k = this.stabilize * speed * dt;
+        rb.applyTorqueImpulse({ x: sx * k, y: sy * k, z: sz * k }, true);
+      }
     }
 
     // CONTROL torques — more authority with airspeed (control surfaces bite faster)
