@@ -14,6 +14,7 @@ import {
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health spawner
 import { initLoadingScreen } from "../src/loadingscreen.js";   // Ember: hold reveal until built
+import { FlightModel, PlaneControls } from "../src/flight.js";  // Ember: flyable plane
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -402,6 +403,7 @@ function decorate(tile, group) {
 // scene wiring: streamed terrain with per-tile Rapier colliders
 // ============================================================================
 let drivingCar = null;
+let flyingPlane = null;   // Ember: the plane the player is currently flying (E to enter/exit)
 const terrain = new StreamedTerrain({
   heightAt, colorAt, decorate,
   tileSize: 128,
@@ -473,7 +475,7 @@ class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
     const body = entity.components.find((c) => c.velocity && c.onGround !== undefined);
     if (!body) return;
-    if (drivingCar) { body.velocity.x = 0; body.velocity.z = 0; return; }
+    if (drivingCar || flyingPlane) { body.velocity.x = 0; body.velocity.z = 0; return; }   // in a car/plane — hands off the walker
     if (window.__pfGetup) { body.velocity.x = 0; body.velocity.z = 0; return; }   // getting up — don't drive/turn
     // Anima tools mode (test open, live-play OFF) freezes the character so WASD can't drive
     // it off while you pose; live-play ON falls through to normal movement (Erik's toggle)
@@ -988,10 +990,44 @@ world.spawn("vehicletest").add({ update() { vehicleTest.update(); } });
 // fires a synthetic key on window, so behavior is identical to keyboard.
 new TouchControls();
 
+// ✈️ PLANE (Ember — Erik: planes/jets) — a flyable aircraft on the runway. Real
+// aero via FlightModel; PlaneControls only steers while you're flying it (E to
+// enter/exit, like a car). Placeholder box-plane until a jet from the military
+// pack is rigged on. Nose faces -Z to match the flight model.
+function makePlaceholderPlane() {
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color: 0x9fb4c9, roughness: 0.55, metalness: 0.25 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.0, 6.4), skin); body.position.z = -0.3;
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(9.6, 0.22, 1.7), skin); wing.position.set(0, 0.05, 0.3);
+  const stab = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.2, 1.0), skin); stab.position.set(0, 0.2, 2.8);
+  const fin  = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.3, 1.1), skin); fin.position.set(0, 0.85, 2.9);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.5, 14), new THREE.MeshStandardMaterial({ color: 0xc9463a }));
+  nose.rotation.x = -Math.PI / 2; nose.position.z = -3.6;
+  g.add(body, wing, stab, fin, nose);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+const planeEntity = world.spawn("plane");
+const planeSpawnPos = { x: RUN.x0 + 40, y: RUN.h + 1.6, z: RUN.z };
+planeEntity.at(planeSpawnPos.x, planeSpawnPos.y, planeSpawnPos.z);
+planeEntity.mesh(makePlaceholderPlane());
+const flightModel = new FlightModel();
+planeEntity.add(flightModel);
+planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity));
+(function orientPlane() {    // sit it on the runway facing +x once the physics body exists
+  if (flightModel.rb) flightModel.place(planeSpawnPos.x, planeSpawnPos.y, planeSpawnPos.z, -Math.PI / 2);
+  else requestAnimationFrame(orientPlane);
+})();
+window.__pfPlaneEntity = planeEntity;
+
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
   if (e.code === "KeyE") {
-    if (drivingCar) {
+    if (flyingPlane) {                                   // exit plane → hop out beside it
+      const rt = new THREE.Vector3(1, 0, 0).applyQuaternion(flyingPlane.object3d.quaternion);
+      player.at(flyingPlane.position.x + rt.x * 4.5, flyingPlane.position.y + 0.6, flyingPlane.position.z + rt.z * 4.5);
+      player.object3d.visible = true; rig.target = player; rig.distance = 6.5; flyingPlane = null;
+    } else if (drivingCar) {
       drivingCar.components.find((c) => c.rpm !== undefined)?.stop();
       const q = drivingCar.object3d.quaternion;
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
@@ -1006,6 +1042,9 @@ window.addEventListener("keydown", (e) => {
         drivingCar = best; player.object3d.visible = false; audio.play("click");
         best.components.find((c) => c.rpm !== undefined)?.start();
         rig.target = best; rig.distance = 9.5;
+      } else if (planeEntity.position.distanceTo(player.position) < 9) {   // ✈️ hop into the plane
+        flyingPlane = planeEntity; player.object3d.visible = false; audio.play("click");
+        rig.target = planeEntity; rig.distance = 16;
       }
     }
   }

@@ -27,6 +27,7 @@ export class FlightModel {
       dragCoef: 5.5,         // drag = dragCoef · speed · velocity
       stallSpeed: 26,        // m/s below which lift fades (need speed to fly)
       pitchTorque: 24000, rollTorque: 50000, yawTorque: 15000,
+      stabilize: 1600,       // passive weathervane: tail points nose into airflow
       halfExtents: [3.4, 0.5, 3.2],   // collider box (placeholder plane)
     }, o);
     this.throttle = 0; this.pitchIn = 0; this.rollIn = 0; this.yawIn = 0;
@@ -53,8 +54,10 @@ export class FlightModel {
         .setLinearDamping(0.02).setAngularDamping(2.6).setCanSleep(false));
     this.rb.setAdditionalMass(this.mass, true);
     const h = this.halfExtents;
+    // low friction + no bounce → the box "rolls" down the runway like wheels
+    // (friction 0.5 grabbed the ground and made it tumble on takeoff roll)
     this.col = P.world.createCollider(
-      R.ColliderDesc.cuboid(h[0], h[1], h[2]).setFriction(0.5).setRestitution(0.1), this.rb);
+      R.ColliderDesc.cuboid(h[0], h[1], h[2]).setFriction(0.05).setRestitution(0.0), this.rb);
     P._handleEnt.set(this.col.handle, entity);
     this._preHook = (dt) => this._fly(dt);
     this._postHook = () => this._sync(entity);
@@ -84,6 +87,20 @@ export class FlightModel {
     const fy = this._nose.y * th + this._up.y * liftMag - this._v.y * dragS;
     const fz = this._nose.z * th + this._up.z * liftMag - this._v.z * dragS;
     rb.applyImpulse({ x: fx * dt, y: fy * dt, z: fz * dt }, true);
+
+    // PASSIVE STABILITY — weathervane: the tail pushes the nose toward the
+    // airflow (restoring torque ∝ how far the nose points off the velocity
+    // vector, scaled by airspeed). This is what keeps a real plane tracking
+    // straight without input; it also stops the ground-roll from wobbling.
+    if (speed > 1.5) {
+      const vdx = this._v.x / speed, vdy = this._v.y / speed, vdz = this._v.z / speed;
+      // nose × velDir → rotation axis that swings the nose toward velocity
+      const sx = this._nose.y * vdz - this._nose.z * vdy;
+      const sy = this._nose.z * vdx - this._nose.x * vdz;
+      const sz = this._nose.x * vdy - this._nose.y * vdx;
+      const k = this.stabilize * speed * dt;
+      rb.applyTorqueImpulse({ x: sx * k, y: sy * k, z: sz * k }, true);
+    }
 
     // CONTROL torques — more authority with airspeed (control surfaces bite faster)
     const auth = THREE.MathUtils.clamp(0.3 + speed / 45, 0.3, 1.5) * dt;
