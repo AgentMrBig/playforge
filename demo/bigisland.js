@@ -1023,6 +1023,27 @@ planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity
   else requestAnimationFrame(orientPlane);
 })();
 window.__pfPlaneEntity = planeEntity;
+// swap the box-plane for General's real Synty jet, now that loadProp preserves the
+// SkinnedMesh skeleton (skeleton-aware clone, 53602ef) so it actually renders + stays
+// rigged for future control-surface animation. Synty jet is Z-up, length along X —
+// stand it upright and point the nose down -Z to match the FlightModel's forward.
+loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_PolygonMilitary_01_A.PNG", textureDir: "models/military", textureFlipY: true })
+  .then((r) => {
+    if (!r?.group) return;
+    const jet = r.group;
+    jet.rotation.set(-Math.PI / 2, 0, 0);              // Synty Z-up → Y-up (stand upright)
+    jet.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), Math.PI / 2);   // yaw length X → nose -Z
+    jet.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(jet); const sz = new THREE.Vector3(); box.getSize(sz);
+    jet.scale.multiplyScalar(9 / Math.max(sz.x, sz.y, sz.z));   // ~9u long, matches the flight collider
+    // skinned meshes can deform past their bind bounds → skip the (unreliable) frustum test
+    jet.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+    const holder = planeEntity.object3d;               // FlightModel drives this node
+    for (let i = holder.children.length - 1; i >= 0; i--) holder.remove(holder.children[i]);
+    holder.add(jet);
+    window.__pfJet = jet;
+  })
+  .catch((e) => console.warn("[jet] load failed, keeping box-plane:", e.message));
 const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders
 
 // 🚤 BOAT (Ember — Erik: water → boats) — a buoyant boat floating just offshore.
