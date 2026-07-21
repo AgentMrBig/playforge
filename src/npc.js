@@ -71,7 +71,24 @@ export class Pedestrian {
   }
 
   _pick() {
-    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * this.radius;
+    const pf = (typeof window !== "undefined") && window.__pf;
+    // ~40%: head somewhere PURPOSEFUL — a spot beside a nearby road (walk the sidewalk),
+    // so they traverse the streets instead of circling one patch (the "living city" feel).
+    if (pf && pf.roadGraph && Math.random() < 0.4) {
+      const rg = pf.roadGraph;
+      const sx = this.center.x + (Math.random() * 2 - 1) * this.radius * 2.2;
+      const sz = this.center.z + (Math.random() * 2 - 1) * this.radius * 2.2;
+      const n = rg.nearestOnRoad(sx, sz);
+      if (n && n.point && n.tangent) {
+        const [tx, tz] = n.tangent, w = (rg.roads[n.roadId]?.width ?? 6) * 0.5 + 1.6;
+        const side = (Math.random() < 0.5 ? 1 : -1) * w;                 // offset to the sidewalk, not the lane
+        this.target = { x: n.point[0] + tz * side, z: n.point[1] - tx * side };
+        return;
+      }
+    }
+    // else: local wander, occasionally a longer stroll so they cover ground
+    const reach = this.radius * (Math.random() < 0.25 ? 2.2 : 1);
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * reach;
     this.target = { x: this.center.x + Math.cos(a) * d, z: this.center.z + Math.sin(a) * d };
   }
 
