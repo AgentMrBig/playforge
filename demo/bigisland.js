@@ -1024,15 +1024,17 @@ planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity
 })();
 window.__pfPlaneEntity = planeEntity;
 // swap the box-plane for General's real Synty jet, now that loadProp preserves the
-// SkinnedMesh skeleton (skeleton-aware clone, 53602ef) so it actually renders + stays
-// rigged for future control-surface animation. FBXLoader already loads it upright with
-// the nose on the flight-forward axis — brute-forced against the PHYSICS-DRIVEN holder,
-// identity rotation gives up +Y, nose +X. (My earlier Z-up correction mangled it onto
-// its side — Erik caught it live; headless top-down/chase views can't see the roll.)
+// SkinnedMesh skeleton (skeleton-aware clone, 53602ef) so it renders + stays rigged for
+// future control-surface animation. FBXLoader loads it upright already (no Z-up fix — that
+// rolled it onto its side, Erik caught it live). Its nose (pointed radome) is the mesh's
+// +X end and its length runs across the flight-forward axis, so yaw +90° to point the nose
+// down the runway (+X world). Verified nose=[1,0,0] up=[0,1,0] + top-down against the
+// PHYSICS-DRIVEN holder — headless chase/3-4 views mislead on both roll AND yaw.
 loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_Veh_Jet_01_A.PNG", textureDir: "models/military", textureFlipY: true })
   .then((r) => {
     if (!r?.group) return;
     const jet = r.group;
+    jet.rotation.y = Math.PI / 2;                 // nose (+X) → flight-forward
     jet.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(jet); const sz = new THREE.Vector3(); box.getSize(sz);
     jet.scale.multiplyScalar(9 / Math.max(sz.x, sz.y, sz.z));   // ~9u long, matches the flight collider
