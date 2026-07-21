@@ -16,6 +16,7 @@ import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health s
 import { initLoadingScreen } from "../src/loadingscreen.js";   // Ember: hold reveal until built
 import { FlightModel, PlaneControls } from "../src/flight.js";  // Ember: flyable plane
 import { PlaneTuner } from "../src/planetest.js";                // Ember: live flight-feel panel
+import { makeWater } from "../src/water.js";                     // Ember: animated ocean (boats next)
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -458,16 +459,15 @@ function attachTilePhysics(tile, mesh) {
 }
 world.spawn("terrain").add(terrain);
 
-// sea + catch-all follow the action
-const sea = world.spawn("sea").mesh(new THREE.Mesh(
-  new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2),
-  new THREE.MeshStandardMaterial({ color: 0x2e6d9e, transparent: true, opacity: 0.8, roughness: 0.3 }),
-)).at(0, SEA, 0);
+// sea — animated ocean (Ember). Follows the action; waves + sun glint + horizon
+// blend all live via water.js. window.__pfWater.getHeight(x,z,t) floats boats.
+const water = makeWater({ size: 3600, segments: 180, y: SEA });
+const sea = world.spawn("sea").mesh(water.mesh).at(0, SEA, 0);
 sea.add({ update(dt, { engine }) {
-  const a = (drivingCar ?? player).position;
-  sea.position.x = a.x; sea.position.z = a.z;
-  sea.position.y = SEA + Math.sin(engine.time * 0.7) * 0.1;
+  const a = (drivingCar ?? flyingPlane ?? player).position;
+  water.update(dt, { engine, camera: world.camera, anchor: a });
 } });
+if (typeof window !== "undefined") window.__pfWater = water;
 
 // ============================================================================
 // PLAYER — the real mocap character (block guy is gone)
