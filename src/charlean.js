@@ -70,11 +70,15 @@ export class TrajectoryLean {
     const hx = this.heading.x, hz = this.heading.z;
     const rx = hz, rz = -hx;                          // right = heading rotated -90°
 
+    // GROUNDED ONLY: air-control snaps velocity 0→full instantly, spiking the accel and
+    // twisting the spine mid-jump (Erik: "jump then press a direction → torso rotates in on
+    // itself"). You don't dig your heels in mid-air — ease the lean out while airborne.
+    const grounded = body.onGround !== false;
     const fwdA = this.accel.x * hx + this.accel.z * hz;   // along heading (+ speeding up)
     const sideA = this.accel.x * rx + this.accel.z * rz;  // lateral (+ turning right)
     const clamp = (v) => Math.max(-p.max, Math.min(p.max, v));
-    const tPitch = clamp(fwdA * p.fwdGain);
-    const tRoll = clamp(-sideA * p.sideGain);   // bank INTO the turn (Erik: was mirrored)
+    const tPitch = grounded ? clamp(fwdA * p.fwdGain) : 0;
+    const tRoll = grounded ? clamp(-sideA * p.sideGain) : 0;   // bank INTO the turn (Erik: was mirrored)
 
     // low-pass the applied lean so it eases in and settles (no snap)
     const kl = 1 - Math.exp(-p.blend * dt);
