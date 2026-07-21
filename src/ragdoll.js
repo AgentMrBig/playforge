@@ -454,18 +454,26 @@ export class Ragdoll {
    * (head direction) to orient the stand toward. Signs are best-guess (Erik confirms). */
   groundOrientation() {
     const T = this._tmp;
-    const chest = this._byName.chest, pelvis = this._byName.pelvis;
+    const get = (n) => this._byName[n]?.body.translation();
+    const chest = get("chest"), pelvis = get("pelvis"), head = get("head");
     if (!chest || !pelvis) return { faceUp: true, yaw: 0 };
-    const pc = chest.body.translation(), pp = pelvis.body.translation();
-    const spine = T.v1.set(pc.x - pp.x, pc.y - pp.y, pc.z - pp.z);      // pelvis→chest
-    const aR = this._byName.upperArmR, aL = this._byName.upperArmL;
-    let faceUp = spine.y > -0.15;
-    if (aR && aL) {
-      const pr = aR.body.translation(), pl = aL.body.translation();
-      const shoulder = T.v2.set(pr.x - pl.x, pr.y - pl.y, pr.z - pl.z);  // L→R
-      faceUp = T.v3.copy(shoulder).cross(spine).y > 0;                   // ventral normal up?
-    }
-    return { faceUp, yaw: Math.atan2(spine.x, spine.z) };
+    // long spine axis (pelvis→head if we have it, else →chest) = more stable direction
+    const top = head || chest;
+    const spine = T.v1.set(top.x - pelvis.x, top.y - pelvis.y, top.z - pelvis.z);
+    const yaw = Math.atan2(spine.x, spine.z);
+    // VOTE the ventral (belly) normal from BOTH the shoulder axis AND the thigh axis —
+    // two independent samples, so one noisy limb at settle can't flip the pick (was 'iffy').
+    let vote = 0, samples = 0;
+    const cross = (rN, lN) => {
+      const r = get(rN), l = get(lN); if (!r || !l) return;
+      const side = T.v2.set(r.x - l.x, r.y - l.y, r.z - l.z);           // left→right
+      vote += Math.sign(T.v3.copy(side).cross(spine).y);                // ventral up (+) / down (−)
+      samples++;
+    };
+    cross("upperArmR", "upperArmL");
+    cross("thighR", "thighL");
+    const faceUp = samples ? vote >= 0 : spine.y > -0.15;               // majority up = face-up
+    return { faceUp, yaw };
   }
 
   /** pelvis world position (respawn the capsule here) */
