@@ -3,6 +3,17 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
+
+/** skeleton-aware clone: a plain Object3D.clone() does NOT rebind a SkinnedMesh's skeleton
+ * (the clone's mesh keeps pointing at the source bones → renders nothing / T-poses). Use
+ * SkeletonUtils.clone when the model is rigged so skinned meshes come out fully rigged AND
+ * rendering (control surfaces, characters); fall back to the cheap clone for static props. */
+function cloneModel(group) {
+  let skinned = false;
+  group.traverse((o) => { if (o.isSkinnedMesh) skinned = true; });
+  return skinned ? skeletonClone(group) : group.clone(true);
+}
 
 /**
  * Asset loading with sane normalization (the pipeline CabForge proved):
@@ -46,7 +57,7 @@ export async function loadModel(url, {
   const key = url + "|" + targetLength + "|" + scale + "|" + zUp + "|" + rotateY + "|" + opts_alignZ + "|" + texture + "|" + textureFlipY + "|" + bakeStatic;
   if (CACHE.has(key)) {
     const c = CACHE.get(key);
-    return { group: c.group.clone(true), size: c.size.clone() };
+    return { group: cloneModel(c.group), size: c.size.clone() };
   }
 
   let root;
@@ -139,7 +150,7 @@ export async function loadModel(url, {
   const group = new THREE.Group();
   group.add(root);
   CACHE.set(key, { group, size: size.clone() });
-  return { group: group.clone(true), size };
+  return { group: cloneModel(group), size };
 }
 
 // palette textures are shared across hundreds of props — load each once
