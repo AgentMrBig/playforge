@@ -41,8 +41,9 @@ export async function loadModel(url, {
   texture = null,          // rebind every material to this map (UE FBX loses its refs)
   textureDir = "",
   textureFlipY = false,
+  bakeStatic = false,      // SK_ (skinned) rigid mesh → plain static Mesh (jet/tank/drone render fix)
 } = {}) {
-  const key = url + "|" + targetLength + "|" + scale + "|" + zUp + "|" + rotateY + "|" + opts_alignZ + "|" + texture + "|" + textureFlipY;
+  const key = url + "|" + targetLength + "|" + scale + "|" + zUp + "|" + rotateY + "|" + opts_alignZ + "|" + texture + "|" + textureFlipY + "|" + bakeStatic;
   if (CACHE.has(key)) {
     const c = CACHE.get(key);
     return { group: c.group.clone(true), size: c.size.clone() };
@@ -64,6 +65,23 @@ export async function loadModel(url, {
     root = await new FBXLoader().loadAsync(url);
   } else {
     throw new Error("loadModel: unsupported format " + url);
+  }
+
+  // BAKE SKINNED → STATIC (before normalize so it gets the same zUp/scale transforms):
+  // a rigid SK_ mesh (Synty jet/tank/drone) is a SkinnedMesh whose skeleton binding does not
+  // survive loadProp's group.clone() → it renders NOTHING (loads clean, textured, positioned,
+  // but the skinning shader has no bones → collapses). Rigid props don't need skinning, so
+  // swap each SkinnedMesh for a plain Mesh with the same bind-pose geometry + material.
+  if (bakeStatic) {
+    const skinned = [];
+    root.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+    for (const sk of skinned) {
+      const m = new THREE.Mesh(sk.geometry, sk.material);
+      m.name = sk.name; m.castShadow = sk.castShadow; m.receiveShadow = sk.receiveShadow;
+      m.position.copy(sk.position); m.quaternion.copy(sk.quaternion); m.scale.copy(sk.scale);
+      (sk.parent || root).add(m);
+      sk.parent?.remove(sk);
+    }
   }
 
   // ---- normalize ----------------------------------------------------------
