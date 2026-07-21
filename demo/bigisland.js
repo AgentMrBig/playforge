@@ -17,6 +17,7 @@ import { initLoadingScreen } from "../src/loadingscreen.js";   // Ember: hold re
 import { FlightModel, PlaneControls } from "../src/flight.js";  // Ember: flyable plane
 import { PlaneTuner } from "../src/planetest.js";                // Ember: live flight-feel panel
 import { makeWater } from "../src/water.js";                     // Ember: animated ocean (boats next)
+import { BoatModel, BoatControls } from "../src/boat.js";        // Ember: buoyant boat
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -406,6 +407,7 @@ function decorate(tile, group) {
 // ============================================================================
 let drivingCar = null;
 let flyingPlane = null;   // Ember: the plane the player is currently flying (E to enter/exit)
+let ridingBoat = null;    // Ember: the boat the player is currently driving (E to enter/exit)
 const terrain = new StreamedTerrain({
   heightAt, colorAt, decorate,
   tileSize: 128,
@@ -464,7 +466,7 @@ world.spawn("terrain").add(terrain);
 const water = makeWater({ size: 3600, segments: 180, y: SEA });
 const sea = world.spawn("sea").mesh(water.mesh).at(0, SEA, 0);
 sea.add({ update(dt, { engine }) {
-  const a = (drivingCar ?? flyingPlane ?? player).position;
+  const a = (drivingCar ?? flyingPlane ?? ridingBoat ?? player).position;
   water.update(dt, { engine, camera: world.camera, anchor: a });
 } });
 if (typeof window !== "undefined") window.__pfWater = water;
@@ -476,7 +478,7 @@ class PlayerMove {
   fixedUpdate(dt, { input, world, entity }) {
     const body = entity.components.find((c) => c.velocity && c.onGround !== undefined);
     if (!body) return;
-    if (drivingCar || flyingPlane) { body.velocity.x = 0; body.velocity.z = 0; return; }   // in a car/plane — hands off the walker
+    if (drivingCar || flyingPlane || ridingBoat) { body.velocity.x = 0; body.velocity.z = 0; return; }   // in a car/plane/boat — hands off the walker
     if (window.__pfGetup) { body.velocity.x = 0; body.velocity.z = 0; return; }   // getting up — don't drive/turn
     // Anima tools mode (test open, live-play OFF) freezes the character so WASD can't drive
     // it off while you pose; live-play ON falls through to normal movement (Erik's toggle)
@@ -1022,6 +1024,41 @@ planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity
 window.__pfPlaneEntity = planeEntity;
 const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders
 
+// 🚤 BOAT (Ember — Erik: water → boats) — a buoyant boat floating just offshore.
+// Real Archimedes buoyancy via BoatModel + the water's getHeight; E to board like
+// the car/plane. Nose faces +Z to match BoatModel's forward.
+function makePlaceholderBoat() {
+  const g = new THREE.Group();
+  const hull = new THREE.MeshStandardMaterial({ color: 0xded2c0, roughness: 0.6, metalness: 0.05 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0x9a4b34, roughness: 0.6 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.4, 6.4), hull); body.position.y = -0.1;
+  const bow = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.0, 4), hull);   // pointed prow
+  bow.rotation.x = Math.PI / 2; bow.rotation.y = Math.PI / 4; bow.position.set(0, -0.1, 3.9); bow.scale.set(1, 0.5, 1);
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.15, 6.5), trim); deck.position.y = 0.6;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.1, 2.2), hull); cabin.position.set(0, 1.25, -1.2);
+  const wind = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 0.1), new THREE.MeshStandardMaterial({ color: 0x223, roughness: 0.2, metalness: 0.4 }));
+  wind.position.set(0, 1.45, -0.1);
+  g.add(body, bow, deck, cabin, wind);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+// find water near the runway the player can walk to: scan +x from the strip
+let boatSpawn = { x: RUN.x0 + 200, y: SEA + 0.35, z: RUN.z };
+for (let d = 20; d < 1600; d += 10) {
+  const x = RUN.x0 + d;
+  if (heightAt(x, RUN.z) < SEA - 2.2) { boatSpawn = { x: x + 16, y: SEA + 0.35, z: RUN.z }; break; }
+}
+const boatEntity = world.spawn("boat");
+boatEntity.at(boatSpawn.x, boatSpawn.y, boatSpawn.z).mesh(makePlaceholderBoat());
+const boatModel = new BoatModel({ seaY: SEA });
+boatEntity.add(boatModel);
+boatEntity.add(new BoatControls(boatModel, () => ridingBoat === boatEntity));
+(function orientBoat() {    // drop it on the water facing the shore once the body exists
+  if (boatModel.rb) boatModel.place(boatSpawn.x, boatSpawn.y, boatSpawn.z, Math.PI);
+  else requestAnimationFrame(orientBoat);
+})();
+window.__pfBoatEntity = boatEntity;
+
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
   if (e.code === "KeyE") {
@@ -1035,6 +1072,13 @@ window.addEventListener("keydown", (e) => {
       const pb = player.components.find((c) => c.onGround !== undefined && c.setEnabled);
       if (pb) { pb.velocity?.set?.(0, 0, 0); pb.setEnabled(true); }
       player.object3d.visible = true; rig.target = player; rig.distance = 6.5; flyingPlane = null;
+    } else if (ridingBoat) {                             // 🚤 exit boat → hop out onto the deck
+      const rt = new THREE.Vector3(1, 0, 0).applyQuaternion(ridingBoat.object3d.quaternion);
+      const ex = ridingBoat.position.x + rt.x * 2.6, ez = ridingBoat.position.z + rt.z * 2.6;
+      player.at(ex, ridingBoat.position.y + 1.2, ez);
+      const pb = player.components.find((c) => c.onGround !== undefined && c.setEnabled);
+      if (pb) { pb.velocity?.set?.(0, 0, 0); pb.setEnabled(true); }
+      player.object3d.visible = true; rig.target = player; rig.distance = 6.5; ridingBoat = null;
     } else if (drivingCar) {
       drivingCar.components.find((c) => c.rpm !== undefined)?.stop();
       const q = drivingCar.object3d.quaternion;
@@ -1057,6 +1101,10 @@ window.addEventListener("keydown", (e) => {
         planeEntity.components.find((c) => c.rb)?.rb?.wakeUp?.();
         player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
         rig.target = planeEntity; rig.distance = 16;
+      } else if (boatEntity.position.distanceTo(player.position) < 12) {   // 🚤 board the boat
+        ridingBoat = boatEntity; player.object3d.visible = false; audio.play("click");
+        player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
+        rig.target = boatEntity; rig.distance = 12;
       }
     }
   }
