@@ -26,7 +26,7 @@ export class FlightModel {
       maxLift: 46000,        // N clamp (don't rocket off a bump)
       dragCoef: 5.5,         // drag = dragCoef · speed · velocity
       stallSpeed: 26,        // m/s below which lift fades (need speed to fly)
-      pitchTorque: 24000, rollTorque: 50000, yawTorque: 15000,
+      pitchTorque: 15000, rollTorque: 50000, yawTorque: 15000,   // pitch toned down — Erik could nearly flip at 24000
       stabilize: 1600,       // passive weathervane: tail points nose into airflow
       halfExtents: [3.4, 0.5, 3.2],   // collider box (placeholder plane)
     }, o);
@@ -157,7 +157,7 @@ export class PlaneControls {
     const dth = (input.down("KeyW") ? 1 : 0) - (input.down("KeyS") ? 1 : 0);
     f.throttle = THREE.MathUtils.clamp(f.throttle + dth * dt * 1.1, 0, 1);   // ~1s to full — responsive but still a lever
     f.pitchIn = input.axis("ArrowUp", "ArrowDown");   // ArrowDown = pull back = nose up
-    f.rollIn = input.axis("KeyA", "KeyD");            // D = roll right
+    f.rollIn = input.axis("KeyD", "KeyA");            // A = roll left, D = roll right (Erik: was inverted)
     f.yawIn = input.axis("KeyQ", "KeyE");             // E = yaw right
   }
 }

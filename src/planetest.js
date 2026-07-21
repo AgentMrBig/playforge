@@ -100,5 +100,5 @@ export class PlaneTuner {
 // mirrors src/flight.js FlightModel constructor defaults (keep in sync)
 PlaneTuner.DEFAULTS = {
   maxThrust: 22000, liftCoef: 9, dragCoef: 5.5, stallSpeed: 26,
-  pitchTorque: 24000, rollTorque: 50000, yawTorque: 15000, stabilize: 1600,
+  pitchTorque: 15000, rollTorque: 50000, yawTorque: 15000, stabilize: 1600,
 };
