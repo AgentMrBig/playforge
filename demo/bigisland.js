@@ -682,13 +682,11 @@ loadCharacter("models/character/humanoid_male.fbx", {
     if (lowest === Infinity) return;
     const g = heightAt(player.position.x, player.position.z);
     let delta = (g - lowest) + cfg.lift;                 // put his lowest part on the ground
-    if (window.__pfGetupSnap) {                          // frame 1: SNAP fully onto the ground
-      window.__pfGetupSnap = false;                      // (no visible float/teleport-up)
-      player.position.y += Math.max(-cfg.snapMax, Math.min(cfg.snapMax, delta));
-    } else {                                             // after: ease + small clamp (smooth)
-      delta = Math.max(-cfg.maxStep, Math.min(cfg.maxStep, delta));
-      player.position.y += delta * cfg.ease;
-    }
+    // FULL correction EVERY frame: the on-foot interpolation (CharacterBody.update) resets the
+    // entity Y back to the settle spot each render frame (it has no get-up guard), so an eased
+    // nudge just settles at a floating equilibrium. getupfollow runs AFTER the interp, so snap
+    // his lowest part fully to the ground each frame — stable (same in/out), and it wins.
+    player.position.y += Math.max(-cfg.snapMax, Math.min(cfg.snapMax, delta));
   } });
 
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
