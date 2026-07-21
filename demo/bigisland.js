@@ -1089,6 +1089,20 @@ loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_Veh_Je
     window.__pfJet = jet;
     // live orientation knob for dialing the correct upright/nose (radians, euler XYZ)
     window.__pfJetRot = (rx, ry, rz) => { jet.rotation.set(rx, ry, rz); jet.updateMatrixWorld(true); };
+    // give the flight body an ACCURATE collision hull from the real jet mesh (Erik:
+    // "match the jet's actual shape", not a generic box). Verts → body-local frame.
+    holder.updateMatrixWorld(true);
+    const holderInv = new THREE.Matrix4().copy(holder.matrixWorld).invert();
+    const toLocal = new THREE.Matrix4(), v = new THREE.Vector3(), pts = [];
+    jet.traverse((o) => {
+      if (!o.isMesh) return;
+      o.updateWorldMatrix(true, false);
+      toLocal.multiplyMatrices(holderInv, o.matrixWorld);
+      const pos = o.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i += 4)             // ×4 keeps the true extremes (harder decimation gave a bad
+        { v.fromBufferAttribute(pos, i).applyMatrix4(toLocal); pts.push(v.x, v.y, v.z); }  // belly shape → dragged on takeoff)
+    });
+    if (pts.length) flightModel.setHullFromPoints(new Float32Array(pts));
   })
   .catch((e) => console.warn("[jet] load failed, keeping box-plane:", e.message));
 const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders

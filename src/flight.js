@@ -45,6 +45,28 @@ export class FlightModel {
   fixedUpdate(dt, { world }) {                    // retry create until physics WASM is up
     if (!this.phys) for (const e of world.entities) for (const c of e.components) if (c instanceof Physics) this.phys = c;
     if (!this.rb && this.phys?.world) this._create(this._entity);
+    if (this._pendingHull && this.rb) { const p = this._pendingHull; this._pendingHull = null; this._applyHull(p); }
+  }
+
+  /** swap the placeholder box for an accurate convex hull built from the real
+   *  jet mesh (Erik: "match the jet's actual shape"). Queued until the body exists. */
+  setHullFromPoints(points) {
+    if (this.rb) this._applyHull(points); else this._pendingHull = points;
+  }
+  _applyHull(points) {
+    const P = this.phys; if (!P || !this.rb) return;
+    const desc = R.ColliderDesc.convexHull(points);
+    if (!desc) return;                       // hull failed → keep the box, no harm
+    desc.setFriction(0.05).setRestitution(0.0).setDensity(0);   // shape only, contributes no mass
+    if (this.col) { P._handleEnt.delete(this.col.handle); P.world.removeCollider(this.col, false); }
+    this.col = P.world.createCollider(desc, this.rb);
+    P._handleEnt.set(this.col.handle, this._entity);
+    // preserve the tuned FEEL: lock mass + inertia to the original box's values so
+    // the accurate collision shape does NOT change how it flies (Erik just tuned it).
+    const [hx, hy, hz] = this.halfExtents, m = this.mass;
+    const X = hx * 2, Y = hy * 2, Z = hz * 2;
+    const Ix = m / 12 * (Y * Y + Z * Z), Iy = m / 12 * (X * X + Z * Z), Iz = m / 12 * (X * X + Y * Y);
+    this.rb.setAdditionalMassProperties(m, { x: 0, y: 0, z: 0 }, { x: Ix, y: Iy, z: Iz }, { x: 0, y: 0, z: 0, w: 1 }, true);
   }
 
   _create(entity) {

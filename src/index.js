@@ -32,6 +32,7 @@ export { noise2, fbm, ridged, mulberry } from "./noise.js";
 export { CombatSystem, WEAPONS, WEAPON_ORDER, rayHit, meleeHits } from "./combat.js";
 export { CombatHUD } from "./combathud.js";
 export { HUD } from "./hud.js";
+export { FlightHUD } from "./flighthud.js";
 export { Minimap } from "./minimap.js";
 export { TouchControls } from "./touchcontrols.js";
 export { TestMode } from "./testmode.js";
