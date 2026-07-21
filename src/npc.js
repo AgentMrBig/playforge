@@ -53,6 +53,12 @@ export class Pedestrian {
       const cp = car.position, spd = vb.velocity.length ? vb.velocity.length() : 0;
       if (spd > 8 && Math.hypot(p.x - cp.x, p.z - cp.z) < 11) return { x: cp.x, z: cp.z };  // car incoming → dive away
     }
+    // PANIC CONTAGION: a neighbor is already fleeing → catch it and run from THEIR danger,
+    // so one shot clears the block (the panic ripples outward through the crowd).
+    for (const other of (typeof window !== "undefined" && window.__pfNpcs) || []) {
+      const op = other.components && other.components.find((c) => c !== this && c.state === "flee" && c.fleeFrom);
+      if (op && Math.hypot(p.x - other.position.x, p.z - other.position.z) < 8) return op.fleeFrom;
+    }
     return null;
   }
 
