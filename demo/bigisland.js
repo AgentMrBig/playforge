@@ -973,7 +973,7 @@ for (const spec of SPAWN) {
 // camera + controls + HUD
 // ============================================================================
 engine.input.enablePointerLock();
-const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft") });
+const rig = new ThirdPersonRig(player, { distance: 6.5, isSprinting: () => engine.input.down("ShiftLeft"), phys, heightAt });
 world.spawn("camera").add(rig);
 
 // TEST MODE (Erik): free orbit camera + a menu to force any character state.

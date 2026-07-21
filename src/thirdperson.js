@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { raycast } from "./physics.js";
+import { R } from "./phys.js";
 
 /**
  * ThirdPersonRig — the GTA-style third-person camera.
@@ -30,12 +31,14 @@ export class ThirdPersonRig {
     fov = 70, sprintFov = 78,
     collisionPad = 0.35,
     isSprinting = null,             // optional fn() → bool
+    phys = null,                    // Physics (Rapier) → real occlusion vs terrain/buildings
+    heightAt = null,                // (x,z)=>y terrain height → keep the camera above ground
   } = {}) {
     this.target = target;
     Object.assign(this, {
       distance, minDist, maxDist, height, shoulder,
       minPitch, maxPitch, sensitivity,
-      recenterDelay, recenterRate, fov, sprintFov, collisionPad, isSprinting,
+      recenterDelay, recenterRate, fov, sprintFov, collisionPad, isSprinting, phys, heightAt,
     });
     this.yaw = target ? target.rotation.y + Math.PI : 0;
     this.pitch = pitch;
@@ -106,15 +109,36 @@ export class ThirdPersonRig {
     const side = new THREE.Vector3(back.z, 0, -back.x).normalize().multiplyScalar(this.shoulder);
     const pivot = this._pivot.clone().add(side);
 
-    // ---- occlusion: pull in fast, ease out slow ---------------------------
+    // ---- occlusion vs the REAL world: cast against the Rapier colliders so terrain,
+    // buildings and walls (all trimeshes now) actually push the camera in — the old AABB
+    // raycast never saw them, so the camera flew through the map (Erik). Exclude the
+    // player's own capsule so the ray doesn't jam on him.
     let free = dist;
-    const hit = raycast(world, pivot, back, dist + this.collisionPad);
-    if (hit && hit.entity !== t) free = Math.max(hit.distance - this.collisionPad, 0.5);
+    const phys = this.phys || (typeof window !== "undefined" && window.__pf && window.__pf.phys);
+    if (R && phys?.world) {
+      if (this._excludeCol === undefined) {
+        const cb = t.components?.find((c) => c.col && c.velocity && c.onGround !== undefined);
+        this._excludeCol = cb?.col ?? null;   // CharacterBody capsule collider
+      }
+      const ray = this._ray || (this._ray = new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }));
+      ray.origin.x = pivot.x; ray.origin.y = pivot.y; ray.origin.z = pivot.z;
+      ray.dir.x = back.x; ray.dir.y = back.y; ray.dir.z = back.z;
+      const hit = phys.world.castRay(ray, dist + this.collisionPad, true, undefined, undefined, this._excludeCol || undefined);
+      if (hit) { const toi = hit.timeOfImpact ?? hit.toi; free = Math.max(toi - this.collisionPad, this.minDist * 0.5); }
+    } else {
+      const hit = raycast(world, pivot, back, dist + this.collisionPad);   // fallback (pre-physics)
+      if (hit && hit.entity !== t) free = Math.max(hit.distance - this.collisionPad, 0.5);
+    }
     const k = free < this._curDist ? 1 - Math.exp(-dt * 30)   // wall: snap in
                                    : 1 - Math.exp(-dt * 4);   // clear: ease out
     this._curDist += (free - this._curDist) * k;
 
     cam.position.copy(pivot).addScaledVector(back, this._curDist);
+    // never let the camera dip under the terrain (orbiting low / steep hills)
+    if (this.heightAt) {
+      const g = this.heightAt(cam.position.x, cam.position.z);
+      if (g > -Infinity && cam.position.y < g + 0.4) cam.position.y = g + 0.4;
+    }
     cam.lookAt(pivot.x, pivot.y + 0.1, pivot.z);
 
     // ---- sprint FOV kick --------------------------------------------------
