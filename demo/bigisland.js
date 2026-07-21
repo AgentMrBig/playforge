@@ -758,11 +758,14 @@ loadCharacter("models/character/humanoid_male.fbx", {
             if (b) { b.setEnabled(false); b.velocity.set(0, 0, 0); b._lastSynced.copy(player.position); }
             const clip = o.faceUp ? "getupBack" : "getupFront";
             const dur = ch.animator.clips[clip]?.duration ?? 2.0;
-            ch.animator.play(clip, { fade: 0, once: true });
+            // SPEED-NORMALIZE so the get-up always FINISHES in a natural time. Hard-capping the
+            // timer cut a longer clip off mid-rise and left him stuck in the terrain (Erik).
+            // Scale playback so it completes in ~2.4s (clamped 1x–2.4x so it never looks absurd),
+            // and lock control for exactly that long → he fully stands up, every time.
+            const speed = Math.min(2.4, Math.max(1, dur / 2.4));
+            ch.animator.play(clip, { fade: 0, once: true, speed });
             window.__pfGetupSnap = true;
-            // cap the control-lock: a long clip (getupBack is 8.9s!) must not freeze the
-            // player for that whole time — hand back after ~2.6s max even if the clip runs on
-            getup = { timer: Math.min(dur, 2.8) * 0.92 };
+            getup = { timer: (dur / speed) * 0.96 };          // hand to idle right as the clip finishes
             window.__pfGetup = true;
           }
           return;
