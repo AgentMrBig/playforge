@@ -15,6 +15,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health spawner
 import { initLoadingScreen } from "../src/loadingscreen.js";   // Ember: hold reveal until built
 import { FlightModel, PlaneControls } from "../src/flight.js";  // Ember: flyable plane
+import { PlaneTuner } from "../src/planetest.js";                // Ember: live flight-feel panel
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -1019,6 +1020,7 @@ planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity
   else requestAnimationFrame(orientPlane);
 })();
 window.__pfPlaneEntity = planeEntity;
+const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
