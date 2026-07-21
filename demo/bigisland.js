@@ -9,7 +9,7 @@ import {
   initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
   CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers, MotionRecorder,
-  spawnPedestrians, TrajectoryLean,
+  spawnPedestrians, TrajectoryLean, FlightHUD,
 } from "../src/index.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { mountPickups } from "../src/pickups.js";   // Ember: guns/ammo/health spawner
@@ -1107,6 +1107,24 @@ loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_Veh_Je
   .catch((e) => console.warn("[jet] load failed, keeping box-plane:", e.message));
 const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders
 
+// ✈️ Flight HUD (General's module, Ember wired) — artificial horizon + speed/alt/
+// heading. Shows when you board the jet, hides on exit, fed live state each frame.
+const flightHud = new FlightHUD();
+const _hudQ = new THREE.Quaternion(), _hudNose = new THREE.Vector3(), _hudRight = new THREE.Vector3();
+planeEntity.add({ update() {
+  if (flyingPlane !== planeEntity || !flightModel.rb) return;
+  const rot = flightModel.rb.rotation(); _hudQ.set(rot.x, rot.y, rot.z, rot.w);
+  _hudNose.set(0, 0, -1).applyQuaternion(_hudQ);
+  _hudRight.set(1, 0, 0).applyQuaternion(_hudQ);
+  flightHud.render({
+    speed: flightModel.speed,
+    altitude: flightModel.rb.translation().y,
+    pitch: Math.asin(THREE.MathUtils.clamp(_hudNose.y, -1, 1)),     // nose-up positive
+    roll: Math.asin(THREE.MathUtils.clamp(_hudRight.y, -1, 1)),     // right-wing-up positive
+    heading: Math.atan2(_hudNose.x, -_hudNose.z),
+  });
+} });
+
 // 🚤 BOAT (Ember — Erik: water → boats) — a buoyant boat floating just offshore.
 // Real Archimedes buoyancy via BoatModel + the water's getHeight; E to board like
 // the car/plane. Nose faces +Z to match BoatModel's forward.
@@ -1161,6 +1179,7 @@ window.addEventListener("keydown", (e) => {
       const pb = player.components.find((c) => c.onGround !== undefined && c.setEnabled);
       if (pb) { pb.velocity?.set?.(0, 0, 0); pb.setEnabled(true); }
       player.object3d.visible = true; rig.target = player; rig.distance = 6.5; flyingPlane = null;
+      flightHud.hide();                                  // ✈️ stow the instruments
     } else if (ridingBoat) {                             // 🚤 exit boat → hop out onto the deck
       const rt = new THREE.Vector3(1, 0, 0).applyQuaternion(ridingBoat.object3d.quaternion);
       const ex = ridingBoat.position.x + rt.x * 2.6, ez = ridingBoat.position.z + rt.z * 2.6;
@@ -1190,6 +1209,7 @@ window.addEventListener("keydown", (e) => {
         planeEntity.components.find((c) => c.rb)?.rb?.wakeUp?.();
         player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
         rig.target = planeEntity; rig.distance = 16;
+        flightHud.show();                                // ✈️ instruments up
       } else if (boatEntity.position.distanceTo(player.position) < 12) {   // 🚤 board the boat
         ridingBoat = boatEntity; player.object3d.visible = false; audio.play("click");
         player.components.find((c) => c.onGround !== undefined && c.setEnabled)?.setEnabled(false);
