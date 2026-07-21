@@ -671,7 +671,7 @@ loadCharacter("models/character/humanoid_male.fbx", {
   // in fixedUpdate and read a stale/garbage pose → the waist-high float + shove-through-map).
   // Live-tune in the console: __pfGetupCfg.
   const _gf = new THREE.Vector3();
-  window.__pfGetupCfg = { follow: true, ease: 0.55, lift: 0.04, maxStep: 0.6,
+  window.__pfGetupCfg = { follow: true, ease: 0.5, lift: 0.04, maxStep: 0.35, snapMax: 1.6,
     bones: ["LeftFoot", "RightFoot", "LeftLeg", "RightLeg", "Hips", "Spine1"] };
   world.spawn("getupfollow").add({ update() {
     const cfg = window.__pfGetupCfg;
@@ -682,8 +682,13 @@ loadCharacter("models/character/humanoid_male.fbx", {
     if (lowest === Infinity) return;
     const g = heightAt(player.position.x, player.position.z);
     let delta = (g - lowest) + cfg.lift;                 // put his lowest part on the ground
-    delta = Math.max(-cfg.maxStep, Math.min(cfg.maxStep, delta)); // clamp: no violent shoves
-    player.position.y += delta * cfg.ease;               // ease toward it (smooth, no snap)
+    if (window.__pfGetupSnap) {                          // frame 1: SNAP fully onto the ground
+      window.__pfGetupSnap = false;                      // (no visible float/teleport-up)
+      player.position.y += Math.max(-cfg.snapMax, Math.min(cfg.snapMax, delta));
+    } else {                                             // after: ease + small clamp (smooth)
+      delta = Math.max(-cfg.maxStep, Math.min(cfg.maxStep, delta));
+      player.position.y += delta * cfg.ease;
+    }
   } });
 
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
@@ -730,14 +735,18 @@ loadCharacter("models/character/humanoid_male.fbx", {
             const o = rag.groundOrientation();                // face-up/down + ground heading
             rag.exit();
             const p2 = rag.pelvisPos();
-            const g = heightAt(p2.x, p2.z);
-            player.at(p2.x, g, p2.z);                         // feet on the ground for the rise
+            // Keep XZ; do NOT snap Y up to terrain — that +0.9m jump from the low ragdoll
+            // position was the "teleports up in the air" (Erik). The ground-follow SNAPS his
+            // body onto the ground on frame 1 (__pfGetupSnap). fade:0 so frame 1 is the pure
+            // lying pose to snap on (a crossfade would read a blended/garbage pose).
+            player.position.x = p2.x; player.position.z = p2.z;
             player.object3d.rotation.y = o.yaw;
             const b = cb();
             if (b) { b.setEnabled(false); b.velocity.set(0, 0, 0); b._lastSynced.copy(player.position); }
             const clip = o.faceUp ? "getupBack" : "getupFront";
             const dur = ch.animator.clips[clip]?.duration ?? 2.0;
-            ch.animator.play(clip, { fade: 0.12, once: true });
+            ch.animator.play(clip, { fade: 0, once: true });
+            window.__pfGetupSnap = true;
             // cap the control-lock: a long clip (getupBack is 8.9s!) must not freeze the
             // player for that whole time — hand back after ~2.6s max even if the clip runs on
             getup = { timer: Math.min(dur, 2.8) * 0.92 };
