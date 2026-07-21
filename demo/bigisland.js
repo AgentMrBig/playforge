@@ -673,9 +673,19 @@ loadCharacter("models/character/humanoid_male.fbx", {
   const _gf = new THREE.Vector3();
   window.__pfGetupCfg = { follow: true, ease: 0.5, lift: 0.04, maxStep: 0.35, snapMax: 1.6,
     bones: ["LeftFoot", "RightFoot", "LeftLeg", "RightLeg", "Hips", "Spine1"] };
-  world.spawn("getupfollow").add({ update() {
+  world.spawn("getupfollow").add({ update(dt) {
     const cfg = window.__pfGetupCfg;
     if (!window.__pfGetup || !cfg.follow) return;
+    // CONFORM: for the first ~0.35s, slerp each bone FROM the captured ragdoll pose toward the
+    // clip's posed frame (runs AFTER the animator, so it blends over the clip) — his limbs
+    // gently conform from where he fell into the get-up start instead of popping (Erik).
+    const bl = window.__pfGetupBlend;
+    if (bl && bl.t > 0) {
+      const k = Math.max(0, Math.min(1, bl.t / bl.dur));   // 1 (all ragdoll) → 0 (all clip)
+      for (const bn in bl.from) { const b = ch.bones[bn]; if (b) b.quaternion.slerp(bl.from[bn], k); }
+      bl.t -= (dt || 1 / 60);
+      if (bl.t <= 0) window.__pfGetupBlend = null;
+    }
     player.object3d.updateMatrixWorld(true);
     let lowest = Infinity;
     for (const bn of cfg.bones) { const bb = ch.bones[bn]; if (!bb) continue; const wy = bb.getWorldPosition(_gf).y; if (wy < lowest) lowest = wy; }
@@ -731,12 +741,17 @@ loadCharacter("models/character/humanoid_male.fbx", {
           if (body) body._lastSynced.copy(player.position);   // no teleport-fight
           if (rag.settled(1.3)) {                             // get up naturally
             const o = rag.groundOrientation();                // face-up/down + ground heading
+            // CONFORM (Erik's design): capture the ragdoll's SETTLED pose so the getup-follow
+            // can blend his limbs FROM where he actually fell INTO the clip's first frame — he
+            // starts exactly as he lies, then gently conforms into the animation. No pop.
+            const from = {};
+            for (const bn in ch.bones) from[bn] = ch.bones[bn].quaternion.clone();
+            window.__pfGetupBlend = { t: 0.35, dur: 0.35, from };
             rag.exit();
             const p2 = rag.pelvisPos();
             // Keep XZ; do NOT snap Y up to terrain — that +0.9m jump from the low ragdoll
-            // position was the "teleports up in the air" (Erik). The ground-follow SNAPS his
-            // body onto the ground on frame 1 (__pfGetupSnap). fade:0 so frame 1 is the pure
-            // lying pose to snap on (a crossfade would read a blended/garbage pose).
+            // position was the "teleports up in the air" (Erik). The ground-follow keeps his
+            // lowest part on the ground every frame; fade:0 + the pose blend handle the rest.
             player.position.x = p2.x; player.position.z = p2.z;
             player.object3d.rotation.y = o.yaw;
             const b = cb();
