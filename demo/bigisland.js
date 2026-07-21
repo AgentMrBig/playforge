@@ -665,6 +665,27 @@ loadCharacter("models/character/humanoid_male.fbx", {
     footPlant.update(standing, walking);
   } });
 
+  // GET-UP GROUND-FOLLOW (Erik's live-tuned float fix): while getting up, glue his LOWEST
+  // body part to the terrain EVERY RENDER FRAME. Runs in update() on its own entity spawned
+  // AFTER the player, so it reads the bones the animator JUST posed (my earlier attempts ran
+  // in fixedUpdate and read a stale/garbage pose → the waist-high float + shove-through-map).
+  // Live-tune in the console: __pfGetupCfg.
+  const _gf = new THREE.Vector3();
+  window.__pfGetupCfg = { follow: true, ease: 0.55, lift: 0.04, maxStep: 0.6,
+    bones: ["LeftFoot", "RightFoot", "LeftLeg", "RightLeg", "Hips", "Spine1"] };
+  world.spawn("getupfollow").add({ update() {
+    const cfg = window.__pfGetupCfg;
+    if (!window.__pfGetup || !cfg.follow) return;
+    player.object3d.updateMatrixWorld(true);
+    let lowest = Infinity;
+    for (const bn of cfg.bones) { const bb = ch.bones[bn]; if (!bb) continue; const wy = bb.getWorldPosition(_gf).y; if (wy < lowest) lowest = wy; }
+    if (lowest === Infinity) return;
+    const g = heightAt(player.position.x, player.position.z);
+    let delta = (g - lowest) + cfg.lift;                 // put his lowest part on the ground
+    delta = Math.max(-cfg.maxStep, Math.min(cfg.maxStep, delta)); // clamp: no violent shoves
+    player.position.y += delta * cfg.ease;               // ease toward it (smooth, no snap)
+  } });
+
   // ---- ACTIVE RAGDOLL: get hit by a car → real jointed physics body -------
   // (muscle tone pulls toward whatever the Animator is playing — no scripts)
   physReady.then(() => {
@@ -683,11 +704,8 @@ loadCharacter("models/character/humanoid_male.fbx", {
         if (getup) {
           window.__pfGetup = true;
           cb()?.setEnabled(false);
-          // SAFE ground-pin: keep the feet-origin exactly on the terrain the whole get-up so he
-          // can NEVER get shoved into / through the map (Erik). NOTE: the clip's vertical root
-          // motion is stripped, so his LYING pose still hangs at hip height — the proper float fix
-          // (keep the hips Y motion, scaled) is a focused pass; this at least makes it not dangerous.
-          player.position.y = heightAt(player.position.x, player.position.z);
+          // Y is driven per-RENDER-frame by the getup-follow component below (reads the real
+          // posed bones + glues his lowest part to the ground → no float). Here just count down.
           getup.timer -= dt;
           if (getup.timer <= 0) {
             getup = null; window.__pfGetup = false;
