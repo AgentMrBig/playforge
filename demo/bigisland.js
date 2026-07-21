@@ -18,6 +18,7 @@ import { FlightModel, PlaneControls } from "../src/flight.js";  // Ember: flyabl
 import { PlaneTuner } from "../src/planetest.js";                // Ember: live flight-feel panel
 import { makeWater } from "../src/water.js";                     // Ember: animated ocean (boats next)
 import { BoatModel, BoatControls } from "../src/boat.js";        // Ember: buoyant boat
+import { WakeEffect } from "../src/boatwake.js";                 // Ember: boat foam wake
 
 const seed = Number(new URLSearchParams(location.search).get("seed")) || 7777;
 const seedEl = document.getElementById("seed"); if (seedEl) seedEl.textContent = seed;
@@ -1058,6 +1059,12 @@ boatEntity.add(new BoatControls(boatModel, () => ridingBoat === boatEntity));
   else requestAnimationFrame(orientBoat);
 })();
 window.__pfBoatEntity = boatEntity;
+// foam wake behind the boat when it's driven (Ember). Emits at the stern ∝ speed.
+const boatWake = new WakeEffect(world.scene);
+boatEntity.add({ update(dt, { engine }) {
+  boatWake.update(dt, { boatEntity, boatModel, water, time: engine.time });
+} });
+window.__pfBoatWake = boatWake;
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !drivingCar) location.search = "?seed=" + Math.floor(Math.random() * 100000);
