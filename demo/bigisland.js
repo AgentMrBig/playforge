@@ -610,8 +610,8 @@ loadCharacter("models/character/humanoid_male.fbx", {
     { name: "pistolIdle", url: "models/character/anims/pistol_idle.fbx" },
     { name: "firingRifle", url: "models/character/anims/firing_rifle.fbx" },
     // get-up from ragdoll (Erik's Mixamo drop) — front = face-down, back = face-up
-    { name: "getupFront", url: "models/character/anims/getup_front.fbx" },
-    { name: "getupBack", url: "models/character/anims/getup_back.fbx" },
+    { name: "getupFront", url: "models/character/anims/getup_front.fbx", keepVerticalRoot: true },
+    { name: "getupBack", url: "models/character/anims/getup_back.fbx", keepVerticalRoot: true },
   ],
 }).then((ch) => {
   player.mesh(ch.visual).add(ch.animator);
@@ -1025,14 +1025,14 @@ planeEntity.add(new PlaneControls(flightModel, () => flyingPlane === planeEntity
 window.__pfPlaneEntity = planeEntity;
 // swap the box-plane for General's real Synty jet, now that loadProp preserves the
 // SkinnedMesh skeleton (skeleton-aware clone, 53602ef) so it actually renders + stays
-// rigged for future control-surface animation. Synty jet is Z-up, length along X —
-// stand it upright and point the nose down -Z to match the FlightModel's forward.
-loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_PolygonMilitary_01_A.PNG", textureDir: "models/military", textureFlipY: true })
+// rigged for future control-surface animation. FBXLoader already loads it upright with
+// the nose on the flight-forward axis — brute-forced against the PHYSICS-DRIVEN holder,
+// identity rotation gives up +Y, nose +X. (My earlier Z-up correction mangled it onto
+// its side — Erik caught it live; headless top-down/chase views can't see the roll.)
+loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_Veh_Jet_01_A.PNG", textureDir: "models/military", textureFlipY: true })
   .then((r) => {
     if (!r?.group) return;
     const jet = r.group;
-    jet.rotation.set(-Math.PI / 2, 0, 0);              // Synty Z-up → Y-up (stand upright)
-    jet.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), Math.PI / 2);   // yaw length X → nose -Z
     jet.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(jet); const sz = new THREE.Vector3(); box.getSize(sz);
     jet.scale.multiplyScalar(9 / Math.max(sz.x, sz.y, sz.z));   // ~9u long, matches the flight collider
@@ -1042,6 +1042,8 @@ loadProp("models/military/SK_Veh_Jet_01.FBX", { center: true, texture: "T_Polygo
     for (let i = holder.children.length - 1; i >= 0; i--) holder.remove(holder.children[i]);
     holder.add(jet);
     window.__pfJet = jet;
+    // live orientation knob for dialing the correct upright/nose (radians, euler XYZ)
+    window.__pfJetRot = (rx, ry, rz) => { jet.rotation.set(rx, ry, rz); jet.updateMatrixWorld(true); };
   })
   .catch((e) => console.warn("[jet] load failed, keeping box-plane:", e.message));
 const planeTuner = new PlaneTuner();   // ✈️ PLANE (P) — live flight-feel sliders
