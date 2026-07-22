@@ -479,15 +479,21 @@ export class Car {
    * @param mag        contact force magnitude (N)
    * @param worldDir   {x,y,z}       force direction on the car (world)
    */
-  deform(worldPoint, mag, worldDir) {
+  deform(worldPoint, mag, worldDir, pose = null) {
     if (mag < this.dentThreshold) return;
 
-    // sync the visual group to the body's CURRENT pose so matrixWorld is right even
-    // headless (where render/interpolate hasn't run), then work in body-MESH local
+    // sync the visual group to the pose the impact HAPPENED at — normally the
+    // body's current pose; the replay passes the recorded crash pose so dents
+    // land in the right spot when re-enacted later. Then work in body-MESH local
     // space — this handles a nested/scaled model exactly like the flat box.
-    const t = this.body.translation(), r = this.body.rotation();
-    this.mesh.position.set(t.x, t.y, t.z);
-    this.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    if (pose) {
+      this.mesh.position.set(pose.px, pose.py, pose.pz);
+      this.mesh.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
+    } else {
+      const t = this.body.translation(), r = this.body.rotation();
+      this.mesh.position.set(t.x, t.y, t.z);
+      this.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    }
     this.bodyMesh.updateWorldMatrix(true, false);
     _m1.copy(this.bodyMesh.matrixWorld).invert();          // world → body-mesh-local
     const s = _sc.setFromMatrixScale(this.bodyMesh.matrixWorld).x || 1;   // uniform scale

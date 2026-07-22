@@ -37,6 +37,7 @@ let acc = 0;
 const keys = {};
 const audio = new VehicleAudio({ hp: 450 });
 const cluster = new Cluster();
+let lastInput = { throttle: 0, steer: 0, brake: 0, handbrake: false };
 
 /** one physics step + drain hard-impact events into the car's deform system */
 function physicsStep() {
@@ -56,8 +57,21 @@ function physicsStep() {
         }
       });
     } catch (err) { /* no manifold → deform falls back to the force direction */ }
+    const glassWas = car.glassBroken;
     car.impact(point, mag, dir);
     if (fx) fx.onImpact(point, mag);      // spark burst on hard hits
+    // log the damage event on the replay timeline (with the pose it happened at)
+    if (point && mag >= car.dentThreshold) {
+      const t = car.body.translation(), r = car.body.rotation();
+      replay.events.push({
+        f: replay.f, mag,
+        point: { x: point.x, y: point.y, z: point.z },
+        dir: { x: dir.x, y: dir.y, z: dir.z },
+        pose: { px: t.x, py: t.y, pz: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w },
+        glass: !glassWas && car.glassBroken,
+      });
+      if (replay.events.length > 60) replay.events.shift();
+    }
     if (mag > 400000) cam.shakeAmt = Math.max(cam.shakeAmt || 0, Math.min(1, mag / 1800000));  // crash shake
     if (mag > 2200000 && !replay.active && replay.cooldown <= 0) {
       replay.pending = 1.3;               // monster crash → slow-mo crash cam after it plays out
@@ -379,6 +393,9 @@ const replay = {
   data: new Float32Array(REPLAY_LEN * RFLOATS), n: 0, w: 0,
   active: false, ph: 0, startIdx: 0, len: 0, speed: 0.3,
   pending: 0, cooldown: 0, orbit: 0,
+  f: 0,                        // monotonic frame counter (event timestamps)
+  events: [],                  // damage events {f, point, mag, dir, pose, glass}
+  evtQueue: [], evtIdx: 0, fStart: 0,
 };
 const _rp1 = new THREE.Vector3(), _rp2 = new THREE.Vector3();
 const _rq1 = new THREE.Quaternion(), _rq2 = new THREE.Quaternion();
@@ -392,6 +409,22 @@ function recordFrame() {
   d[i + 15] = car.steer;
   replay.w = (replay.w + 1) % REPLAY_LEN;
   if (replay.n < REPLAY_LEN) replay.n++;
+  replay.f++;
+}
+
+/** visual-only glass toggle for the replay (physics/logic state untouched) */
+function glassVisual(broken) {
+  for (const m of car.glassMats || []) {
+    m.opacity = broken ? 0 : (m.userData._op ?? 0.55);
+    m.needsUpdate = true;
+  }
+}
+
+function applyDamageEvent(ev, sparks) {
+  car.deform(ev.point, ev.mag, ev.dir, ev.pose);
+  if (ev.mag >= car.chunkForce) car.deform(ev.point, ev.mag * 1.6, ev.dir, ev.pose);  // chunk gouge too
+  if (ev.glass) glassVisual(true);
+  if (sparks && fx) fx.onImpact(ev.point, ev.mag);
 }
 
 function startReplay() {
@@ -401,9 +434,22 @@ function startReplay() {
   replay.startIdx = (replay.w - replay.len + REPLAY_LEN) % REPLAY_LEN;
   replay.ph = 0;
   replay.orbit = cam.yaw;
+  // rewind the DAMAGE too: start pristine, then re-enact each hit on cue.
+  replay.fStart = replay.f - replay.len;
+  car.repair();
+  glassVisual(false);
+  for (const ev of replay.events) if (ev.f < replay.fStart) applyDamageEvent(ev, false);  // pre-window damage stays
+  replay.evtQueue = replay.events.filter((ev) => ev.f >= replay.fStart);
+  replay.evtIdx = 0;
   showReplayUI(true);
 }
-function stopReplay() { replay.active = false; showReplayUI(false); }
+function stopReplay() {
+  replay.active = false;
+  // fast-forward any un-played damage so the car leaves the replay in its true state
+  while (replay.evtIdx < replay.evtQueue.length) applyDamageEvent(replay.evtQueue[replay.evtIdx++], false);
+  glassVisual(!!car.glassBroken);
+  showReplayUI(false);
+}
 
 function showReplayUI(on) {
   let el = document.getElementById("replayui");
@@ -442,6 +488,9 @@ function toggleHitch() {
 function updateReplay(dt) {
   replay.ph += dt * replay.speed * 60;
   if (replay.ph >= replay.len - 1.01) { stopReplay(); return; }
+  // re-enact damage exactly when it happened (dents, glass, sparks on cue)
+  while (replay.evtIdx < replay.evtQueue.length && replay.evtQueue[replay.evtIdx].f - replay.fStart <= replay.ph)
+    applyDamageEvent(replay.evtQueue[replay.evtIdx++], true);
   const f = Math.floor(replay.ph), frac = replay.ph - f;
   const idx = readReplayFrame(f, _rp1, _rq1);
   readReplayFrame(f + 1, _rp2, _rq2);
@@ -484,7 +533,8 @@ function frame() {
   if (dt > 0.25) dt = 0.25;             // clamp after a stall so we don't spiral
   acc += dt;
 
-  car.setInput(readInput());
+  lastInput = readInput();
+  car.setInput(lastInput);
 
   let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
@@ -661,6 +711,7 @@ function buildHUD() {
     <div class="row"><span>wheels grounded</span><b id="h-wg">–</b></div>
     <div class="row"><span>dents</span><b id="h-dent">0</b></div>
     <div class="row"><span>wheels off / debris</span><b id="h-dmg">0 / 0</b></div>
+    <div class="row"><span>input thr/brk/str</span><b id="h-inp">0 / 0 / 0</b></div>
     <label>spring stiffness <span class="val" id="v-k">30000</span></label>
     <input id="s-k" type="range" min="5000" max="80000" step="500" value="30000">
     <label>spring damping <span class="val" id="v-d">1500</span></label>
@@ -732,6 +783,7 @@ function updateHUD() {
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
   set("h-dmg", car.wheelsOff + " / " + car.debris.length);
+  set("h-inp", Math.round(lastInput.throttle * 100) + " / " + Math.round(lastInput.brake * 100) + " / " + Math.round(lastInput.steer * 100));
   set("h-eng", Math.round(audio.rpm) + " / " + car.screech.toFixed(2));
 }
 function set(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
