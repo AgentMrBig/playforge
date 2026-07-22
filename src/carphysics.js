@@ -54,9 +54,11 @@ export class Car {
     brakeForce = 10000,    // N per wheel under full brake
     maxSteer = 0.55,       // rad (~31°) at the front wheels
     steerRate = 4.0,       // how fast steer angle chases input (per second)
-    tireGrip = 1.7,        // lateral grip as a multiple of vertical load
+    tireGrip = 2.2,        // peak lateral grip as a multiple of vertical load
     rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
     rollResist = 0.015,    // rolling resistance fraction of load
+    tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
+    tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -74,6 +76,8 @@ export class Car {
     this.tireGrip = tireGrip;
     this.rearGripMul = rearGripMul;
     this.rollResist = rollResist;
+    this.tireStiffB = tireStiffB;
+    this.tireShapeC = tireShapeC;
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -134,10 +138,10 @@ export class Car {
     // mount slightly inboard of the shell and near its floor; +Z forward.
     const mx = hx - 0.15, mz = hz - 0.55, my = -hy + 0.15;
     this.wheels = [
-      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0 },
-      { name: "FR", mount: new THREE.Vector3(mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0 },
-      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0 },
-      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0 },
+      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
+      { name: "FR", mount: new THREE.Vector3(mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
+      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
+      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
     ];
     const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.25, 16);
     wheelGeo.rotateZ(Math.PI / 2);   // roll about local X
@@ -186,7 +190,6 @@ export class Car {
     _up.set(0, 1, 0).applyQuaternion(_q);
     _down.set(0, -1, 0).applyQuaternion(_q);
     _steerQ.setFromAxisAngle(_up, this.steer);   // rotate front wheels about chassis-up
-    const massPerWheel = this.mass * 0.25;
 
     // world center of mass + angular velocity for velocity-at-point
     const wc = body.worldCom();  _com.set(wc.x, wc.y, wc.z);
@@ -225,20 +228,30 @@ export class Car {
         const vLat = _vel.dot(_right);
         w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
 
+        // ---- grip budget (friction circle), load-based → weight transfer feeds it ----
+        const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
+        const gripBudget = this.tireGrip * load * gripMul;
+
         // ---- longitudinal: engine + brake + rolling resistance ----
         let fLong = 0;
         if (w.driven) fLong += this.throttle * this.engineForce;
-        // braking / handbrake oppose current roll direction
         const brake = this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
         if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
         fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
 
-        // ---- lateral: cancel side-slip, capped by grip circle (breakaway) ----
-        let gripMax = this.tireGrip * load * (w.front ? 1 : this.rearGripMul);
-        if (this.handbrake && !w.front) gripMax *= 0.4;   // loosen rear on handbrake
-        let fLat = -(vLat / dt) * massPerWheel;           // force to null side-slip this step
-        if (fLat > gripMax) fLat = gripMax;
-        else if (fLat < -gripMax) fLat = -gripMax;
+        // ---- lateral: Pacejka-ish slip curve — grips, peaks, then breaks away ----
+        // slip angle between where the tyre points and where it's actually going.
+        // +0.6 in the denominator softens the singularity at crawl speed.
+        const slip = Math.atan2(vLat, Math.abs(vLong) + 0.6);
+        w.slip += (slip - w.slip) * Math.min(1, 12 * dt);   // smooth a few frames (anti-chatter)
+        let fLat = -gripBudget * Math.sin(this.tireShapeC * Math.atan(this.tireStiffB * w.slip));
+
+        // ---- friction circle: drive/brake force eats lateral grip → power oversteer ----
+        if (fLong > gripBudget) fLong = gripBudget;
+        else if (fLong < -gripBudget) fLong = -gripBudget;
+        const latRoom = Math.sqrt(Math.max(0, gripBudget * gripBudget - fLong * fLong));
+        if (fLat > latRoom) fLat = latRoom;
+        else if (fLat < -latRoom) fLat = -latRoom;
 
         // ---- combine: suspension (up) + tire (fwd + right), one force ----
         _imp.set(
