@@ -40,6 +40,8 @@ const _lp = new THREE.Vector3();       // local impact epicenter
 const _ld = new THREE.Vector3();       // local impact direction
 const _vp = new THREE.Vector3();       // vertex scratch
 const _off = new THREE.Vector3();      // vertex offset-from-original
+const _m1 = new THREE.Matrix4();       // body-mesh world→local
+const _sc = new THREE.Vector3();       // scale extraction
 const ANTIROLL_AXLES = [[0, 1], [2, 3]];   // [FL,FR], [RL,RR]
 export class Car {
   constructor(world, RAPIER, {
@@ -166,6 +168,7 @@ export class Car {
     this.mesh.add(bodyMesh);
     this.bodyMesh = bodyMesh;
     this.origPos = Float32Array.from(bodyGeo.attributes.position.array);   // pristine, for repair
+    this.bodyCenter = new THREE.Vector3(0, 0, 0);   // deform pushes verts toward here (local)
     const nose = new THREE.Mesh(
       new THREE.BoxGeometry(size[0] * 0.55, size[1] * 0.5, size[2] * 0.12),
       new THREE.MeshStandardMaterial({ color: 0xffdd33 })
@@ -173,6 +176,7 @@ export class Car {
     nose.position.set(0, size[1] * 0.28, hz);   // +Z is forward
     nose.castShadow = true;
     this.mesh.add(nose);
+    this.nose = nose;                            // placeholder marker (hidden when a model attaches)
 
     // visible CoG marker (bright sphere) so the CoG height is legible while tuning
     this.comMarker = new THREE.Mesh(
@@ -354,30 +358,34 @@ export class Car {
    */
   deform(worldPoint, mag, worldDir) {
     if (mag < this.dentThreshold) return;
+
+    // sync the visual group to the body's CURRENT pose so matrixWorld is right even
+    // headless (where render/interpolate hasn't run), then work in body-MESH local
+    // space — this handles a nested/scaled model exactly like the flat box.
     const t = this.body.translation(), r = this.body.rotation();
-    _iq.set(r.x, r.y, r.z, r.w).invert();                 // world → chassis-local
+    this.mesh.position.set(t.x, t.y, t.z);
+    this.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    this.bodyMesh.updateWorldMatrix(true, false);
+    _m1.copy(this.bodyMesh.matrixWorld).invert();          // world → body-mesh-local
+    const s = _sc.setFromMatrixScale(this.bodyMesh.matrixWorld).x || 1;   // uniform scale
 
-    // epicenter (local): the real contact point if we have it
+    // epicenter in body-mesh-local space
     if (worldPoint) {
-      _lp.set(worldPoint.x - t.x, worldPoint.y - t.y, worldPoint.z - t.z).applyQuaternion(_iq);
+      _lp.set(worldPoint.x, worldPoint.y, worldPoint.z).applyMatrix4(_m1);
     } else {
-      _lp.set(0, 0, 0);
+      _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1).normalize();
+      _lp.copy(this.bodyCenter).addScaledVector(_ld, -this.dentRadius / s);
     }
 
-    // push direction = from the hit toward the car center → the panel caves as a
-    // unit (no per-vertex pinch). Fall back to the impact force direction.
-    if (_lp.lengthSq() > 1e-4) {
-      _ld.copy(_lp).multiplyScalar(-1).normalize();
-    } else {
-      _ld.set(worldDir.x, worldDir.y, worldDir.z).applyQuaternion(_iq);
-      if (_ld.lengthSq() < 1e-8) return;
-      _ld.normalize();
-      _lp.set(-_ld.x * this.half.x, -_ld.y * this.half.y, -_ld.z * this.half.z);
-    }
+    // push toward the body's center → the panel caves as a unit (no per-vertex pinch)
+    _ld.copy(this.bodyCenter).sub(_lp);
+    if (_ld.lengthSq() < 1e-9) _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1);
+    _ld.normalize();
 
     const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
-    const radius = this.dentRadius * (0.5 + sev);
-    const depth = this.dentDepth * sev;
+    const radius = (this.dentRadius / s) * (0.5 + sev);    // radius/depth in local units
+    const depth = (this.dentDepth / s) * sev;
+    const maxD = this.dentMax / s;
 
     const pos = this.bodyMesh.geometry.attributes.position;
     const op = this.origPos;
@@ -386,19 +394,66 @@ export class Car {
       _vp.fromBufferAttribute(pos, i);
       const d = _vp.distanceTo(_lp);
       if (d >= radius) continue;
-      const fall = 1 - d / radius;                         // deepest at the epicenter
-      _vp.addScaledVector(_ld, depth * fall * fall);       // push metal inward
+      const fall = 1 - d / radius;                          // deepest at the epicenter
+      _vp.addScaledVector(_ld, depth * fall * fall);        // push metal inward
       // clamp accumulated displacement so repeated hits can't collapse the shell
       _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
-      if (_off.length() > this.dentMax) _off.setLength(this.dentMax);
+      if (_off.length() > maxD) _off.setLength(maxD);
       pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
       touched = true;
     }
     if (touched) {
       pos.needsUpdate = true;
-      this.bodyMesh.geometry.computeVertexNormals();       // dents catch light correctly
+      this.bodyMesh.geometry.computeVertexNormals();        // dents catch light correctly
       this.dents++;
     }
+  }
+
+  /**
+   * Swap the placeholder box for a real loaded car model (from loadVehicle).
+   * The largest non-wheel mesh becomes the deformable body; wheels are mapped to
+   * the suspension for later articulation. Physics is untouched.
+   */
+  attachModel(rig) {
+    // hide the placeholders (keep the CoG marker)
+    this.bodyMesh.visible = false;
+    if (this.nose) this.nose.visible = false;
+    for (const w of this.wheels) w.mesh.visible = false;
+
+    const v = rig.visual;
+    v.updateWorldMatrix(true, true);
+    const bb = new THREE.Box3().setFromObject(v);
+    const c = bb.getCenter(new THREE.Vector3());
+    v.position.y -= c.y;                 // center the model vertically on the chassis
+    this.mesh.add(v);
+    this.modelVisual = v;
+
+    // wheel meshes to exclude when picking the body
+    const wheelMeshes = new Set();
+    if (rig.wheels) for (const k in rig.wheels) rig.wheels[k]?.traverse((o) => { if (o.isMesh) wheelMeshes.add(o); });
+
+    // body = the largest non-wheel mesh
+    let best = null, bestCount = -1;
+    v.traverse((o) => {
+      if (!o.isMesh || wheelMeshes.has(o)) return;
+      const n = o.geometry.attributes.position.count;
+      if (n > bestCount) { bestCount = n; best = o; }
+    });
+    if (best) {
+      best.geometry = mergeVertices(best.geometry);       // weld → crumples as a skin
+      best.geometry.computeBoundingBox();
+      this.bodyMesh = best;
+      this.origPos = Float32Array.from(best.geometry.attributes.position.array);
+      this.bodyCenter = best.geometry.boundingBox.getCenter(new THREE.Vector3());
+      this.dents = 0;
+    }
+
+    // map model wheels onto the suspension wheels (for later articulation)
+    if (rig.wheels) {
+      const map = { FL: "fl", FR: "fr", RL: "rl", RR: "rr" };
+      for (const w of this.wheels) w.modelWheel = rig.wheels[map[w.name]] || null;
+    }
+    this.modelName = rig.name || "car";
   }
 
   /** restore the pristine body shape (repair) */

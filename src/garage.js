@@ -1,6 +1,17 @@
 import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { Car } from "./carphysics.js";
+import { loadVehicle } from "./vehicledef.js";
+
+// a few real Synty cars to crumple — pick with ?car=<key>
+const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
+const AV = { textureDir: "models/fabpack", textureFlipY: true, textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } };
+const CARS = {
+  lowcar: { file: "models/gangwarfare/SK_Veh_LowCar_01.FBX", len: 4.4, opts: GWV },
+  muscle: { file: "models/fabpack/SK_veh_Muscle_01.fbx", len: 4.6, opts: AV },
+  sedan:  { file: "models/fabpack/SK_veh_Sedan_01.fbx", len: 4.5, opts: AV },
+  suv:    { file: "models/fabpack/SK_veh_SUV_01.fbx", len: 4.7, opts: AV },
+};
 
 /**
  * The Garage — vehicle-physics proving ground. A stripped scene (flat ground +
@@ -165,6 +176,13 @@ async function main() {
   addEventListener("keyup", (e) => { keys[e.code] = false; });
 
   requestAnimationFrame(frame);
+
+  // swap the placeholder box for a real Synty car (non-blocking; box works until then)
+  const pick = new URLSearchParams(location.search).get("car") || "lowcar";
+  const spec = CARS[pick] || CARS.lowcar;
+  loadVehicle(spec.file, { targetLength: spec.len, ...spec.opts })
+    .then((rig) => { rig.name = pick; car.attachModel(rig); window.__garage.modelLoaded = pick; })
+    .catch((e) => console.warn("[garage] model load failed, keeping box:", e));
 }
 
 /** angled ramp box: pos = base center [x,0,z], rotX in radians (tilt) */
