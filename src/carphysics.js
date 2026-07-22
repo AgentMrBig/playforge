@@ -257,9 +257,11 @@ export class Car {
     const lv = body.linvel();
     const av = body.angvel();
 
-    const reach = this.suspRest + this.wheelRadius;   // ray length: rest + tyre
     for (const w of this.wheels) {
-      if (w.detached) { w.grounded = false; continue; }   // no wheel → no spring, no grip
+      // a torn-off corner rides the bare hub: shorter rest (sits lower), heavier
+      // damping (no pogo), and no tyre grip below — so it DRAGS, not springs/flips.
+      const restLen = w.detached ? 0.22 : this.suspRest;
+      const reach = restLen + this.wheelRadius;         // ray length: rest + tyre
       // mount in world space = chassis pos + rotated local mount
       _wpos.copy(w.mount).applyQuaternion(_q).add(_tpos.set(t.x, t.y, t.z));
       w.mwx = _wpos.x; w.mwy = _wpos.y; w.mwz = _wpos.z;   // mount world pos (anti-roll point)
@@ -270,7 +272,7 @@ export class Car {
         const toi = hit.timeOfImpact ?? hit.toi;
         w.grounded = true;
         w.dist = Math.max(0, toi - this.wheelRadius);           // spring length now
-        w.comp = this.suspRest - w.dist;                        // compression (+ = compressed)
+        w.comp = restLen - w.dist;                              // compression (+ = compressed)
 
         // contact point = mount + down * toi  → velocity there (v = linvel + ω × r)
         _rel.copy(_down).multiplyScalar(toi).add(_wpos).sub(_com);
@@ -278,50 +280,62 @@ export class Car {
         _vel.set(lv.x + _cross.x, lv.y + _cross.y, lv.z + _cross.z);
         const springVel = _vel.dot(_up);                        // + = extending
 
-        // spring - damper, along chassis up; clamp >= 0 (no catapult/suction)
-        let load = this.suspStiff * w.comp - this.suspDamp * springVel;
+        // spring - damper, along chassis up; clamp >= 0 (no catapult/suction). A
+        // torn-off corner gets heavy damping so it settles + drags without pogo.
+        const damp = w.detached ? this.suspDamp * 2.5 : this.suspDamp;
+        let load = this.suspStiff * w.comp - damp * springVel;
         if (load < 0) load = 0;
         w.force = load;
 
-        // ---- tire directions: chassis fwd/right, front wheels steered ----
-        _fwd.set(0, 0, 1).applyQuaternion(_q);
-        _right.set(1, 0, 0).applyQuaternion(_q);
-        if (w.front) { _fwd.applyQuaternion(_steerQ); _right.applyQuaternion(_steerQ); }
-        const vLong = _vel.dot(_fwd);
-        const vLat = _vel.dot(_right);
-        w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
+        // ---- tyre forces (a torn-off corner has none — the bare hub just drags) ----
+        let fLong = 0, fLat = 0;
+        if (!w.detached) {
+          _fwd.set(0, 0, 1).applyQuaternion(_q);
+          _right.set(1, 0, 0).applyQuaternion(_q);
+          if (w.front) { _fwd.applyQuaternion(_steerQ); _right.applyQuaternion(_steerQ); }
+          const vLong = _vel.dot(_fwd);
+          const vLat = _vel.dot(_right);
+          w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
 
-        // ---- grip budget (friction circle), load-based → weight transfer feeds it ----
-        const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
-        const gripBudget = this.tireGrip * load * gripMul;
+          // grip budget (friction circle), load-based → weight transfer feeds it
+          const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
+          const gripBudget = this.tireGrip * load * gripMul;
 
-        // ---- longitudinal: engine + brake + rolling resistance ----
-        let fLong = 0;
-        if (w.driven) fLong += this.throttle * this.engineForce;
-        const brake = this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
-        if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
-        fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
+          // longitudinal: engine + brake + rolling resistance
+          if (w.driven) fLong += this.throttle * this.engineForce;
+          const brake = this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
+          if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
+          fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
 
-        // ---- lateral: Pacejka-ish slip curve — grips, peaks, then breaks away ----
-        // slip angle between where the tyre points and where it's actually going.
-        // +0.6 in the denominator softens the singularity at crawl speed.
-        const slip = Math.atan2(vLat, Math.abs(vLong) + 0.6);
-        w.slip += (slip - w.slip) * Math.min(1, 12 * dt);   // smooth a few frames (anti-chatter)
-        let fLat = -gripBudget * Math.sin(this.tireShapeC * Math.atan(this.tireStiffB * w.slip));
+          // lateral: Pacejka-ish slip curve — grips, peaks, then breaks away
+          const slip = Math.atan2(vLat, Math.abs(vLong) + 0.6);
+          w.slip += (slip - w.slip) * Math.min(1, 12 * dt);   // anti-chatter
+          fLat = -gripBudget * Math.sin(this.tireShapeC * Math.atan(this.tireStiffB * w.slip));
 
-        // ---- friction circle: drive/brake force eats lateral grip → power oversteer ----
-        if (fLong > gripBudget) fLong = gripBudget;
-        else if (fLong < -gripBudget) fLong = -gripBudget;
-        const latRoom = Math.sqrt(Math.max(0, gripBudget * gripBudget - fLong * fLong));
-        if (fLat > latRoom) fLat = latRoom;
-        else if (fLat < -latRoom) fLat = -latRoom;
+          // friction circle: drive/brake force eats lateral grip → power oversteer
+          if (fLong > gripBudget) fLong = gripBudget;
+          else if (fLong < -gripBudget) fLong = -gripBudget;
+          const latRoom = Math.sqrt(Math.max(0, gripBudget * gripBudget - fLong * fLong));
+          if (fLat > latRoom) fLat = latRoom;
+          else if (fLat < -latRoom) fLat = -latRoom;
+        }
 
-        // ---- combine: suspension (up) + tire (fwd + right), one force ----
+        // ---- combine: suspension (up) + tyre (fwd + right), one force ----
         _imp.set(
           _up.x * load + _fwd.x * fLong + _right.x * fLat,
           _up.y * load + _fwd.y * fLong + _right.y * fLat,
           _up.z * load + _fwd.z * fLong + _right.z * fLat
         );
+        if (w.detached) {
+          // bare hub scrapes the ground: horizontal friction opposing motion at this
+          // one corner → the car limps AND pulls toward the dead corner
+          const vh = Math.hypot(_vel.x, _vel.z);
+          if (vh > 0.05) {
+            const scrape = Math.min(load * 1.1, this.mass * vh * 0.6);
+            _imp.x -= (_vel.x / vh) * scrape;
+            _imp.z -= (_vel.z / vh) * scrape;
+          }
+        }
         body.addForceAtPoint(_imp, { x: _wpos.x + _down.x * toi, y: _wpos.y + _down.y * toi, z: _wpos.z + _down.z * toi }, true);
       } else {
         w.grounded = false;
@@ -639,14 +653,17 @@ export class Car {
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
     this.repair();          // fresh body on reset
-    // make the car whole: re-fit knocked-off wheels, delete chunk debris
-    for (const m of this.debris) {
-      m.traverse((o) => { if (o.material) { o.material.opacity = 1; o.material.transparent = false; } });
-      if (m.userData.wheelRef) { this.mesh.attach(m); m.userData.wheelRef.detached = false; }
-      else m.parent && m.parent.remove(m);
-    }
+    // drop chunk debris
+    for (const m of this.debris) if (!m.userData.wheelRef) m.parent && m.parent.remove(m);
     this.debris.length = 0;
-    for (const w of this.wheels) w.detached = false;
+    // re-fit knocked-off wheels — robust even if their debris already expired
+    for (const w of this.wheels) {
+      if (w.detached && w.modelWheel) {
+        w.modelWheel.traverse((o) => { if (o.material) { o.material.opacity = 1; o.material.transparent = false; } });
+        this.mesh.add(w.modelWheel);      // back on the car; _placeWheels re-seats it
+        w.detached = false;
+      }
+    }
   }
 
   // live-tunable setters (wired to the Garage HUD sliders)
