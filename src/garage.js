@@ -15,10 +15,32 @@ import { Car } from "./carphysics.js";
 const FIXED = 1 / 60;                 // fixed physics dt — deterministic, refresh-independent
 const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 
-let world, car, scene, camera, renderer;
+let world, car, scene, camera, renderer, eventQueue;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
+
+/** one physics step + drain hard-impact events into the car's deform system */
+function physicsStep() {
+  world.step(eventQueue);
+  eventQueue.drainContactForceEvents((e) => {
+    const ch = car.collider.handle;
+    const c1 = e.collider1(), c2 = e.collider2();
+    if (c1 !== ch && c2 !== ch) return;
+    const mag = e.totalForceMagnitude();
+    const dir = e.maxForceDirection();
+    let point = null;
+    try {
+      world.contactPair(world.getCollider(c1), world.getCollider(c2), (m) => {
+        if (m && m.numSolverContacts && m.numSolverContacts() > 0) {
+          const p = m.solverContactPoint(0);
+          if (p) point = { x: p.x, y: p.y, z: p.z };
+        }
+      });
+    } catch (err) { /* no manifold → deform falls back to the force direction */ }
+    car.deform(point, mag, dir);
+  });
+}
 
 /** map current key state → car input */
 function readInput() {
@@ -67,6 +89,7 @@ async function main() {
   // ---- physics world --------------------------------------------------
   world = new RAPIER.World({ x: 0, y: -20, z: 0 });   // -20 matches the game
   world.integrationParameters.dt = FIXED;
+  eventQueue = new RAPIER.EventQueue(true);
 
   // ---- ground: visual grid + Rapier fixed collider --------------------
   const groundSize = 200;
@@ -91,6 +114,9 @@ async function main() {
   addRamp([0, 0, 22], 8, 1.6, 6, -0.28);     // gentle launch ramp ahead
   addRamp([-14, 0, 6], 5, 1.0, 5, 0.35);     // side kicker
   addKerb([10, 0, 4], 12, 0.18, 0.8);        // low kerb strip to test small bumps
+  addWall([9, 0, 34], 12, 3, 1);             // crash walls (drive into these to dent)
+  addWall([-16, 0, -2], 1, 3, 16);
+  addWall([0, 0, -20], 8, 3, 1);
 
   // ---- the car --------------------------------------------------------
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
@@ -103,12 +129,22 @@ async function main() {
   window.__garage = {
     world, car, RAPIER, scene, camera, renderer, frames: 0,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
-    step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); world.step(); car.snapshotCurr(); } return car.height; },
+    step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
+    // headless deform metrics: how far the body mesh has moved from pristine
+    dentStats() {
+      const pos = car.bodyMesh.geometry.attributes.position, op = car.origPos;
+      let moved = 0, maxD = 0;
+      for (let i = 0; i < pos.count; i++) {
+        const dx = pos.array[i*3]-op[i*3], dy = pos.array[i*3+1]-op[i*3+1], dz = pos.array[i*3+2]-op[i*3+2];
+        const d = Math.hypot(dx, dy, dz); if (d > 1e-4) moved++; if (d > maxD) maxD = d;
+      }
+      return { dents: car.dents, vertsMoved: moved, maxDisplacement: +maxD.toFixed(3), totalVerts: pos.count };
+    },
     // headless driving: apply an input for n steps, report motion
     drive(input, n = 60) {
       car.setInput(input);
-      for (let i = 0; i < n; i++) { car.fixedUpdate(FIXED); world.step(); }
+      for (let i = 0; i < n; i++) { car.fixedUpdate(FIXED); physicsStep(); }
       car.setInput({});
       const t = car.body.translation(), v = car.body.linvel(), a = car.body.angvel();
       return { x: +t.x.toFixed(2), y: +t.y.toFixed(2), z: +t.z.toFixed(2),
@@ -123,6 +159,7 @@ async function main() {
     keys[e.code] = true;
     if (e.code === "KeyR") car.reset();
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
+    if (e.code === "KeyP") car.repair();    // un-dent the body
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -147,6 +184,18 @@ function addRamp([x, , z], w, h, l, rotX) {
       .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }),
     body
   );
+}
+
+function addWall([x, , z], w, h, d) {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color: 0x9a5040, roughness: 0.85 })
+  );
+  mesh.position.set(x, h / 2, z);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  scene.add(mesh);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(x, h / 2, z), body);
 }
 
 function addKerb([x, , z], l, h, d) {
@@ -186,7 +235,7 @@ function frame() {
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
     car.snapshotPrev();
     car.fixedUpdate(FIXED);     // suspension + tire forces BEFORE the solve
-    world.step();
+    physicsStep();
     car.snapshotCurr();
     acc -= FIXED;
     steps++;
@@ -249,6 +298,7 @@ function buildHUD() {
     <div class="row"><span>car height</span><b id="h-y">–</b></div>
     <div class="row"><span>speed</span><b id="h-kmh">–</b></div>
     <div class="row"><span>wheels grounded</span><b id="h-wg">–</b></div>
+    <div class="row"><span>dents</span><b id="h-dent">0</b></div>
     <label>spring stiffness <span class="val" id="v-k">30000</span></label>
     <input id="s-k" type="range" min="5000" max="80000" step="500" value="30000">
     <label>spring damping <span class="val" id="v-d">4000</span></label>
@@ -266,7 +316,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">6000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="6000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake · [R] drop · [T] hard drop</div>
+    <div class="hint">WASD drive · Space handbrake · [R] drop · [T] hard drop · [P] repair</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 
@@ -306,6 +356,7 @@ function updateHUD() {
   set("h-y", car.height.toFixed(2) + " m");
   set("h-kmh", car.speedKmh.toFixed(0) + " km/h");
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
+  set("h-dent", String(car.dents));
 }
 function set(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 /**
  * carphysics.js — the ground-up vehicle module. Built in the Garage sandbox,
@@ -34,6 +35,11 @@ const _fwd = new THREE.Vector3();      // wheel forward (world)
 const _right = new THREE.Vector3();    // wheel right (world)
 const _q = new THREE.Quaternion();
 const _steerQ = new THREE.Quaternion();
+const _iq = new THREE.Quaternion();    // inverse chassis rotation (world→local)
+const _lp = new THREE.Vector3();       // local impact epicenter
+const _ld = new THREE.Vector3();       // local impact direction
+const _vp = new THREE.Vector3();       // vertex scratch
+const _off = new THREE.Vector3();      // vertex offset-from-original
 const ANTIROLL_AXLES = [[0, 1], [2, 3]];   // [FL,FR], [RL,RR]
 export class Car {
   constructor(world, RAPIER, {
@@ -62,6 +68,14 @@ export class Car {
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
     antiRoll = 6000,       // sway-bar stiffness — resists body roll without stiffening bump
+    // impact deform (Stage 5). Rapier contact forces run huge (~22k N per km/h of
+    // closing speed), so these are in the 100k-millions range: dent from ~15 km/h,
+    // full crumple by ~100 km/h.
+    dentThreshold = 250000,  // min contact force (N) to leave a dent (~16 km/h)
+    dentFullForce = 2000000, // force span above threshold for full severity (~100 km/h)
+    dentRadius = 0.9,        // base dent spread (m)
+    dentDepth = 0.28,        // base dent depth at full severity (m)
+    dentMax = 0.5,           // max total displacement any vertex can accumulate (m)
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -82,6 +96,13 @@ export class Car {
     this.tireStiffB = tireStiffB;
     this.tireShapeC = tireShapeC;
     this.antiRoll = antiRoll;
+    this.dentThreshold = dentThreshold;
+    this.dentFullForce = dentFullForce;
+    this.dentRadius = dentRadius;
+    this.dentDepth = dentDepth;
+    this.dentMax = dentMax;
+    this.half = { x: size[0] / 2, y: size[1] / 2, z: size[2] / 2 };
+    this.dents = 0;
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -110,6 +131,7 @@ export class Car {
       .setLinearDamping(linDamp)
       .setAngularDamping(angDamp)
       .setCanSleep(false)               // never sleep — we drive it every step
+      .setCcdEnabled(true)              // fast car must not tunnel through thin walls
       .setAdditionalMassProperties(
         mass,
         { x: 0, y: this.comY, z: 0 },
@@ -122,18 +144,28 @@ export class Car {
     const colDesc = RAPIER.ColliderDesc.cuboid(hx, hy, hz)
       .setDensity(0)
       .setRestitution(restitution)
-      .setFriction(friction);
+      .setFriction(friction)
+      // the chassis floats on the suspension, so ANY chassis contact is a real
+      // impact — fire force events above the dent threshold to drive deformation
+      .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
+      .setContactForceEventThreshold(dentThreshold);
     this.collider = world.createCollider(colDesc, this.body);
 
     // ---- visual (placeholder box + nose marker for orientation) ---------
     this.mesh = new THREE.Group();
     this.mesh.name = "car";
+    // subdivided + welded so it crumples as a continuous skin (placeholder for the
+    // real Synty body mesh at merge — deform is mesh-agnostic, runs on any geometry)
+    let bodyGeo = new THREE.BoxGeometry(size[0], size[1], size[2], 12, 8, 18);
+    bodyGeo = mergeVertices(bodyGeo);
     const bodyMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(size[0], size[1], size[2]),
-      new THREE.MeshStandardMaterial({ color: 0xcc3333, metalness: 0.2, roughness: 0.55 })
+      bodyGeo,
+      new THREE.MeshStandardMaterial({ color: 0xcc3333, metalness: 0.2, roughness: 0.55, flatShading: false })
     );
     bodyMesh.castShadow = true;
     this.mesh.add(bodyMesh);
+    this.bodyMesh = bodyMesh;
+    this.origPos = Float32Array.from(bodyGeo.attributes.position.array);   // pristine, for repair
     const nose = new THREE.Mesh(
       new THREE.BoxGeometry(size[0] * 0.55, size[1] * 0.5, size[2] * 0.12),
       new THREE.MeshStandardMaterial({ color: 0xffdd33 })
@@ -314,6 +346,70 @@ export class Car {
     }
   }
 
+  /**
+   * IMPACT DEFORM — dent the body mesh where a hard hit landed.
+   * @param worldPoint {x,y,z}|null  contact point (world); null → infer from dir
+   * @param mag        contact force magnitude (N)
+   * @param worldDir   {x,y,z}       force direction on the car (world)
+   */
+  deform(worldPoint, mag, worldDir) {
+    if (mag < this.dentThreshold) return;
+    const t = this.body.translation(), r = this.body.rotation();
+    _iq.set(r.x, r.y, r.z, r.w).invert();                 // world → chassis-local
+
+    // epicenter (local): the real contact point if we have it
+    if (worldPoint) {
+      _lp.set(worldPoint.x - t.x, worldPoint.y - t.y, worldPoint.z - t.z).applyQuaternion(_iq);
+    } else {
+      _lp.set(0, 0, 0);
+    }
+
+    // push direction = from the hit toward the car center → the panel caves as a
+    // unit (no per-vertex pinch). Fall back to the impact force direction.
+    if (_lp.lengthSq() > 1e-4) {
+      _ld.copy(_lp).multiplyScalar(-1).normalize();
+    } else {
+      _ld.set(worldDir.x, worldDir.y, worldDir.z).applyQuaternion(_iq);
+      if (_ld.lengthSq() < 1e-8) return;
+      _ld.normalize();
+      _lp.set(-_ld.x * this.half.x, -_ld.y * this.half.y, -_ld.z * this.half.z);
+    }
+
+    const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
+    const radius = this.dentRadius * (0.5 + sev);
+    const depth = this.dentDepth * sev;
+
+    const pos = this.bodyMesh.geometry.attributes.position;
+    const op = this.origPos;
+    let touched = false;
+    for (let i = 0; i < pos.count; i++) {
+      _vp.fromBufferAttribute(pos, i);
+      const d = _vp.distanceTo(_lp);
+      if (d >= radius) continue;
+      const fall = 1 - d / radius;                         // deepest at the epicenter
+      _vp.addScaledVector(_ld, depth * fall * fall);       // push metal inward
+      // clamp accumulated displacement so repeated hits can't collapse the shell
+      _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
+      if (_off.length() > this.dentMax) _off.setLength(this.dentMax);
+      pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
+      touched = true;
+    }
+    if (touched) {
+      pos.needsUpdate = true;
+      this.bodyMesh.geometry.computeVertexNormals();       // dents catch light correctly
+      this.dents++;
+    }
+  }
+
+  /** restore the pristine body shape (repair) */
+  repair() {
+    const pos = this.bodyMesh.geometry.attributes.position;
+    pos.array.set(this.origPos);
+    pos.needsUpdate = true;
+    this.bodyMesh.geometry.computeVertexNormals();
+    this.dents = 0;
+  }
+
   /** live CoG height (offset from chassis center: − = low/stable, + = high/tippy) */
   setCoM(comY) {
     this.comY = comY;
@@ -363,6 +459,7 @@ export class Car {
     this._read(this.currPos, this.currQuat);
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
+    this.repair();          // fresh body on reset
   }
 
   // live-tunable setters (wired to the Garage HUD sliders)
