@@ -58,7 +58,9 @@ export class Pedestrian {
   /** get hit by a car → drop the (kinematic) capsule so it stops brick-walling the car, and
    * launch a real physics ragdoll off the hood (reuses the same Ragdoll that throws the player). */
   _enterRagdoll(carVel, entity) {
-    if (!this.rag) this.rag = new Ragdoll(this.bones, this.phys, { tone: 1.4 });
+    // LIGHT ragdoll (16kg): a person shouldn't drag your car down — light enough the car
+    // barely slows + blows him clear instead of getting wedged + jiggling under the wheels.
+    if (!this.rag) this.rag = new Ragdoll(this.bones, this.phys, { tone: 1.4, totalMass: 16 });
     const chest = entity.position.clone(); chest.y += 1.1;
     this.rag.enter(carVel.clone().multiplyScalar(0.85).add(new THREE.Vector3(0, 2.5, 0)),
       carVel.clone().multiplyScalar(11), chest);
@@ -147,7 +149,7 @@ export class Pedestrian {
         const pv = this.rag.pelvisPos();
         p.set(pv.x, Math.max(this.heightAt(pv.x, pv.z) - 0.2, pv.y - 0.9), pv.z);   // follow the flying body
         this._downT += dt;
-        if (this._downT > 1.0 && this.rag.settled(0.8)) {                            // settled → get up
+        if (this._downT > 4.0 || (this._downT > 1.0 && this.rag.settled(0.8))) {      // settled OR timed out → get up
           this.rag.exit();
           const pv2 = this.rag.pelvisPos();
           p.set(pv2.x, this.heightAt(pv2.x, pv2.z) + this.footOffset, pv2.z);
