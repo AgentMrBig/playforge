@@ -34,6 +34,7 @@ const _fwd = new THREE.Vector3();      // wheel forward (world)
 const _right = new THREE.Vector3();    // wheel right (world)
 const _q = new THREE.Quaternion();
 const _steerQ = new THREE.Quaternion();
+const ANTIROLL_AXLES = [[0, 1], [2, 3]];   // [FL,FR], [RL,RR]
 export class Car {
   constructor(world, RAPIER, {
     pos = [0, 3, 0],
@@ -60,6 +61,7 @@ export class Car {
     rollResist = 0.015,    // rolling resistance fraction of load
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
+    antiRoll = 6000,       // sway-bar stiffness — resists body roll without stiffening bump
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -79,6 +81,7 @@ export class Car {
     this.rollResist = rollResist;
     this.tireStiffB = tireStiffB;
     this.tireShapeC = tireShapeC;
+    this.antiRoll = antiRoll;
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -213,6 +216,7 @@ export class Car {
     for (const w of this.wheels) {
       // mount in world space = chassis pos + rotated local mount
       _wpos.copy(w.mount).applyQuaternion(_q).add(_tpos.set(t.x, t.y, t.z));
+      w.mwx = _wpos.x; w.mwy = _wpos.y; w.mwz = _wpos.z;   // mount world pos (anti-roll point)
       const ray = new this.RAPIER.Ray(_wpos, _down);
       const hit = this.world.castRay(ray, reach, true, undefined, undefined, undefined, body);
 
@@ -279,7 +283,27 @@ export class Car {
         w.comp = 0;
       }
     }
+    this._applyAntiRoll(this.antiRoll);
     this._placeWheels();
+  }
+
+  /**
+   * Anti-roll (sway) bar: per axle, resist the DIFFERENCE in left/right suspension
+   * compression with an opposing roll moment. Only differential compression (body
+   * roll) is resisted — when both wheels compress together (a bump) the delta is 0,
+   * so ride comfort is untouched. Net force ~0 (up one side, down the other) → pure
+   * roll moment, ride height preserved.
+   */
+  _applyAntiRoll(k) {
+    if (k <= 0) return;
+    for (const [li, ri] of ANTIROLL_AXLES) {
+      const L = this.wheels[li], R = this.wheels[ri];
+      if (!L.grounded && !R.grounded) continue;
+      const roll = (R.comp - L.comp) * k;    // >0 → right compressed more (rolling right)
+      // push the more-compressed side UP, the other DOWN → levels the chassis
+      this.body.addForceAtPoint({ x: _up.x * roll, y: _up.y * roll, z: _up.z * roll }, { x: R.mwx, y: R.mwy, z: R.mwz }, true);
+      this.body.addForceAtPoint({ x: -_up.x * roll, y: -_up.y * roll, z: -_up.z * roll }, { x: L.mwx, y: L.mwy, z: L.mwz }, true);
+    }
   }
 
   /** position wheel visuals along their travel + steer + roll (local space) */

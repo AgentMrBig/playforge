@@ -263,6 +263,8 @@ function buildHUD() {
     <input id="s-rg" type="range" min="0.3" max="1.2" step="0.02" value="1.00">
     <label>CoG height (low↔bus) <span class="val" id="v-cog">-0.45</span></label>
     <input id="s-cog" type="range" min="-0.5" max="0.5" step="0.02" value="-0.45">
+    <label>anti-roll bar <span class="val" id="v-arb">6000</span></label>
+    <input id="s-arb" type="range" min="0" max="60000" step="1000" value="6000">
     <canvas id="ftg" width="216" height="46"></canvas>
     <div class="hint">WASD drive · Space handbrake · [R] drop · [T] hard drop</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
@@ -275,6 +277,7 @@ function buildHUD() {
   bindSlider("s-grip", "v-grip", (v) => { car.tireGrip = v; });
   bindSlider("s-rg", "v-rg", (v) => { car.rearGripMul = v; });
   bindSlider("s-cog", "v-cog", (v) => car.setCoM(v));
+  bindSlider("s-arb", "v-arb", (v) => { car.antiRoll = v; }, 0);
 
   ftCanvas = document.getElementById("ftg");
   ftCtx = ftCanvas.getContext("2d");
