@@ -70,6 +70,7 @@ export class Car {
     tireGrip = 2.2,        // peak lateral grip as a multiple of vertical load
     rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
     rollResist = 0.015,    // rolling resistance fraction of load
+    wheelInertia = 6,      // lumped driven-wheel inertia (higher = spins up slower)
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
     antiRoll = 29000,      // sway-bar stiffness (Erik default) — resists body roll, not bump
@@ -101,6 +102,7 @@ export class Car {
     this.tireGrip = tireGrip;
     this.rearGripMul = rearGripMul;
     this.rollResist = rollResist;
+    this.wheelInertia = wheelInertia;
     this.tireStiffB = tireStiffB;
     this.tireShapeC = tireShapeC;
     this.antiRoll = antiRoll;
@@ -201,10 +203,10 @@ export class Car {
     // mount slightly inboard of the shell and near its floor; +Z forward.
     const mx = hx - 0.15, mz = hz - 0.55, my = -hy + 0.15;
     this.wheels = [
-      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
-      { name: "FR", mount: new THREE.Vector3(mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
-      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
-      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0 },
+      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0, spinRate: 0, omega: 0 },
+      { name: "FR", mount: new THREE.Vector3(mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0, spinRate: 0, omega: 0 },
+      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0, spinRate: 0, omega: 0 },
+      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0, slip: 0, spinRate: 0, omega: 0 },
     ];
     const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.25, 16);
     wheelGeo.rotateZ(Math.PI / 2);   // roll about local X
@@ -298,7 +300,6 @@ export class Car {
           const vLong = _vel.dot(_fwd);
           const vLat = _vel.dot(_right);
           w.vLat = vLat;                                // lateral slide speed (for squeal pitch)
-          w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
 
           // grip budget (friction circle), load-based → weight transfer feeds it
           const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
@@ -321,6 +322,21 @@ export class Car {
           const latRoom = Math.sqrt(Math.max(0, gripBudget * gripBudget - fLong * fLong));
           if (fLat > latRoom) fLat = latRoom;
           else if (fLat < -latRoom) fLat = -latRoom;
+
+          // ---- wheelspin: drive force the tyre CAN'T put down spins the wheel up
+          // faster than the ground (real traction break). Chassis force stays grip-
+          // limited above; this is the surplus torque winding the wheel. -----------
+          if (w.driven) {
+            const driveForce = this.throttle * this.engineForce;
+            const excess = Math.max(0, Math.abs(driveForce) - gripBudget);   // unusable torque
+            w.spinRate += Math.sign(driveForce || 1) * (excess * this.wheelRadius / this.wheelInertia) * dt;
+            if (this.handbrake) w.spinRate = 0;                    // locked rears don't spin
+            w.spinRate -= w.spinRate * Math.min(1, 6 * dt);        // re-hooks as grip returns
+          } else {
+            w.spinRate = 0;
+          }
+          w.omega = vLong / this.wheelRadius + w.spinRate;
+          w.spin += w.omega * dt;                                  // visual roll (fast when spinning)
         }
 
         // ---- combine: suspension (up) + tyre (fwd + right), one force ----
@@ -362,8 +378,13 @@ export class Car {
       slideSpeed = Math.max(slideSpeed, Math.abs(w.vLat || 0) * sliding);
     }
     const spdK = this.speedKmh;
-    const burn = (this.throttle > 0.55 && spdK < 28) ? (1 - spdK / 28) * this.throttle : 0;
-    if (burn > amt) { amt = burn; slideSpeed = Math.max(slideSpeed, burn * 11); }
+    // burnout squeal from the ACTUAL wheelspin of the driven wheels
+    let spinN = 0;
+    for (const w of this.wheels) {
+      if (!w.driven || w.detached) continue;
+      spinN = Math.max(spinN, Math.min(1, Math.abs(w.spinRate || 0) / 50));
+    }
+    if (spinN > amt) { amt = spinN; slideSpeed = Math.max(slideSpeed, spinN * 14); }
     if (this.handbrake && spdK > 6) amt = Math.max(amt, 0.8);
     const volT = Math.max(0, Math.min(1, amt));
     const pitchT = Math.min(1, slideSpeed / 12);               // ~0 slow, ~1 at 12 m/s slide
