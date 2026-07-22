@@ -114,6 +114,7 @@ export class Car {
     this.wheelDetachForce = wheelDetachForce;
     this.chunkForce = chunkForce;
     this.debris = [];          // loose pieces (knocked-off wheels + body chunks)
+    this.screech = 0;          // tyre-squeal signal (0..1) for audio
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -344,6 +345,19 @@ export class Car {
       }
     }
     this._applyAntiRoll(this.antiRoll);
+
+    // tyre-squeal signal for audio: lateral slide beyond grip + burnout + handbrake
+    let slide = 0;
+    for (const w of this.wheels) {
+      if (!w.grounded || w.detached) continue;
+      slide = Math.max(slide, (Math.abs(w.slip) - 0.13) / 0.45);
+    }
+    const spdK = this.speedKmh;
+    const burn = (this.throttle > 0.55 && spdK < 28) ? (1 - spdK / 28) * this.throttle : 0;
+    const hbSlide = (this.handbrake && spdK > 6) ? 0.75 : 0;
+    const target = Math.max(0, Math.min(1, Math.max(slide, burn, hbSlide)));
+    this.screech += (target - this.screech) * Math.min(1, 9 * dt);
+
     this._placeWheels();
   }
 

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { Car } from "./carphysics.js";
 import { loadVehicle } from "./vehicledef.js";
+import { VehicleAudio } from "./vehicleaudio.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -30,6 +31,7 @@ let world, car, scene, camera, renderer, eventQueue;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
+const audio = new VehicleAudio({ hp: 450 });
 
 /** one physics step + drain hard-impact events into the car's deform system */
 function physicsStep() {
@@ -139,7 +141,7 @@ async function main() {
   // debug/verification handle — the agent Browser pane throttles rAF to ~0fps,
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
-    world, car, RAPIER, scene, camera, renderer, frames: 0,
+    world, car, RAPIER, scene, camera, renderer, audio, frames: 0,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -177,6 +179,11 @@ async function main() {
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
   setupCameraInput(renderer.domElement);
+
+  // audio needs a user gesture to start (browser autoplay policy)
+  const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); };
+  addEventListener("keydown", startAudio);
+  addEventListener("mousedown", startAudio);
 
   requestAnimationFrame(frame);
 
@@ -267,6 +274,7 @@ function frame() {
   const alpha = acc / FIXED;            // leftover fraction → smooth interpolation
   car.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
+  audio.update(dt, car);                // procedural engine + tyre squeal
 
   updateCamera(dt);
   updateHUD();
@@ -403,6 +411,7 @@ function buildHUD() {
     <div class="row"><span>substeps/frame</span><b id="h-sub">–</b></div>
     <div class="row"><span>car height</span><b id="h-y">–</b></div>
     <div class="row"><span>speed</span><b id="h-kmh">–</b></div>
+    <div class="row"><span>rpm / squeal</span><b id="h-eng">–</b></div>
     <div class="row"><span>wheels grounded</span><b id="h-wg">–</b></div>
     <div class="row"><span>dents</span><b id="h-dent">0</b></div>
     <div class="row"><span>wheels off / debris</span><b id="h-dmg">0 / 0</b></div>
@@ -465,6 +474,7 @@ function updateHUD() {
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
   set("h-dmg", car.wheelsOff + " / " + car.debris.length);
+  set("h-eng", Math.round(audio.rpm) + " / " + car.screech.toFixed(2));
 }
 function set(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 
