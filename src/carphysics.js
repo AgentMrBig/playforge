@@ -255,9 +255,15 @@ export class Car {
 
     // hold Space at low speed + floor it = line-lock burnout (rears spin, fronts
     // braked to hold you); at speed, Space is the handbrake (rears lock → drift)
+    const spdAbs = Math.abs(this.speedKmh);
     // burnout entry: handbrake+gas OR the classic BRAKE-STAND (brake+gas together)
-    const burnoutMode = (this.handbrake || (this.brakeInput > 0.35 && this.throttle > 0.45))
-      && Math.abs(this.speedKmh) < 8;
+    const burnoutMode = (this.handbrake || (this.brakeInput > 0.35 && this.throttle > 0.45)) && spdAbs < 8;
+    // 1st-gear torque kick: FLOORING it (>90%) at low speed multiplies drive force —
+    // cracks the rears loose from a dig (forward now lights up like reverse does);
+    // feather the throttle and it launches clean. Fades out by ~36 km/h.
+    const launchBoost = Math.abs(this.throttle) > 0.9
+      ? 1 + 0.6 * Math.max(0, 1 - (spdAbs / 3.6) / 10) : 1;
+    this._boost = launchBoost;
     this.burnout = burnoutMode;                 // exposed for audio (rev, don't drag)
 
     const t = body.translation();
@@ -328,7 +334,7 @@ export class Car {
           if (w.driven && Math.abs(w.spinRate || 0) > 4) gripBudget *= 0.45;
 
           // longitudinal: engine + brake + rolling resistance
-          if (w.driven) fLong += this.throttle * this.engineForce;
+          if (w.driven) fLong += this.throttle * this.engineForce * this._boost;
           // burnout: brake the FRONTS (hold the car); drift: brake the rears
           // in burnout mode ALL braking goes to the FRONTS (hold the car) — the rears
           // must stay free to spin; otherwise brakeInput brakes all four as normal
@@ -354,7 +360,7 @@ export class Car {
           // faster than the ground (real traction break). Chassis force stays grip-
           // limited above; this is the surplus torque winding the wheel. -----------
           if (w.driven) {
-            const driveForce = this.throttle * this.engineForce;
+            const driveForce = this.throttle * this.engineForce * this._boost;
             // Flooring AGAINST the direction of travel: the tyre fights the ground and
             // breaks loose immediately — the spin you get dropping it into reverse at
             // speed. Now symmetric: flooring W while rolling backwards spins them too,
