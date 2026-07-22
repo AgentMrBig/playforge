@@ -699,11 +699,22 @@ function buildHUD() {
 function bindSlider(id, valId, apply, digits = 2) {
   const el = document.getElementById(id);
   const label = document.getElementById(valId);
-  el.addEventListener("input", () => {
+  const commit = () => {
     const v = parseFloat(el.value);
     label.textContent = v.toFixed(digits);
     apply(v);
-  });
+  };
+  el.addEventListener("input", commit);
+  // hover + mouse wheel nudges the slider (Erik). Shift = 5× coarse steps.
+  el.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const step = (parseFloat(el.step) || 1) * (e.shiftKey ? 5 : 1);
+    const dir = e.deltaY < 0 ? 1 : -1;              // wheel up = increase
+    const v = parseFloat(el.value) + dir * step;
+    el.value = String(Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), v)));
+    commit();
+  }, { passive: false });
 }
 
 let hudT = 0;
