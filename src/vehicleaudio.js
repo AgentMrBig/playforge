@@ -57,8 +57,9 @@ export class VehicleAudio {
     const b = this._body;
     b.speed = (car.speedKmh || 0) / 3.6;                 // m/s
     b.throttle = car.throttle || 0;
-    b.wheelspin = car.throttle > 0.6 && (car.speedKmh || 0) < 26;   // burnout → revs flare
-    b.handbrake = !!car.handbrake;
+    b.wheelspin = (car.driveSpin || 0) > 6;              // ACTUAL wheelspin flares the revs
+    // only a genuine locked-rear drift drags the engine — a line-lock burnout revs free
+    b.handbrake = !!car.handbrake && !car.burnout;
     this.engine.update(dt, { entity: { components: [b] } });
 
     // tyre squeal: volume from slide×force, pitch from slide speed (Erik: force-driven)

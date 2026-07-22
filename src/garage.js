@@ -4,6 +4,8 @@ import { Car } from "./carphysics.js";
 import { loadVehicle } from "./vehicledef.js";
 import { VehicleAudio } from "./vehicleaudio.js";
 import { SkidTrails } from "./skidtrails.js";
+import { Cluster } from "./cluster.js";
+import { VehicleFX } from "./vehiclefx.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -28,11 +30,12 @@ const CARS = {
 const FIXED = 1 / 60;                 // fixed physics dt — deterministic, refresh-independent
 const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 
-let world, car, scene, camera, renderer, eventQueue, skid;
+let world, car, scene, camera, renderer, eventQueue, skid, fx;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
 const audio = new VehicleAudio({ hp: 450 });
+const cluster = new Cluster();
 
 /** one physics step + drain hard-impact events into the car's deform system */
 function physicsStep() {
@@ -53,6 +56,7 @@ function physicsStep() {
       });
     } catch (err) { /* no manifold → deform falls back to the force direction */ }
     car.impact(point, mag, dir);
+    if (fx) fx.onImpact(point, mag);      // spark burst on hard hits
   });
 }
 
@@ -137,13 +141,14 @@ async function main() {
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
   scene.add(car.mesh);
   skid = new SkidTrails(scene);
+  fx = new VehicleFX(scene);
 
   buildHUD();
 
   // debug/verification handle — the agent Browser pane throttles rAF to ~0fps,
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
-    world, car, RAPIER, scene, camera, renderer, audio, skid, frames: 0,
+    world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -278,7 +283,9 @@ function frame() {
   car.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
+  fx.update(dt, car);                   // tyre smoke + sparks
   audio.update(dt, car);                // procedural engine + tyre squeal
+  cluster.update(audio.rpm, car.speedKmh);   // tach + speedo
 
   updateCamera(dt);
   updateHUD();

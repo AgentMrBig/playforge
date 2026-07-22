@@ -84,7 +84,8 @@ export class Car {
     dentMax = 0.5,           // max total displacement any vertex can accumulate (m)
     // mechanical damage (Stage 6)
     wheelDetachForce = 1100000, // contact force to tear a wheel off (~50 km/h corner hit)
-    chunkForce = 1600000,       // force to break off a body chunk (~72 km/h)
+    chunkForce = 1600000,       // force to break off body chunks (~72 km/h)
+    glassBreakForce = 700000,   // force to shatter the glass (~32 km/h)
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -115,7 +116,10 @@ export class Car {
     this.dents = 0;
     this.wheelDetachForce = wheelDetachForce;
     this.chunkForce = chunkForce;
-    this.debris = [];          // loose pieces (knocked-off wheels + body chunks)
+    this.glassBreakForce = glassBreakForce;
+    this.glassMats = [];       // glass materials (dimmed to 0 when shattered)
+    this.glassBroken = false;
+    this.debris = [];          // loose pieces (knocked-off wheels + body chunks + glass shards)
     this.screech = 0;          // tyre-squeal volume (0..1) — slide × force
     this.screechPitch = 0;     // tyre-squeal pitch (0..1) — slide speed / force
     this.mass = mass;
@@ -252,6 +256,7 @@ export class Car {
     // hold Space at low speed + floor it = line-lock burnout (rears spin, fronts
     // braked to hold you); at speed, Space is the handbrake (rears lock → drift)
     const burnoutMode = this.handbrake && Math.abs(this.speedKmh) < 8;
+    this.burnout = burnoutMode;                 // exposed for audio (rev, don't drag)
 
     const t = body.translation();
     const r = body.rotation();
@@ -387,11 +392,13 @@ export class Car {
     }
     const spdK = this.speedKmh;
     // burnout squeal from the ACTUAL wheelspin of the driven wheels
-    let spinN = 0;
+    let spinN = 0, rawSpin = 0;
     for (const w of this.wheels) {
       if (!w.driven || w.detached) continue;
-      spinN = Math.max(spinN, Math.min(1, Math.abs(w.spinRate || 0) / 50));
+      rawSpin = Math.max(rawSpin, Math.abs(w.spinRate || 0));
+      spinN = Math.max(spinN, Math.min(1, rawSpin / 50));
     }
+    this.driveSpin = rawSpin;                    // raw wheelspin (rad/s) for audio rev
     if (spinN > amt) { amt = spinN; slideSpeed = Math.max(slideSpeed, spinN * 14); }
     if (this.handbrake && spdK > 6) amt = Math.max(amt, 0.8);
     const volT = Math.max(0, Math.min(1, amt));
@@ -561,6 +568,19 @@ export class Car {
       this.bodyCenter = best.geometry.boundingBox.getCenter(new THREE.Vector3());
       this.dents = 0;
     }
+    // find glass materials (named "glass" or transparent) so we can shatter them
+    this.glassMats = []; this.glassBroken = false;
+    v.traverse((o) => {
+      if (!o.isMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m) continue;
+        const nm = (m.name || "").toLowerCase();
+        if ((nm.includes("glass") || (m.transparent && m.opacity < 0.92)) && !this.glassMats.includes(m)) {
+          m.userData._op = m.opacity; this.glassMats.push(m);
+        }
+      }
+    });
     this.modelName = rig.name || "car";
   }
 
@@ -584,8 +604,10 @@ export class Car {
       }
       if (near) this._detachWheel(near);
     }
-    // body chunk break-off on a really big hit
-    if (mag >= this.chunkForce && this.debris.length < 20) this._spawnChunk(worldPoint, worldDir, mag);
+    // body chunks fly off on a really big hit
+    if (mag >= this.chunkForce && this.debris.length < 80) this._spawnChunk(worldPoint, worldDir, mag);
+    // glass shatters at a lower threshold
+    if (mag >= this.glassBreakForce) this._breakGlass(worldPoint);
   }
 
   /** tear a wheel off → loose debris; that corner loses spring + grip (it drags) */
@@ -604,24 +626,62 @@ export class Car {
       lv.x + _dp.x * 3, lv.y + 4, lv.z + _dp.z * 3, 9);
   }
 
-  /** break a body-colored chunk off at the impact + gouge a deep dent there */
+  /** scatter a cluster of little metal fragments at the impact + gouge a deep dent */
   _spawnChunk(worldPoint, worldDir, mag) {
     const scene = this.mesh.parent;
     if (!scene) return;
-    const s = 0.35 + Math.random() * 0.3;
-    const chunk = new THREE.Mesh(
-      new THREE.BoxGeometry(s, 0.12, s * 0.8),
-      new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.4, roughness: 0.6 })
-    );
-    chunk.castShadow = true;
-    chunk.position.set(worldPoint.x, worldPoint.y, worldPoint.z);
-    chunk.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-    scene.add(chunk);
     const lv = this.body.linvel();
     this.mesh.getWorldPosition(_dc);
     _dp.set(worldPoint.x, worldPoint.y, worldPoint.z).sub(_dc).setY(0).normalize();
-    this._registerDebris(chunk, lv.x + _dp.x * 4, lv.y + 4.5, lv.z + _dp.z * 4, 12);
+    const bodyCol = this.bodyMesh.material?.color ? this.bodyMesh.material.color.getHex() : 0x777b80;
+    const n = 4 + Math.floor(Math.random() * 5);      // 4-8 little pieces
+    for (let i = 0; i < n; i++) {
+      const s = 0.1 + Math.random() * 0.2;
+      const geo = Math.random() < 0.5 ? new THREE.TetrahedronGeometry(s)
+        : new THREE.BoxGeometry(s, s * 0.5, s * (0.6 + Math.random()));
+      const piece = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+        color: i % 3 === 0 ? bodyCol : 0x777b80, metalness: 0.55, roughness: 0.55,
+      }));
+      piece.castShadow = true;
+      piece.position.set(worldPoint.x + (Math.random() - 0.5) * 0.3, worldPoint.y + (Math.random() - 0.5) * 0.3, worldPoint.z + (Math.random() - 0.5) * 0.3);
+      piece.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      scene.add(piece);
+      const spread = 3 + Math.random() * 4;
+      this._registerDebris(piece,
+        lv.x + _dp.x * spread + (Math.random() - 0.5) * 4,
+        lv.y + 3 + Math.random() * 4,
+        lv.z + _dp.z * spread + (Math.random() - 0.5) * 4, 16);
+    }
     this.deform(worldPoint, mag * 1.6, worldDir);   // deeper gouge where it tore away
+  }
+
+  /** shatter the glass: dim the glass materials to nothing + fling glass shards */
+  _breakGlass() {
+    if (this.glassBroken || !this.glassMats.length) return;
+    this.glassBroken = true;
+    for (const m of this.glassMats) { m.opacity = 0; m.transparent = true; m.needsUpdate = true; }
+    const scene = this.mesh.parent;
+    if (!scene) return;
+    this.mesh.updateWorldMatrix(true, false);
+    this.mesh.getWorldPosition(_dc);
+    const q = this.body.rotation();
+    _iq.set(q.x, q.y, q.z, q.w);
+    const lv = this.body.linvel();
+    const n = 12 + Math.floor(Math.random() * 8);
+    for (let i = 0; i < n; i++) {
+      const s = 0.05 + Math.random() * 0.11;
+      const shard = new THREE.Mesh(
+        new THREE.TetrahedronGeometry(s),
+        new THREE.MeshStandardMaterial({ color: 0xbfe6ef, transparent: true, opacity: 0.5, metalness: 0.1, roughness: 0.05 })
+      );
+      // scatter around the greenhouse (upper body), rotated with the car
+      _off.set((Math.random() - 0.5) * 1.5, 0.7 + Math.random() * 0.5, (Math.random() - 0.5) * 2.2).applyQuaternion(_iq);
+      shard.position.set(_dc.x + _off.x, _dc.y + _off.y, _dc.z + _off.z);
+      shard.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      scene.add(shard);
+      this._registerDebris(shard,
+        lv.x * 0.5 + (Math.random() - 0.5) * 5, lv.y + 2 + Math.random() * 3, lv.z * 0.5 + (Math.random() - 0.5) * 5, 18);
+    }
   }
 
   _registerDebris(mesh, vx, vy, vz, spin) {
@@ -721,6 +781,11 @@ export class Car {
         if (w._wheelScale) w.modelWheel.scale.copy(w._wheelScale); // restore exact scale
         w.detached = false;
       }
+    }
+    // un-shatter the glass
+    if (this.glassBroken) {
+      for (const m of this.glassMats) { m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
+      this.glassBroken = false;
     }
   }
 
