@@ -45,16 +45,20 @@ export class SkidTrails {
     for (const w of car.wheels) {
       const st = this.state[w.name] || (this.state[w.name] = { on: false });
       const grounded = w.grounded && !w.detached && w.cx !== undefined;
-      const inten = grounded ? this._intensity(w) : 0;
+      const lat = grounded ? Math.min(1, Math.max(0, (Math.abs(w.slip || 0) - 0.13) / 0.4)) : 0;
+      const spin = grounded && w.driven ? Math.min(1, Math.abs(w.spinRate || 0) / 45) : 0;
+      const inten = Math.max(lat, spin);
+      const burnout = spin > lat ? spin : 0;          // wheelspin marks: darker + wider
       if (inten <= 0.06 || !grounded) { st.on = false; continue; }
       const cx = w.cx, cz = w.cz;
       if (!st.on) { st.on = true; st.px = cx; st.pz = cz; st.hasEdge = false; continue; }
       const dx = cx - st.px, dz = cz - st.pz, d = Math.hypot(dx, dz);
-      if (d < 0.05) continue;                        // wait for enough travel
-      const wx = -dz / d, wz = dx / d, hw = this.halfW;   // perpendicular = strip width
+      if (d < 0.04) continue;                          // wait for a little travel
+      const hw = this.halfW * (1 + burnout * 0.5);     // burnout lays a fatter stripe
+      const wx = -dz / d, wz = dx / d;                 // perpendicular = strip width
       const clx = cx + wx * hw, clz = cz + wz * hw;
       const crx = cx - wx * hw, crz = cz - wz * hw;
-      if (st.hasEdge) this._quad(st.plx, st.plz, st.prx, st.prz, clx, clz, crx, crz, inten);
+      if (st.hasEdge) this._quad(st.plx, st.plz, st.prx, st.prz, clx, clz, crx, crz, inten, burnout);
       st.px = cx; st.pz = cz; st.plx = clx; st.plz = clz; st.prx = crx; st.prz = crz; st.hasEdge = true;
     }
     if (this._dirty) {
@@ -65,7 +69,7 @@ export class SkidTrails {
     }
   }
 
-  _quad(aLx, aLz, aRx, aRz, bLx, bLz, bRx, bRz, inten) {
+  _quad(aLx, aLz, aRx, aRz, bLx, bLz, bRx, bRz, inten, burnout = 0) {
     const y = 0.02;
     const i = this.head * 18, c = this.head * 24;
     const P = this.pos, C = this.col;
@@ -76,8 +80,9 @@ export class SkidTrails {
     P[i + 9] = aLx; P[i + 10] = y; P[i + 11] = aLz;
     P[i + 12] = bRx; P[i + 13] = y; P[i + 14] = bRz;
     P[i + 15] = bLx; P[i + 16] = y; P[i + 17] = bLz;
-    // near-black in LINEAR space so it displays black after the sRGB encode
-    const a = Math.min(0.9, 0.3 + inten * 0.6);
+    // near-black in LINEAR space so it displays black after the sRGB encode.
+    // burnouts lay darker (heavier) rubber than a slide.
+    const a = Math.min(0.96, 0.3 + inten * 0.5 + burnout * 0.35);
     for (let v = 0; v < 6; v++) { const o = c + v * 4; C[o] = 0.008; C[o + 1] = 0.008; C[o + 2] = 0.009; C[o + 3] = a; }
     this.head = (this.head + 1) % this.maxQuads;
     if (this.count < this.maxQuads) this.count++;

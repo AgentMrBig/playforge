@@ -432,8 +432,8 @@ function buildHUD() {
     <input id="s-d" type="range" min="0" max="12000" step="100" value="1500">
     <label>rest length <span class="val" id="v-rest">0.50</span></label>
     <input id="s-rest" type="range" min="0.2" max="0.9" step="0.01" value="0.50">
-    <label>engine force <span class="val" id="v-eng">8000</span></label>
-    <input id="s-eng" type="range" min="2000" max="20000" step="500" value="8000">
+    <label>engine force <span class="val" id="v-eng">12000</span></label>
+    <input id="s-eng" type="range" min="2000" max="24000" step="500" value="12000">
     <label>tire grip <span class="val" id="v-grip">1.70</span></label>
     <input id="s-grip" type="range" min="0.5" max="3" step="0.05" value="1.70">
     <label>rear grip mul <span class="val" id="v-rg">1.00</span></label>

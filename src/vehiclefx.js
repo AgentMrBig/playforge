@@ -27,22 +27,25 @@ export class VehicleFX {
     const spd = car.speedKmh;
     for (const w of car.wheels) {
       if (w.cx === undefined) continue;
-      // ---- tyre smoke from sliding / spinning wheels ----
+      // ---- tyre smoke from sliding / spinning wheels (builds the longer you hold it) ----
       if (w.grounded && !w.detached) {
         const inten = this._intensity(w);
+        const st = this._acc[w.name] || (this._acc[w.name] = { acc: 0, heat: 0 });
+        // heat ramps up while burning out, cools off otherwise → progressive cloud
+        st.heat = Math.max(0, Math.min(1, st.heat + (inten > 0.3 ? inten * 0.55 : -0.9) * dt));
         if (inten >= 0.16) {
-          let acc = (this._acc[w.name] = (this._acc[w.name] || 0) + 22 * inten * dt);
-          while (acc >= 1) {
-            acc -= 1;
-            const gray = 0.7 + Math.random() * 0.14;
+          st.acc += (10 + 34 * st.heat) * inten * dt;      // more smoke as heat builds
+          const h = st.heat;
+          while (st.acc >= 1) {
+            st.acc -= 1;
+            const gray = (0.74 - h * 0.34) + Math.random() * 0.1;   // darker as it heats
             this.smoke.spawn({
-              x: w.cx + (Math.random() - 0.5) * 0.3, y: 0.12, z: w.cz + (Math.random() - 0.5) * 0.3,
-              vx: (Math.random() - 0.5) * 1.4, vy: 0.5 + Math.random() * 0.9, vz: (Math.random() - 0.5) * 1.4,
-              size: 0.5, grow: 2.8 + Math.random() * 1.6, r: gray, g: gray, b: gray,
-              a: 0.10 + inten * 0.28, life: 1.7 + Math.random() * 1.5, drag: 1.1, gravity: 0.35,
+              x: w.cx + (Math.random() - 0.5) * 0.35, y: 0.12, z: w.cz + (Math.random() - 0.5) * 0.35,
+              vx: (Math.random() - 0.5) * 1.5, vy: 0.5 + Math.random() * 0.9 + h * 0.7, vz: (Math.random() - 0.5) * 1.5,
+              size: 0.5 + h * 0.5, grow: 2.8 + Math.random() * 1.6 + h * 2.2, r: gray, g: gray, b: gray,
+              a: 0.1 + inten * 0.26 + h * 0.16, life: 1.7 + Math.random() * 1.5 + h * 1.2, drag: 1.05, gravity: 0.32,
             });
           }
-          this._acc[w.name] = acc;
         }
       }
       // ---- sparks off a torn-off corner scraping the ground at speed ----

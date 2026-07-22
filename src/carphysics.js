@@ -63,7 +63,7 @@ export class Car {
     suspDamp = 1500,       // N per (m/s)  — Erik's feel default
     suspTravel = 0.35,     // max compression past rest before bottoming
     // drivetrain / tires
-    engineForce = 8000,    // N per driven wheel at full throttle
+    engineForce = 12000,   // N per driven wheel (muscle-car punch; sustains burnouts)
     brakeForce = 10000,    // N per wheel under full brake
     maxSteer = 0.55,       // rad (~31°) at the front wheels
     steerRate = 4.0,       // how fast steer angle chases input (per second)
@@ -312,7 +312,11 @@ export class Car {
 
           // grip budget (friction circle), load-based → weight transfer feeds it
           const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
-          const gripBudget = this.tireGrip * load * gripMul;
+          let gripBudget = this.tireGrip * load * gripMul;
+          // kinetic friction: a spinning tyre grips LESS than a hooked-up one, so once
+          // it breaks loose it keeps spinning on throttle alone (sustains a burnout
+          // after you let off the handbrake) — more spin, less grip
+          if (w.driven && Math.abs(w.spinRate || 0) > 4) gripBudget *= 0.45;
 
           // longitudinal: engine + brake + rolling resistance
           if (w.driven) fLong += this.throttle * this.engineForce;
@@ -341,7 +345,7 @@ export class Car {
             const excess = Math.max(0, Math.abs(driveForce) - gripBudget);   // unusable torque
             w.spinRate += Math.sign(driveForce || 1) * (excess * this.wheelRadius / this.wheelInertia) * dt;
             if (this.handbrake && !burnoutMode) w.spinRate = 0;    // drift = locked rears; burnout = let them spin
-            w.spinRate -= w.spinRate * Math.min(1, 6 * dt);        // re-hooks as grip returns
+            w.spinRate -= w.spinRate * Math.min(1, 3 * dt);        // re-hooks as grip returns (slow)
           } else {
             w.spinRate = 0;
           }
