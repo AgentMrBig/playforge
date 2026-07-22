@@ -78,7 +78,35 @@ const padDown = (gp, i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
 function padJust(gp, i) { const now = padDown(gp, i), was = pad.prev[i]; pad.prev[i] = now; return now && !was; }
 const dz = (v, d = 0.14) => (Math.abs(v) < d ? 0 : (v - Math.sign(v) * d) / (1 - d));   // deadzone
 
-/** map current key + gamepad state → car input */
+// ---- mobile touch controls: big thumb buttons, multi-touch (gas+steer together) ----
+const touch = { left: false, right: false, gas: false, rev: false, hb: false };
+function buildTouchControls() {
+  if (!("ontouchstart" in window) && !(navigator.maxTouchPoints > 0)) return;
+  const css = document.createElement("style");
+  css.textContent = `
+    .tbtn{position:fixed;z-index:35;width:76px;height:76px;border-radius:50%;
+      background:rgba(28,38,48,.55);border:2px solid rgba(127,215,255,.45);color:#cfe;
+      font:700 28px ui-monospace,monospace;display:flex;align-items:center;justify-content:center;
+      user-select:none;-webkit-user-select:none;touch-action:none}
+    .tbtn.on{background:rgba(80,140,190,.8)}
+    #tL{left:14px;bottom:92px} #tR{left:106px;bottom:92px}
+    #tGas{right:14px;bottom:160px} #tRev{right:14px;bottom:64px} #tHb{right:108px;bottom:112px}`;
+  document.head.appendChild(css);
+  const mk = (id, txt, key) => {
+    const b = document.createElement("div");
+    b.id = id; b.className = "tbtn"; b.textContent = txt;
+    document.body.appendChild(b);
+    const on = (e) => { e.preventDefault(); touch[key] = true; b.classList.add("on"); };
+    const off = (e) => { if (e) e.preventDefault(); touch[key] = false; b.classList.remove("on"); };
+    b.addEventListener("touchstart", on, { passive: false });
+    b.addEventListener("touchend", off);
+    b.addEventListener("touchcancel", off);
+  };
+  mk("tL", "◀", "left"); mk("tR", "▶", "right");
+  mk("tGas", "▲", "gas"); mk("tRev", "▼", "rev"); mk("tHb", "✋", "hb");
+}
+
+/** map current key + gamepad + touch state → car input */
 function readInput() {
   if (cam.mode === "free") return { throttle: 0, steer: 0, brake: 0, handbrake: false };  // WASD flies the cam
   const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
@@ -94,6 +122,10 @@ function readInput() {
     if (Math.abs(gpSteer) > 0.02) steer = gpSteer;
     handbrake = handbrake || padDown(gp, 0);                                         // A = handbrake/burnout
   }
+  // touch buttons take over when pressed (phone play)
+  if (touch.gas || touch.rev) throttle = (touch.gas ? 1 : 0) - (touch.rev ? 1 : 0);
+  if (touch.left || touch.right) steer = (touch.left ? 1 : 0) - (touch.right ? 1 : 0);
+  handbrake = handbrake || touch.hb;
   return { throttle, steer, brake: 0, handbrake };
 }
 
@@ -233,6 +265,7 @@ async function main() {
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
   setupCameraInput(renderer.domElement);
+  buildTouchControls();                     // on-screen buttons on touch devices
 
   // audio needs a user gesture to start (browser autoplay policy)
   const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); };
@@ -567,7 +600,11 @@ function buildHUD() {
     #hud .val{color:#ffd479}
     #hud canvas{margin-top:8px;border:1px solid #2c3a48;border-radius:4px;background:#0a0d10}
     #hud .hint{margin-top:8px;color:#6f8496;font-size:11px}
-    #hud .stamp{color:#5a6b7a;font-size:10px;margin-top:6px}`;
+    #hud .stamp{color:#5a6b7a;font-size:10px;margin-top:6px}
+    @media (max-width: 760px) {
+      #hud{width:148px;padding:6px 8px;font-size:10px;line-height:1.35}
+      #hud input,#hud label,#hud canvas,#hud .hint{display:none}
+    }`;
   document.head.appendChild(style);
 
   hud = document.createElement("div");

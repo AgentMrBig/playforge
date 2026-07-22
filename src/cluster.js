@@ -13,6 +13,11 @@ export class Cluster {
     c.width = 460; c.height = 210;
     c.style.cssText = "position:fixed;bottom:12px;left:50%;transform:translateX(-50%);" +
       "pointer-events:none;z-index:30;filter:drop-shadow(0 3px 8px rgba(0,0,0,.6));";
+    if (innerWidth < 760) {                 // phone: smaller cluster, clear of thumb buttons
+      c.style.transformOrigin = "50% 100%";
+      c.style.transform = "translateX(-50%) scale(0.58)";
+      c.style.bottom = "2px";
+    }
     document.body.appendChild(c);
     this.canvas = c; this.ctx = c.getContext("2d");
     this.rpm = 0; this.kmh = 0;
