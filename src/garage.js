@@ -173,9 +173,9 @@ async function main() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x151a20);
-  scene.fog = new THREE.Fog(0x151a20, 60, 180);
+  scene.fog = new THREE.Fog(0x151a20, 120, 600);   // see across the bigger park
 
-  camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 500);
+  camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1000);
   camera.position.set(0, 6, -12);
 
   scene.add(new THREE.HemisphereLight(0x9db4c8, 0x2a2620, 0.8));
@@ -195,7 +195,7 @@ async function main() {
   eventQueue = new RAPIER.EventQueue(true);
 
   // ---- ground: visual grid + Rapier fixed collider --------------------
-  const groundSize = 200;
+  const groundSize = 600;   // 3× (Erik)
   const groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(groundSize, groundSize),
     new THREE.MeshStandardMaterial({ color: 0x33383f, roughness: 0.95 })
@@ -203,7 +203,7 @@ async function main() {
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
-  const grid = new THREE.GridHelper(groundSize, 100, 0x556070, 0x2c333b);
+  const grid = new THREE.GridHelper(groundSize, 150, 0x556070, 0x2c333b);
   grid.position.y = 0.01;
   scene.add(grid);
 
@@ -213,13 +213,31 @@ async function main() {
     groundBody
   );
 
-  // ---- a couple of ramps / kerbs to load the suspension (Stage 2+) ----
-  addRamp([0, 0, 22], 8, 1.6, 6, -0.28);     // gentle launch ramp ahead
-  addRamp([-14, 0, 6], 5, 1.0, 5, 0.35);     // side kicker
-  addKerb([10, 0, 4], 12, 0.18, 0.8);        // low kerb strip to test small bumps
-  addWall([9, 0, 34], 12, 3, 1);             // crash walls (drive into these to dent)
-  addWall([-16, 0, -2], 1, 3, 16);
-  addWall([0, 0, -20], 8, 3, 1);
+  // ---- STUNT PARK (Erik: 3× bigger, better obstacles + jumps) --------------
+  // near spawn: suspension testers
+  addRamp([-14, 0, 6], 5, 1.0, 5, 0.35);        // side kicker
+  addKerb([10, 0, 4], 12, 0.18, 0.8);           // rumble strip
+  // drag strip of jumps down +Z: medium → BIG AIR → table-top
+  addRamp([0, 0, 40], 10, 2.0, 8, -0.3);
+  addRamp([0, 0, 95], 12, 4.0, 14, -0.33);      // the big one — send it
+  addRamp([0, 0, 150], 10, 2.4, 9, -0.3);       // table-top: up…
+  addWall([0, 0, 160], 10, 2.4, 8);             // …flat deck (land or clear it)…
+  addRamp([0, 0, 170], 10, 2.4, 9, 0.3);        // …down
+  // kicker field (+X): staggered launches at angles
+  addRamp([35, 0, 20], 6, 1.2, 5, -0.3);
+  addRamp([50, 0, 38], 6, 1.6, 5, -0.32);
+  addRamp([64, 0, 22], 6, 1.2, 5, 0.3);
+  addRamp([44, 0, 60], 7, 2.2, 7, -0.31);
+  // elevated platform (+X far): ramp up, jump OFF the ledge
+  addWall([95, 0, 65], 20, 3.0, 20);
+  addRamp([95, 0, 48], 10, 3.0, 14, -0.215);
+  // slalom pillars (−X)
+  for (let i = 0; i < 7; i++) addWall([-45 + (i % 2 ? 5 : -5), 0, -20 + i * 15], 1.2, 2.6, 1.2);
+  // crash zone (−Z): walls + an alley to wreck through
+  addWall([0, 0, -40], 10, 3, 1);
+  addWall([-12, 0, -55], 1, 3, 16);
+  addWall([12, 0, -55], 1, 3, 16);
+  addWall([0, 0, -72], 14, 3.5, 1.2);
 
   // ---- the car --------------------------------------------------------
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
