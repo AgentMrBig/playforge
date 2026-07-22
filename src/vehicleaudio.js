@@ -65,6 +65,15 @@ export class VehicleAudio {
     // suspension clunk on hard bumps (kerbs, landings, potholes)
     if (car.bumpPulse > 0) { this._thud(Math.min(1, car.bumpPulse)); car.bumpPulse = 0; }
 
+    // exhaust backfire: lift off suddenly at high revs → 1-3 sharp pops
+    const th = Math.max(0, car.throttle || 0);
+    if ((this._prevTh || 0) > 0.65 && th < 0.15 && this.engine && this.engine.rpm > this.engine.redline * 0.45) {
+      const pops = 1 + Math.floor(Math.random() * 3);
+      let t = 0;
+      for (let i = 0; i < pops; i++) { this._pop(t); t += 0.07 + Math.random() * 0.18; }
+    }
+    this._prevTh = th;
+
     // tyre squeal: volume from slide×force, pitch from slide speed (Erik: force-driven)
     const sc = Math.max(0, Math.min(1, car.screech || 0));
     const pitch = Math.max(0, Math.min(1, car.screechPitch || 0));
@@ -73,6 +82,21 @@ export class VehicleAudio {
     this.screechBp.frequency.setTargetAtTime(1400 + pitch * 2600, now, 0.05);       // higher as it slides faster
     this.screechHp.frequency.setTargetAtTime(700 + pitch * 900, now, 0.06);
     this.screechBp.Q.setTargetAtTime(5 + pitch * 4, now, 0.06);                      // tighter/whinier at speed
+  }
+
+  /** one-shot exhaust POP: a sharp lowpassed noise bang, randomized pitch/volume */
+  _pop(delay = 0) {
+    const ctx = this.ctx, t0 = ctx.currentTime + delay;
+    const n = ctx.createBufferSource();
+    n.buffer = this.screechSrc.buffer;             // reuse the noise buffer
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 450 + Math.random() * 900;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.exponentialRampToValueAtTime(0.45 + Math.random() * 0.35, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.07 + Math.random() * 0.06);
+    n.connect(lp); lp.connect(g); g.connect(ctx.destination);
+    n.start(t0, Math.random() * 1.5); n.stop(t0 + 0.2);
   }
 
   /** one-shot procedural suspension clunk: low sine thump + a metallic noise tick */
