@@ -57,6 +57,11 @@ function physicsStep() {
     } catch (err) { /* no manifold → deform falls back to the force direction */ }
     car.impact(point, mag, dir);
     if (fx) fx.onImpact(point, mag);      // spark burst on hard hits
+    if (mag > 400000) cam.shakeAmt = Math.max(cam.shakeAmt || 0, Math.min(1, mag / 1800000));  // crash shake
+    if (mag > 2200000 && !replay.active && replay.cooldown <= 0) {
+      replay.pending = 1.3;               // monster crash → slow-mo crash cam after it plays out
+      replay.cooldown = 25;
+    }
   });
 }
 
@@ -184,6 +189,7 @@ async function main() {
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
     world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
+    replay, recordFrame, startReplay, stopReplay, updateReplay,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -218,6 +224,7 @@ async function main() {
     if (e.code === "KeyP") car.repair();    // un-dent the body
     if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
+    if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -285,6 +292,82 @@ function addKerb([x, , z], l, h, d) {
 }
 
 // ---- main loop: fixed-step accumulator + render interpolation ----------
+// ---------------------------------------------------------- replay / crash cam ----
+// Ring buffer records the car's pose + wheel state at 60Hz (last ~8s). A monster
+// impact auto-triggers a slow-mo cinematic replay of the crash (orbiting camera,
+// lerped playback so slow-mo stays butter smooth). [V] replays/skips manually.
+const REPLAY_LEN = 8 * 60, RFLOATS = 16;
+const replay = {
+  data: new Float32Array(REPLAY_LEN * RFLOATS), n: 0, w: 0,
+  active: false, ph: 0, startIdx: 0, len: 0, speed: 0.3,
+  pending: 0, cooldown: 0, orbit: 0,
+};
+const _rp1 = new THREE.Vector3(), _rp2 = new THREE.Vector3();
+const _rq1 = new THREE.Quaternion(), _rq2 = new THREE.Quaternion();
+
+function recordFrame() {
+  const i = replay.w * RFLOATS, d = replay.data;
+  const p = car.currPos, q = car.currQuat;
+  d[i] = p.x; d[i + 1] = p.y; d[i + 2] = p.z;
+  d[i + 3] = q.x; d[i + 4] = q.y; d[i + 5] = q.z; d[i + 6] = q.w;
+  for (let k = 0; k < 4; k++) { const w2 = car.wheels[k]; d[i + 7 + k] = w2.spin; d[i + 11 + k] = w2.dist; }
+  d[i + 15] = car.steer;
+  replay.w = (replay.w + 1) % REPLAY_LEN;
+  if (replay.n < REPLAY_LEN) replay.n++;
+}
+
+function startReplay() {
+  if (replay.active || replay.n < 90) return;
+  replay.active = true;
+  replay.len = Math.min(replay.n, 6 * 60);                       // last ~6 seconds
+  replay.startIdx = (replay.w - replay.len + REPLAY_LEN) % REPLAY_LEN;
+  replay.ph = 0;
+  replay.orbit = cam.yaw;
+  showReplayUI(true);
+}
+function stopReplay() { replay.active = false; showReplayUI(false); }
+
+function showReplayUI(on) {
+  let el = document.getElementById("replayui");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "replayui";
+    el.style.cssText = "position:fixed;top:18px;left:50%;transform:translateX(-50%);color:#ff5533;" +
+      "font:700 20px ui-monospace,monospace;letter-spacing:3px;z-index:40;pointer-events:none;" +
+      "text-shadow:0 2px 8px rgba(0,0,0,.7);";
+    el.textContent = "◉ REPLAY · SLOW-MO · [V] skip";
+    document.body.appendChild(el);
+  }
+  el.style.display = on ? "block" : "none";
+}
+
+function readReplayFrame(f, pos, quat) {
+  const idx = ((replay.startIdx + f) % REPLAY_LEN) * RFLOATS, d = replay.data;
+  pos.set(d[idx], d[idx + 1], d[idx + 2]);
+  quat.set(d[idx + 3], d[idx + 4], d[idx + 5], d[idx + 6]);
+  return idx;
+}
+
+function updateReplay(dt) {
+  replay.ph += dt * replay.speed * 60;
+  if (replay.ph >= replay.len - 1.01) { stopReplay(); return; }
+  const f = Math.floor(replay.ph), frac = replay.ph - f;
+  const idx = readReplayFrame(f, _rp1, _rq1);
+  readReplayFrame(f + 1, _rp2, _rq2);
+  car.mesh.position.lerpVectors(_rp1, _rp2, frac);               // lerped = smooth slow-mo
+  car.mesh.quaternion.copy(_rq1).slerp(_rq2, frac);
+  const d = replay.data;
+  for (let k = 0; k < 4; k++) { const w2 = car.wheels[k]; if (w2.detached) continue; w2.spin = d[idx + 7 + k]; w2.dist = d[idx + 11 + k]; }
+  car.steer = d[idx + 15];
+  car._placeWheels();
+  // cinematic slow orbit around the wreck
+  replay.orbit += dt * 0.22;
+  const p = car.mesh.position;
+  _cdes.set(p.x + Math.sin(replay.orbit) * 8.5, p.y + 3.1, p.z + Math.cos(replay.orbit) * 8.5);
+  camera.position.lerp(_cdes, 1 - Math.pow(0.002, dt));
+  camera.lookAt(p.x, p.y + 0.7, p.z);
+}
+
 function frame() {
   if (window.__garage) window.__garage.frames++;
   const now = performance.now() / 1000;
@@ -297,6 +380,16 @@ function frame() {
   if (ms > ft.max2s) { ft.max2s = ms; ft.max2sT = now; }
   if (now - ft.max2sT > 2) { ft.max2s = ms; ft.max2sT = now; }   // decay the 2s peak
 
+  replay.cooldown = Math.max(0, replay.cooldown - dt);
+  if (replay.pending > 0) { replay.pending -= dt; if (replay.pending <= 0) startReplay(); }
+  if (replay.active) {                    // physics + input freeze; pure playback
+    updateReplay(dt);
+    updateHUD();
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+    return;
+  }
+
   if (dt > 0.25) dt = 0.25;             // clamp after a stall so we don't spiral
   acc += dt;
 
@@ -308,6 +401,7 @@ function frame() {
     car.fixedUpdate(FIXED);     // suspension + tire forces BEFORE the solve
     physicsStep();
     car.snapshotCurr();
+    recordFrame();              // 60Hz ring buffer for the replay / crash cam
     acc -= FIXED;
     steps++;
   }
@@ -407,6 +501,13 @@ function updateCamera(dt) {
   camera.position.lerp(_cdes, 1 - Math.pow(0.0016, dt));
   cam.look.lerp(_clook, 1 - Math.pow(0.0022, dt));
   camera.lookAt(cam.look);
+  // impact camera shake — decays fast (crashes feel like they HIT)
+  if ((cam.shakeAmt || 0) > 0.01) {
+    camera.position.x += (Math.random() - 0.5) * cam.shakeAmt * 0.55;
+    camera.position.y += (Math.random() - 0.5) * cam.shakeAmt * 0.4;
+    camera.position.z += (Math.random() - 0.5) * cam.shakeAmt * 0.55;
+    cam.shakeAmt *= Math.pow(0.02, dt);
+  }
 }
 
 function updateFreeCam(dt) {
@@ -479,7 +580,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake/burnout · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
+    <div class="hint">WASD drive · Space handbrake/burnout · [V] slow-mo replay · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
     🎮 LS steer · RT gas · LT reverse · A handbrake · RS camera · Y reset · B repair · X clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
