@@ -342,7 +342,13 @@ export class Car {
           // limited above; this is the surplus torque winding the wheel. -----------
           if (w.driven) {
             const driveForce = this.throttle * this.engineForce;
-            const excess = Math.max(0, Math.abs(driveForce) - gripBudget);   // unusable torque
+            // Flooring AGAINST the direction of travel: the tyre fights the ground and
+            // breaks loose immediately — the spin you get dropping it into reverse at
+            // speed. Now symmetric: flooring W while rolling backwards spins them too,
+            // and the kinetic sustain carries the burnout through the direction change.
+            const opposing = Math.sign(driveForce) * vLong < -1.5 && Math.abs(driveForce) > gripBudget * 0.45;
+            const excess = opposing ? Math.abs(driveForce) * 0.9
+              : Math.max(0, Math.abs(driveForce) - gripBudget);             // unusable torque
             w.spinRate += Math.sign(driveForce || 1) * (excess * this.wheelRadius / this.wheelInertia) * dt;
             if (this.handbrake && !burnoutMode) w.spinRate = 0;    // drift = locked rears; burnout = let them spin
             w.spinRate -= w.spinRate * Math.min(1, 3 * dt);        // re-hooks as grip returns (slow)
