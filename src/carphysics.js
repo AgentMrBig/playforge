@@ -28,9 +28,12 @@ const _com = new THREE.Vector3();      // world center of mass
 const _rel = new THREE.Vector3();      // contact point - com
 const _vel = new THREE.Vector3();      // velocity at contact point
 const _cross = new THREE.Vector3();
-const _imp = new THREE.Vector3();      // impulse to apply
+const _imp = new THREE.Vector3();      // total force to apply at contact
 const _tpos = new THREE.Vector3();     // chassis translation
+const _fwd = new THREE.Vector3();      // wheel forward (world)
+const _right = new THREE.Vector3();    // wheel right (world)
 const _q = new THREE.Quaternion();
+const _steerQ = new THREE.Quaternion();
 export class Car {
   constructor(world, RAPIER, {
     pos = [0, 3, 0],
@@ -46,6 +49,14 @@ export class Car {
     suspStiff = 30000,     // N/m  — ~0.2m sag under 300kg/corner at g=20
     suspDamp = 4000,       // N per (m/s)
     suspTravel = 0.35,     // max compression past rest before bottoming
+    // drivetrain / tires
+    engineForce = 8000,    // N per driven wheel at full throttle
+    brakeForce = 10000,    // N per wheel under full brake
+    maxSteer = 0.55,       // rad (~31°) at the front wheels
+    steerRate = 4.0,       // how fast steer angle chases input (per second)
+    tireGrip = 1.7,        // lateral grip as a multiple of vertical load
+    rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
+    rollResist = 0.015,    // rolling resistance fraction of load
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -56,18 +67,48 @@ export class Car {
     this.suspStiff = suspStiff;
     this.suspDamp = suspDamp;
     this.suspTravel = suspTravel;
+    this.engineForce = engineForce;
+    this.brakeForce = brakeForce;
+    this.maxSteer = maxSteer;
+    this.steerRate = steerRate;
+    this.tireGrip = tireGrip;
+    this.rearGripMul = rearGripMul;
+    this.rollResist = rollResist;
+    this.mass = mass;
+    // driver input (set each frame via setInput)
+    this.throttle = 0;      // -1 (reverse) .. 1 (forward)
+    this.brakeInput = 0;    // 0..1
+    this.steerTarget = 0;   // -1..1
+    this.steer = 0;         // current smoothed steer angle (rad)
+    this.handbrake = false;
 
     // ---- chassis: plain dynamic rigid body ------------------------------
+    const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
+
+    // Center of mass sits LOW (near axle height), like a real car — this is what
+    // stops a hard corner from tipping the car onto its roof. We set explicit mass
+    // properties instead of the uniform-density default (which puts CoM at box
+    // center). Inertia = solid-box tensor about that CoM.
+    const comDrop = Math.min(0.45, hy * 0.9);        // lower CoM this far below center
+    const Ixx = (mass / 3) * (hy * hy + hz * hz);
+    const Iyy = (mass / 3) * (hx * hx + hz * hz);
+    const Izz = (mass / 3) * (hx * hx + hy * hy);
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(pos[0], pos[1], pos[2])
       .setLinearDamping(linDamp)
       .setAngularDamping(angDamp)
-      .setCanSleep(false);              // never sleep — we drive it every step
+      .setCanSleep(false)               // never sleep — we drive it every step
+      .setAdditionalMassProperties(
+        mass,
+        { x: 0, y: -comDrop, z: 0 },    // low center of mass
+        { x: Ixx, y: Iyy, z: Izz },
+        { x: 0, y: 0, z: 0, w: 1 }
+      );
     this.body = world.createRigidBody(bodyDesc);
 
-    const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
+    // collider carries the shape only (density 0) — mass comes from the props above
     const colDesc = RAPIER.ColliderDesc.cuboid(hx, hy, hz)
-      .setMass(mass)                    // real mass → Rapier derives the inertia tensor
+      .setDensity(0)
       .setRestitution(restitution)
       .setFriction(friction);
     this.collider = world.createCollider(colDesc, this.body);
@@ -93,10 +134,10 @@ export class Car {
     // mount slightly inboard of the shell and near its floor; +Z forward.
     const mx = hx - 0.15, mz = hz - 0.55, my = -hy + 0.15;
     this.wheels = [
-      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), grounded: false, dist: suspRest, comp: 0 },
-      { name: "FR", mount: new THREE.Vector3(mx, my, mz), grounded: false, dist: suspRest, comp: 0 },
-      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), grounded: false, dist: suspRest, comp: 0 },
-      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), grounded: false, dist: suspRest, comp: 0 },
+      { name: "FL", mount: new THREE.Vector3(-mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0 },
+      { name: "FR", mount: new THREE.Vector3(mx, my, mz), front: true, driven: false, grounded: false, dist: suspRest, comp: 0, spin: 0 },
+      { name: "RL", mount: new THREE.Vector3(-mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0 },
+      { name: "RR", mount: new THREE.Vector3(mx, my, -mz), front: false, driven: true, grounded: false, dist: suspRest, comp: 0, spin: 0 },
     ];
     const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.25, 16);
     wheelGeo.rotateZ(Math.PI / 2);   // roll about local X
@@ -134,11 +175,18 @@ export class Car {
     const body = this.body;
     body.resetForces(false);       // clear last step's suspension force + its torque
     body.resetTorques(false);
+
+    // smooth the steer angle toward the input target (no snap)
+    const steerGoal = this.steerTarget * this.maxSteer;
+    this.steer += (steerGoal - this.steer) * Math.min(1, this.steerRate * dt);
+
     const t = body.translation();
     const r = body.rotation();
     _q.set(r.x, r.y, r.z, r.w);
     _up.set(0, 1, 0).applyQuaternion(_q);
     _down.set(0, -1, 0).applyQuaternion(_q);
+    _steerQ.setFromAxisAngle(_up, this.steer);   // rotate front wheels about chassis-up
+    const massPerWheel = this.mass * 0.25;
 
     // world center of mass + angular velocity for velocity-at-point
     const wc = body.worldCom();  _com.set(wc.x, wc.y, wc.z);
@@ -165,12 +213,39 @@ export class Car {
         const springVel = _vel.dot(_up);                        // + = extending
 
         // spring - damper, along chassis up; clamp >= 0 (no catapult/suction)
-        let force = this.suspStiff * w.comp - this.suspDamp * springVel;
-        if (force < 0) force = 0;
-        w.force = force;
+        let load = this.suspStiff * w.comp - this.suspDamp * springVel;
+        if (load < 0) load = 0;
+        w.force = load;
 
-        // integrated force (not a discrete impulse) → gravity/spring balance cleanly
-        _imp.copy(_up).multiplyScalar(force);
+        // ---- tire directions: chassis fwd/right, front wheels steered ----
+        _fwd.set(0, 0, 1).applyQuaternion(_q);
+        _right.set(1, 0, 0).applyQuaternion(_q);
+        if (w.front) { _fwd.applyQuaternion(_steerQ); _right.applyQuaternion(_steerQ); }
+        const vLong = _vel.dot(_fwd);
+        const vLat = _vel.dot(_right);
+        w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
+
+        // ---- longitudinal: engine + brake + rolling resistance ----
+        let fLong = 0;
+        if (w.driven) fLong += this.throttle * this.engineForce;
+        // braking / handbrake oppose current roll direction
+        const brake = this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
+        if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
+        fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
+
+        // ---- lateral: cancel side-slip, capped by grip circle (breakaway) ----
+        let gripMax = this.tireGrip * load * (w.front ? 1 : this.rearGripMul);
+        if (this.handbrake && !w.front) gripMax *= 0.4;   // loosen rear on handbrake
+        let fLat = -(vLat / dt) * massPerWheel;           // force to null side-slip this step
+        if (fLat > gripMax) fLat = gripMax;
+        else if (fLat < -gripMax) fLat = -gripMax;
+
+        // ---- combine: suspension (up) + tire (fwd + right), one force ----
+        _imp.set(
+          _up.x * load + _fwd.x * fLong + _right.x * fLat,
+          _up.y * load + _fwd.y * fLong + _right.y * fLat,
+          _up.z * load + _fwd.z * fLong + _right.z * fLat
+        );
         body.addForceAtPoint(_imp, { x: _wpos.x + _down.x * toi, y: _wpos.y + _down.y * toi, z: _wpos.z + _down.z * toi }, true);
       } else {
         w.grounded = false;
@@ -181,11 +256,20 @@ export class Car {
     this._placeWheels();
   }
 
-  /** position wheel visuals along their travel (local space, no jitter) */
+  /** position wheel visuals along their travel + steer + roll (local space) */
   _placeWheels() {
     for (const w of this.wheels) {
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
+      w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
     }
+  }
+
+  /** driver input for this frame */
+  setInput({ throttle = 0, steer = 0, brake = 0, handbrake = false }) {
+    this.throttle = throttle;
+    this.steerTarget = steer;
+    this.brakeInput = brake;
+    this.handbrake = handbrake;
   }
 
   /** call at the START of each fixed step: last curr becomes prev */

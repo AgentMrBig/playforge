@@ -18,6 +18,19 @@ const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 let world, car, scene, camera, renderer;
 let last = performance.now() / 1000;
 let acc = 0;
+const keys = {};
+
+/** map current key state → car input */
+function readInput() {
+  const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
+  const left = keys.KeyA || keys.ArrowLeft, right = keys.KeyD || keys.ArrowRight;
+  return {
+    throttle: (up ? 1 : 0) - (down ? 1 : 0),   // W/↑ forward, S/↓ reverse
+    steer: (left ? 1 : 0) - (right ? 1 : 0),    // A/D
+    brake: 0,
+    handbrake: !!keys.Space,
+  };
+}
 
 // frametime + substep telemetry (the measurable "no jerk" evidence)
 const ft = { buf: new Float32Array(120), i: 0, sub: 0, max2s: 0, max2sT: 0 };
@@ -92,15 +105,27 @@ async function main() {
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); world.step(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
+    // headless driving: apply an input for n steps, report motion
+    drive(input, n = 60) {
+      car.setInput(input);
+      for (let i = 0; i < n; i++) { car.fixedUpdate(FIXED); world.step(); }
+      car.setInput({});
+      const t = car.body.translation(), v = car.body.linvel(), a = car.body.angvel();
+      return { x: +t.x.toFixed(2), y: +t.y.toFixed(2), z: +t.z.toFixed(2),
+        speed: +car.speedKmh.toFixed(1), yawRate: +a.y.toFixed(3), heading: +Math.atan2(v.x, v.z).toFixed(2) };
+    },
     state() { const t = car.body.translation(), v = car.body.linvel();
       return { y: t.y, x: t.x, z: t.z, speed: Math.hypot(v.x, v.y, v.z) * 3.6, frames: window.__garage.frames }; },
   };
 
   addEventListener("resize", onResize);
   addEventListener("keydown", (e) => {
+    keys[e.code] = true;
     if (e.code === "KeyR") car.reset();
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
+  addEventListener("keyup", (e) => { keys[e.code] = false; });
 
   requestAnimationFrame(frame);
 }
@@ -155,10 +180,12 @@ function frame() {
   if (dt > 0.25) dt = 0.25;             // clamp after a stall so we don't spiral
   acc += dt;
 
+  car.setInput(readInput());
+
   let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
     car.snapshotPrev();
-    car.fixedUpdate(FIXED);     // suspension forces BEFORE the solve
+    car.fixedUpdate(FIXED);     // suspension + tire forces BEFORE the solve
     world.step();
     car.snapshotCurr();
     acc -= FIXED;
@@ -228,17 +255,23 @@ function buildHUD() {
     <input id="s-d" type="range" min="0" max="12000" step="100" value="4000">
     <label>rest length <span class="val" id="v-rest">0.50</span></label>
     <input id="s-rest" type="range" min="0.2" max="0.9" step="0.01" value="0.50">
-    <label>angular damping <span class="val" id="v-ang">0.40</span></label>
-    <input id="s-ang" type="range" min="0" max="4" step="0.01" value="0.40">
+    <label>engine force <span class="val" id="v-eng">8000</span></label>
+    <input id="s-eng" type="range" min="2000" max="20000" step="500" value="8000">
+    <label>tire grip <span class="val" id="v-grip">1.70</span></label>
+    <input id="s-grip" type="range" min="0.5" max="3" step="0.05" value="1.70">
+    <label>rear grip mul <span class="val" id="v-rg">1.00</span></label>
+    <input id="s-rg" type="range" min="0.3" max="1.2" step="0.02" value="1.00">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">[R] drop &nbsp; [T] hard drop (12m)</div>
+    <div class="hint">WASD drive · Space handbrake · [R] drop · [T] hard drop</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 
   bindSlider("s-k", "v-k", (v) => { car.suspStiff = v; }, 0);
   bindSlider("s-d", "v-d", (v) => { car.suspDamp = v; }, 0);
   bindSlider("s-rest", "v-rest", (v) => { car.suspRest = v; });
-  bindSlider("s-ang", "v-ang", (v) => car.setAngularDamping(v));
+  bindSlider("s-eng", "v-eng", (v) => { car.engineForce = v; }, 0);
+  bindSlider("s-grip", "v-grip", (v) => { car.tireGrip = v; });
+  bindSlider("s-rg", "v-rg", (v) => { car.rearGripMul = v; });
 
   ftCanvas = document.getElementById("ftg");
   ftCtx = ftCanvas.getContext("2d");
