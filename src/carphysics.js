@@ -114,7 +114,8 @@ export class Car {
     this.wheelDetachForce = wheelDetachForce;
     this.chunkForce = chunkForce;
     this.debris = [];          // loose pieces (knocked-off wheels + body chunks)
-    this.screech = 0;          // tyre-squeal signal (0..1) for audio
+    this.screech = 0;          // tyre-squeal volume (0..1) — slide × force
+    this.screechPitch = 0;     // tyre-squeal pitch (0..1) — slide speed / force
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -296,6 +297,7 @@ export class Car {
           if (w.front) { _fwd.applyQuaternion(_steerQ); _right.applyQuaternion(_steerQ); }
           const vLong = _vel.dot(_fwd);
           const vLat = _vel.dot(_right);
+          w.vLat = vLat;                                // lateral slide speed (for squeal pitch)
           w.spin += (vLong / this.wheelRadius) * dt;    // roll for the visual
 
           // grip budget (friction circle), load-based → weight transfer feeds it
@@ -346,17 +348,27 @@ export class Car {
     }
     this._applyAntiRoll(this.antiRoll);
 
-    // tyre-squeal signal for audio: lateral slide beyond grip + burnout + handbrake
-    let slide = 0;
+    // tyre-squeal: volume from slide × tyre load (force), pitch from slide speed —
+    // a lightly-loaded gentle slide is quiet + low; a hard, fast, heavy slide is
+    // loud + high (Erik: squeal relational to the forces on the wheels)
+    const nomLoad = this.mass * 5;              // ~vertical load per tyre at rest (g=20)
+    let amt = 0, slideSpeed = 0;
     for (const w of this.wheels) {
       if (!w.grounded || w.detached) continue;
-      slide = Math.max(slide, (Math.abs(w.slip) - 0.13) / 0.45);
+      const sliding = Math.min(1, Math.max(0, (Math.abs(w.slip) - 0.13) / 0.4));
+      if (sliding <= 0) continue;
+      const loadN = Math.min(1.4, (w.force || 0) / nomLoad);     // vertical force on this tyre
+      amt = Math.max(amt, sliding * Math.min(1, 0.3 + loadN));
+      slideSpeed = Math.max(slideSpeed, Math.abs(w.vLat || 0) * sliding);
     }
     const spdK = this.speedKmh;
     const burn = (this.throttle > 0.55 && spdK < 28) ? (1 - spdK / 28) * this.throttle : 0;
-    const hbSlide = (this.handbrake && spdK > 6) ? 0.75 : 0;
-    const target = Math.max(0, Math.min(1, Math.max(slide, burn, hbSlide)));
-    this.screech += (target - this.screech) * Math.min(1, 9 * dt);
+    if (burn > amt) { amt = burn; slideSpeed = Math.max(slideSpeed, burn * 11); }
+    if (this.handbrake && spdK > 6) amt = Math.max(amt, 0.8);
+    const volT = Math.max(0, Math.min(1, amt));
+    const pitchT = Math.min(1, slideSpeed / 12);               // ~0 slow, ~1 at 12 m/s slide
+    this.screech += (volT - this.screech) * Math.min(1, 9 * dt);
+    this.screechPitch += (pitchT - this.screechPitch) * Math.min(1, 9 * dt);
 
     this._placeWheels();
   }

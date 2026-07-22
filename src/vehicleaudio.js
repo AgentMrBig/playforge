@@ -61,11 +61,14 @@ export class VehicleAudio {
     b.handbrake = !!car.handbrake;
     this.engine.update(dt, { entity: { components: [b] } });
 
-    // tyre squeal from the car's real slip signal
+    // tyre squeal: volume from slide×force, pitch from slide speed (Erik: force-driven)
     const sc = Math.max(0, Math.min(1, car.screech || 0));
+    const pitch = Math.max(0, Math.min(1, car.screechPitch || 0));
     const now = this.ctx.currentTime;
-    this.screechGain.gain.setTargetAtTime(sc * 0.35, now, 0.04);
-    this.screechBp.frequency.setTargetAtTime(1500 + sc * 1400, now, 0.06);
+    this.screechGain.gain.setTargetAtTime(sc * (0.22 + 0.4 * pitch), now, 0.04);   // louder under more force
+    this.screechBp.frequency.setTargetAtTime(1400 + pitch * 2600, now, 0.05);       // higher as it slides faster
+    this.screechHp.frequency.setTargetAtTime(700 + pitch * 900, now, 0.06);
+    this.screechBp.Q.setTargetAtTime(5 + pitch * 4, now, 0.06);                      // tighter/whinier at speed
   }
 
   get rpm() { return this.engine ? this.engine.rpm : 0; }
