@@ -60,17 +60,51 @@ function physicsStep() {
   });
 }
 
-/** map current key state → car input */
+// ---- Xbox / gamepad (standard mapping): LS steer, RT gas, LT reverse, A handbrake,
+// Y reset, B repair, X clear skids, RS orbits the camera. Analog wins when used. ----
+const pad = { prev: {} };
+function pollPad() {
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const gp of gps) if (gp && gp.connected) return gp;
+  return null;
+}
+const padDown = (gp, i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+function padJust(gp, i) { const now = padDown(gp, i), was = pad.prev[i]; pad.prev[i] = now; return now && !was; }
+const dz = (v, d = 0.14) => (Math.abs(v) < d ? 0 : (v - Math.sign(v) * d) / (1 - d));   // deadzone
+
+/** map current key + gamepad state → car input */
 function readInput() {
   if (cam.mode === "free") return { throttle: 0, steer: 0, brake: 0, handbrake: false };  // WASD flies the cam
   const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
   const left = keys.KeyA || keys.ArrowLeft, right = keys.KeyD || keys.ArrowRight;
-  return {
-    throttle: (up ? 1 : 0) - (down ? 1 : 0),   // W/↑ forward, S/↓ reverse
-    steer: (left ? 1 : 0) - (right ? 1 : 0),    // A/D
-    brake: 0,
-    handbrake: !!keys.Space,
-  };
+  let throttle = (up ? 1 : 0) - (down ? 1 : 0);   // W/↑ forward, S/↓ reverse
+  let steer = (left ? 1 : 0) - (right ? 1 : 0);   // A/D
+  let handbrake = !!keys.Space;
+  const gp = pollPad();
+  if (gp) {
+    const gpThrottle = (gp.buttons[7]?.value || 0) - (gp.buttons[6]?.value || 0);   // RT − LT
+    const gpSteer = -dz(gp.axes[0] || 0);                                            // stick left = steer left
+    if (Math.abs(gpThrottle) > 0.02) throttle = gpThrottle;
+    if (Math.abs(gpSteer) > 0.02) steer = gpSteer;
+    handbrake = handbrake || padDown(gp, 0);                                         // A = handbrake/burnout
+  }
+  return { throttle, steer, brake: 0, handbrake };
+}
+
+/** pad one-shots + right-stick camera orbit — call each frame */
+function handlePadExtras(dt) {
+  const gp = pollPad();
+  cam.stick = false;
+  if (!gp) return;
+  if (padJust(gp, 3)) car.reset();     // Y
+  if (padJust(gp, 1)) car.repair();    // B
+  if (padJust(gp, 2)) skid.clear();    // X
+  const rx = dz(gp.axes[2] || 0), ry = dz(gp.axes[3] || 0);
+  if (cam.mode === "chase" && (rx || ry)) {
+    cam.stick = true;                  // suppress auto-swing while aiming the stick
+    cam.yaw -= rx * 2.6 * dt;
+    cam.pitch = Math.max(-0.25, Math.min(1.25, cam.pitch + ry * 1.7 * dt));
+  }
 }
 
 // frametime + substep telemetry (the measurable "no jerk" evidence)
@@ -280,6 +314,7 @@ function frame() {
   ft.sub = steps;
 
   const alpha = acc / FIXED;            // leftover fraction → smooth interpolation
+  handlePadExtras(dt);                  // gamepad one-shots + right-stick camera
   car.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
@@ -353,7 +388,7 @@ function updateCamera(dt) {
   const v = car.body.linvel();
   const speed = Math.hypot(v.x, v.z);
   // auto-swing behind the direction of travel when moving & not dragging (GTA feel)
-  if (!cam.drag && speed > 3) {
+  if (!cam.drag && !cam.stick && speed > 3) {
     const behind = Math.atan2(v.x, v.z) + Math.PI;
     cam.yaw = lerpAngle(cam.yaw, behind, Math.min(1, 2.2 * dt));
   }
@@ -443,7 +478,8 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake/burnout · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids</div>
+    <div class="hint">WASD drive · Space handbrake/burnout · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
+    🎮 LS steer · RT gas · LT reverse · A handbrake · RS camera · Y reset · B repair · X clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 

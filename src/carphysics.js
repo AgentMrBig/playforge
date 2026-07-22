@@ -669,7 +669,9 @@ export class Car {
   _breakGlass() {
     if (this.glassBroken || !this.glassMats.length) return;
     this.glassBroken = true;
-    for (const m of this.glassMats) { m.opacity = 0; m.transparent = true; m.needsUpdate = true; }
+    // visible=false skips the faces entirely — opacity 0 still wrote depth and
+    // punched see-through holes in the interior from some angles (Erik)
+    for (const m of this.glassMats) { m.visible = false; m.needsUpdate = true; }
     const scene = this.mesh.parent;
     if (!scene) return;
     this.mesh.updateWorldMatrix(true, false);
@@ -794,7 +796,7 @@ export class Car {
     }
     // un-shatter the glass
     if (this.glassBroken) {
-      for (const m of this.glassMats) { m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
+      for (const m of this.glassMats) { m.visible = true; m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
       this.glassBroken = false;
     }
   }
