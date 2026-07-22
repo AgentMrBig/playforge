@@ -249,6 +249,10 @@ export class Car {
     const steerGoal = this.steerTarget * this.maxSteer;
     this.steer += (steerGoal - this.steer) * Math.min(1, this.steerRate * dt);
 
+    // hold Space at low speed + floor it = line-lock burnout (rears spin, fronts
+    // braked to hold you); at speed, Space is the handbrake (rears lock → drift)
+    const burnoutMode = this.handbrake && Math.abs(this.speedKmh) < 8;
+
     const t = body.translation();
     const r = body.rotation();
     _q.set(r.x, r.y, r.z, r.w);
@@ -307,7 +311,8 @@ export class Car {
 
           // longitudinal: engine + brake + rolling resistance
           if (w.driven) fLong += this.throttle * this.engineForce;
-          const brake = this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
+          // burnout: brake the FRONTS (hold the car); drift: brake the rears
+          const brake = this.brakeInput + (this.handbrake && (burnoutMode ? w.front : !w.front) ? 1 : 0);
           if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
           fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
 
@@ -330,7 +335,7 @@ export class Car {
             const driveForce = this.throttle * this.engineForce;
             const excess = Math.max(0, Math.abs(driveForce) - gripBudget);   // unusable torque
             w.spinRate += Math.sign(driveForce || 1) * (excess * this.wheelRadius / this.wheelInertia) * dt;
-            if (this.handbrake) w.spinRate = 0;                    // locked rears don't spin
+            if (this.handbrake && !burnoutMode) w.spinRate = 0;    // drift = locked rears; burnout = let them spin
             w.spinRate -= w.spinRate * Math.min(1, 6 * dt);        // re-hooks as grip returns
           } else {
             w.spinRate = 0;
