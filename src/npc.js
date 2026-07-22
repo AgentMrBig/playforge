@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Animator } from "./animation.js";
 import { loadCharacter } from "./character.js";
-import { CharacterBody } from "./phys.js";
+import { CharacterBody, NPC_COLLISION } from "./phys.js";
 import { Ragdoll } from "./ragdoll.js";
 
 /**
@@ -60,7 +60,7 @@ export class Pedestrian {
   _enterRagdoll(carVel, entity) {
     // LIGHT ragdoll (16kg): a person shouldn't drag your car down — light enough the car
     // barely slows + blows him clear instead of getting wedged + jiggling under the wheels.
-    if (!this.rag) this.rag = new Ragdoll(this.bones, this.phys, { tone: 1.4, totalMass: 16 });
+    if (!this.rag) this.rag = new Ragdoll(this.bones, this.phys, { tone: 1.4, totalMass: 16, collisionGroups: NPC_COLLISION });
     const chest = entity.position.clone(); chest.y += 1.1;
     this.rag.enter(carVel.clone().multiplyScalar(0.85).add(new THREE.Vector3(0, 2.5, 0)),
       carVel.clone().multiplyScalar(11), chest);
@@ -274,7 +274,7 @@ export async function spawnPedestrians(world, {
         .add(anim);
       // SOLID physics body — a Rapier capsule so the NPC collides with walls, cars, the
       // player + each other (no more clipping through). CharacterBody finds Physics itself.
-      if (usePhysics) e.add(new CharacterBody({ radius: 0.28, height: 1.7, massKg: 70 }));
+      if (usePhysics) e.add(new CharacterBody({ radius: 0.28, height: 1.7, massKg: 70, collisionGroups: NPC_COLLISION }));
       // this clone's own bones → a car-hit ragdoll can throw it (per-NPC, built on first hit)
       const bones = {}; visual.traverse((o) => { if (o.isBone && !bones[o.name]) bones[o.name] = o; });
       e.add(new Pedestrian({

@@ -28,6 +28,15 @@ export async function initRapier() {
   return R;
 }
 
+// ── collision layers (Rapier interaction groups: (membership<<16)|filter) ──
+// World stays default (0x0001). Vehicles get their own bit so ACTORS (NPC capsules +
+// NPC ragdolls) can filter them OUT — a car should plow THROUGH pedestrians (they
+// ragdoll off the launch), not brick-wall + demolish on them (Erik). Player capsule/
+// ragdoll keep the default filter, so getting run over still throws YOU.
+export const G_VEHICLE = 0x0004, G_ACTOR = 0x0002;
+export const VEHICLE_COLLISION = (G_VEHICLE << 16) | 0xffff;              // collides with everything
+export const NPC_COLLISION = (G_ACTOR << 16) | (0xffff & ~G_VEHICLE);     // everything EXCEPT vehicles
+
 export class Physics {
   constructor({ gravity = -20 } = {}) {
     this.gravity = gravity;
@@ -323,6 +332,7 @@ export class RapierVehicle extends VehicleBody {
     const col = P.world.createCollider(
       shape.setMass(this.mass)
         .setFriction(0.5).setRestitution(this.restitution)
+        .setCollisionGroups(VEHICLE_COLLISION)          // its own layer → NPCs pass through, not brick-wall
         .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS)
         .setContactForceEventThreshold(this.mass * 2.5), this.rb);
     P._handleEnt.set(col.handle, entity);
@@ -811,8 +821,8 @@ export class RapierVehicle extends VehicleBody {
  * to walk, set y to jump) and `onGround`. Entity origin stays at the FEET.
  */
 export class CharacterBody {
-  constructor({ radius = 0.32, height = 1.7, gravity = -20, massKg = 80 } = {}) {
-    Object.assign(this, { radius, height, gravity, massKg });
+  constructor({ radius = 0.32, height = 1.7, gravity = -20, massKg = 80, collisionGroups = null } = {}) {
+    Object.assign(this, { radius, height, gravity, massKg, collisionGroups });
     this.velocity = new THREE.Vector3();
     this.onGround = true;
     this.phys = null; this.rb = null; this.col = null; this.ctrl = null;
@@ -834,6 +844,7 @@ export class CharacterBody {
       R.RigidBodyDesc.kinematicPositionBased().setTranslation(p.x, p.y + half, p.z));
     this.col = P.world.createCollider(
       R.ColliderDesc.capsule(Math.max(0.05, half - this.radius), this.radius), this.rb);
+    if (this.collisionGroups != null) this.col.setCollisionGroups(this.collisionGroups);   // NPCs skip vehicles
     this.ctrl = P.world.createCharacterController(0.06);
     this.ctrl.enableAutostep(0.5, 0.3, true);           // curbs, stairs
     this.ctrl.enableSnapToGround(0.45);                 // stick on downslopes

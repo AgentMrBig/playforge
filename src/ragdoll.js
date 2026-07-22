@@ -61,10 +61,11 @@ const JOINTS = [
 const RAGDOLL_GROUPS = (0x0002 << 16) | 0xffff;
 
 export class Ragdoll {
-  constructor(bones, phys, { totalMass = 75, tone = 1.9 } = {}) {   // 1.2 flailed (Erik: too floppy); 1.9 holds its pose more, still ragdolls. Live-dial __rag.tone
+  constructor(bones, phys, { totalMass = 75, tone = 1.9, collisionGroups = null } = {}) {   // 1.2 flailed (Erik: too floppy); 1.9 holds its pose more, still ragdolls. Live-dial __rag.tone
     this.bones = bones;
     this.phys = phys;
     this.tone = tone;
+    this.collisionGroups = collisionGroups;   // NPC ragdolls pass NPC_COLLISION → cars plow through, don't wedge
     this.active = false;
     this.segments = [];               // {name, bone, body, col, len, radius, boneQuatOff}
     this._joints = [];
@@ -123,7 +124,7 @@ export class Ragdoll {
         R.ColliderDesc.capsule(Math.max(0.02, len / 2 - radius), radius)
           .setMass(this.totalMass * (massFor[name] ?? 0.05))
           .setFriction(0.8).setRestitution(0.1)
-          .setCollisionGroups(RAGDOLL_GROUPS), rb);
+          .setCollisionGroups(this.collisionGroups ?? RAGDOLL_GROUPS), rb);
       // bone-in-body offsets so physics can drive the bone later
       const boneWorldQ = bone.getWorldQuaternion(new THREE.Quaternion());
       const segMass = this.totalMass * (massFor[name] ?? 0.05);
