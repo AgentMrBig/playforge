@@ -1,4 +1,8 @@
+import * as THREE from "three";
 import { Particles } from "./particlefx.js";
+
+const _p = new THREE.Vector3();   // exhaust tip world pos
+const _d = new THREE.Vector3();   // exhaust blast direction
 
 /**
  * VehicleFX — tyre smoke + sparks for the proving-ground car, driven by the
@@ -66,6 +70,36 @@ export class VehicleFX {
       r: 1, g: 0.65 + Math.random() * 0.3, b: 0.15, a: 1,
       life: 0.2 + Math.random() * 0.4, drag: 1.5, gravity: -16,
     });
+  }
+
+  /** FIRE out both exhaust tips — called per backfire pop (delay syncs with the bang) */
+  exhaustFlame(car, delay = 0) {
+    setTimeout(() => {
+      const m = car.mesh;
+      const hz = (car.half?.z || 2.2) + 0.12;
+      for (const side of [-1, 1]) {
+        _p.set(side * 0.38, -0.5, -hz).applyQuaternion(m.quaternion).add(m.position);
+        _d.set(side * 0.12, 0.12, -1).applyQuaternion(m.quaternion);   // out the back
+        const n = 5 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < n; i++) {
+          const spd = 3 + Math.random() * 5;
+          this.sparks.spawn({
+            x: _p.x, y: _p.y, z: _p.z,
+            vx: _d.x * spd + (Math.random() - 0.5) * 1.6,
+            vy: _d.y * spd + (Math.random() - 0.5) * 1.6,
+            vz: _d.z * spd + (Math.random() - 0.5) * 1.6,
+            size: 0.3 + Math.random() * 0.25, grow: -0.2,
+            r: 1, g: 0.5 + Math.random() * 0.4, b: 0.12, a: 0.95,
+            life: 0.1 + Math.random() * 0.15, drag: 3, gravity: 2,
+          });
+        }
+        // bright muzzle-flash core right at the tip
+        this.sparks.spawn({
+          x: _p.x, y: _p.y, z: _p.z, vx: _d.x * 2, vy: 0.2, vz: _d.z * 2,
+          size: 0.75, grow: -0.55, r: 1, g: 0.85, b: 0.42, a: 1, life: 0.08, drag: 2, gravity: 0,
+        });
+      }
+    }, Math.max(0, delay * 1000));
   }
 
   /** burst of sparks on a hard impact */

@@ -70,7 +70,11 @@ export class VehicleAudio {
     if ((this._prevTh || 0) > 0.65 && th < 0.15 && this.engine && this.engine.rpm > this.engine.redline * 0.45) {
       const pops = 1 + Math.floor(Math.random() * 3);
       let t = 0;
-      for (let i = 0; i < pops; i++) { this._pop(t); t += 0.07 + Math.random() * 0.18; }
+      for (let i = 0; i < pops; i++) {
+        this._pop(t);
+        if (this.onPop) this.onPop(t);      // visual flame, synced to each bang
+        t += 0.07 + Math.random() * 0.18;
+      }
     }
     this._prevTh = th;
 

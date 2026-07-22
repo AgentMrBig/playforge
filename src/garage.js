@@ -176,6 +176,7 @@ async function main() {
   scene.add(car.mesh);
   skid = new SkidTrails(scene);
   fx = new VehicleFX(scene);
+  audio.onPop = (d) => fx.exhaustFlame(car, d);   // fire out the pipes on every backfire
 
   buildHUD();
 
