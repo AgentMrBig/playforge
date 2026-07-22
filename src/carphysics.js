@@ -255,7 +255,9 @@ export class Car {
 
     // hold Space at low speed + floor it = line-lock burnout (rears spin, fronts
     // braked to hold you); at speed, Space is the handbrake (rears lock → drift)
-    const burnoutMode = this.handbrake && Math.abs(this.speedKmh) < 8;
+    // burnout entry: handbrake+gas OR the classic BRAKE-STAND (brake+gas together)
+    const burnoutMode = (this.handbrake || (this.brakeInput > 0.35 && this.throttle > 0.45))
+      && Math.abs(this.speedKmh) < 8;
     this.burnout = burnoutMode;                 // exposed for audio (rev, don't drag)
 
     const t = body.translation();
@@ -318,7 +320,7 @@ export class Car {
           w.vLat = vLat;                                // lateral slide speed (for squeal pitch)
 
           // grip budget (friction circle), load-based → weight transfer feeds it
-          const gripMul = (w.front ? 1 : this.rearGripMul) * (this.handbrake && !w.front ? 0.5 : 1);
+          const gripMul = (w.front ? 1 : this.rearGripMul) * ((this.handbrake || burnoutMode) && !w.front ? 0.5 : 1);
           let gripBudget = this.tireGrip * load * gripMul;
           // kinetic friction: a spinning tyre grips LESS than a hooked-up one, so once
           // it breaks loose it keeps spinning on throttle alone (sustains a burnout
@@ -328,7 +330,11 @@ export class Car {
           // longitudinal: engine + brake + rolling resistance
           if (w.driven) fLong += this.throttle * this.engineForce;
           // burnout: brake the FRONTS (hold the car); drift: brake the rears
-          const brake = this.brakeInput + (this.handbrake && (burnoutMode ? w.front : !w.front) ? 1 : 0);
+          // in burnout mode ALL braking goes to the FRONTS (hold the car) — the rears
+          // must stay free to spin; otherwise brakeInput brakes all four as normal
+          const brake = burnoutMode
+            ? (w.front ? Math.max(this.brakeInput, this.handbrake ? 1 : 0) : 0)
+            : this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
           if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
           fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
 

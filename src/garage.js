@@ -126,19 +126,23 @@ function readInput() {
   let throttle = (up ? 1 : 0) - (down ? 1 : 0);   // W/↑ forward, S/↓ reverse
   let steer = (left ? 1 : 0) - (right ? 1 : 0);   // A/D
   let handbrake = !!keys.Space;
+  let brake = 0;
+  if (up && down) { throttle = 1; brake = 1; }    // BRAKE-STAND: gas + brake together = burnout
   const gp = pollPad();
   if (gp) {
-    const gpThrottle = (gp.buttons[7]?.value || 0) - (gp.buttons[6]?.value || 0);   // RT − LT
-    const gpSteer = -dz(gp.axes[0] || 0);                                            // stick left = steer left
-    if (Math.abs(gpThrottle) > 0.02) throttle = gpThrottle;
+    const rt = gp.buttons[7]?.value || 0, lt = gp.buttons[6]?.value || 0;
+    if (rt > 0.3 && lt > 0.3) { throttle = rt; brake = lt; }     // both pedals = brake-stand burnout
+    else if (Math.abs(rt - lt) > 0.02) throttle = rt - lt;       // RT − LT
+    const gpSteer = -dz(gp.axes[0] || 0);                        // stick left = steer left
     if (Math.abs(gpSteer) > 0.02) steer = gpSteer;
-    handbrake = handbrake || padDown(gp, 0);                                         // A = handbrake/burnout
+    handbrake = handbrake || padDown(gp, 0);                     // A = handbrake/burnout
   }
   // touch buttons take over when pressed (phone play)
   if (touch.gas || touch.rev) throttle = (touch.gas ? 1 : 0) - (touch.rev ? 1 : 0);
+  if (touch.gas && touch.rev) { throttle = 1; brake = 1; }       // both thumbs = burnout too
   if (touch.left || touch.right) steer = (touch.left ? 1 : 0) - (touch.right ? 1 : 0);
   handbrake = handbrake || touch.hb;
-  return { throttle, steer, brake: 0, handbrake };
+  return { throttle, steer, brake, handbrake };
 }
 
 /** pad one-shots + right-stick camera orbit — call each frame */
