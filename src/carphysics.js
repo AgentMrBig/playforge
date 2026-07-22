@@ -347,6 +347,11 @@ export class Car {
     for (const w of this.wheels) {
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
       w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
+      // model wheels (pivots use YXZ order): steer about Y, roll about X
+      if (w.modelWheel) {
+        w.modelWheel.rotation.x = w.spin;
+        if (w.front) w.modelWheel.rotation.y = this.steer;
+      }
     }
   }
 
@@ -422,9 +427,12 @@ export class Car {
 
     const v = rig.visual;
     v.updateWorldMatrix(true, true);
-    const bb = new THREE.Box3().setFromObject(v);
-    const c = bb.getCenter(new THREE.Vector3());
-    v.position.y -= c.y;                 // center the model vertically on the chassis
+    const bb = new THREE.Box3().setFromObject(v);   // v-local (not parented yet)
+    // Drop the model so its wheels/underside sit on the GROUND LINE. The chassis
+    // center floats at ride height; the ground is this far below it (mount − rest
+    // compression − tyre radius). Aligns the visual with where the tyres contact.
+    const groundY = this.wheels[0].mount.y - this.suspRest * 0.6 - this.wheelRadius;
+    v.position.y += groundY - bb.min.y;
     this.mesh.add(v);
     this.modelVisual = v;
 
