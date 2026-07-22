@@ -428,11 +428,14 @@ export class Car {
     for (const w of this.wheels) w.mesh.visible = false;
 
     const v = rig.visual;
-    this.mesh.add(v);
+    // Measure the tyre-contact line in the MODEL'S OWN space — BEFORE parenting it
+    // to the chassis. If we measured after add(), the world bbox would include
+    // wherever the car happens to be when the async model finishes loading (ride
+    // height, or mid-air), and the body would get seated relative to that.
     v.updateWorldMatrix(true, true);
-    // measure the tyre-contact line NOW, while the wheels are still in the model
-    // (its bbox bottom = where the tyres touch). Used to seat the body on the ground.
     const modelMinY = new THREE.Box3().setFromObject(v).min.y;
+    this.mesh.add(v);
+    this.mesh.updateWorldMatrix(true, true);   // so wheel worldToLocal/attach are valid
 
     // adopt the model's tyre radius so suspension reach + contact height match
     if (rig.wheelRadius) this.wheelRadius = rig.wheelRadius;
