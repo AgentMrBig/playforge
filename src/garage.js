@@ -55,6 +55,7 @@ function physicsStep() {
 
 /** map current key state → car input */
 function readInput() {
+  if (cam.mode === "free") return { throttle: 0, steer: 0, brake: 0, handbrake: false };  // WASD flies the cam
   const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
   const left = keys.KeyA || keys.ArrowLeft, right = keys.KeyD || keys.ArrowRight;
   return {
@@ -171,9 +172,11 @@ async function main() {
     if (e.code === "KeyR") car.reset();
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
     if (e.code === "KeyP") car.repair();    // un-dent the body
+    if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
+  setupCameraInput(renderer.domElement);
 
   requestAnimationFrame(frame);
 
@@ -271,14 +274,98 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
-const _camTarget = new THREE.Vector3();
-const _camDesired = new THREE.Vector3();
+// ---------------------------------------------------------------- camera ----
+const cam = {
+  mode: "chase",                       // "chase" | "free"
+  yaw: Math.PI, pitch: 0.34, dist: 9,  // chase orbit
+  drag: false, px: 0, py: 0,
+  look: new THREE.Vector3(),
+  freePos: new THREE.Vector3(0, 6, -14), freeYaw: 0, freePitch: -0.15, freeSpeed: 24,
+};
+const _cdes = new THREE.Vector3();
+const _clook = new THREE.Vector3();
+const _cfwd = new THREE.Vector3();
+
+function lerpAngle(a, b, t) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2; else if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
+function setupCameraInput(dom) {
+  dom.addEventListener("mousedown", (e) => { cam.drag = true; cam.px = e.clientX; cam.py = e.clientY; e.preventDefault(); });
+  addEventListener("mouseup", () => { cam.drag = false; });
+  addEventListener("mousemove", (e) => {
+    if (!cam.drag) return;
+    const dx = e.clientX - cam.px, dy = e.clientY - cam.py;
+    cam.px = e.clientX; cam.py = e.clientY;
+    if (cam.mode === "chase") {
+      cam.yaw -= dx * 0.005;
+      cam.pitch = Math.max(-0.25, Math.min(1.25, cam.pitch + dy * 0.005));
+    } else {
+      cam.freeYaw -= dx * 0.004;
+      cam.freePitch = Math.max(-1.45, Math.min(1.45, cam.freePitch - dy * 0.004));
+    }
+  });
+  dom.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (cam.mode === "chase") cam.dist = Math.max(4, Math.min(32, cam.dist + e.deltaY * 0.01));
+    else cam.freeSpeed = Math.max(4, Math.min(140, cam.freeSpeed - e.deltaY * 0.05));
+  }, { passive: false });
+  dom.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+function toggleFreeCam() {
+  if (cam.mode === "chase") {
+    cam.mode = "free";
+    cam.freePos.copy(camera.position);
+    // aim the free cam where the chase cam was looking
+    _cfwd.copy(cam.look).sub(camera.position).normalize();
+    cam.freeYaw = Math.atan2(_cfwd.x, _cfwd.z);
+    cam.freePitch = Math.asin(Math.max(-1, Math.min(1, _cfwd.y)));
+  } else {
+    cam.mode = "chase";
+  }
+}
+
 function updateCamera(dt) {
-  // chase from behind (-Z) and above, looking at the car
-  _camTarget.copy(car.mesh.position);
-  _camDesired.set(_camTarget.x, _camTarget.y + 5, _camTarget.z - 11);
-  camera.position.lerp(_camDesired, 1 - Math.pow(0.0001, dt));
-  camera.lookAt(_camTarget.x, _camTarget.y + 0.6, _camTarget.z);
+  if (cam.mode === "free") return updateFreeCam(dt);
+  const p = car.mesh.position;
+  const v = car.body.linvel();
+  const speed = Math.hypot(v.x, v.z);
+  // auto-swing behind the direction of travel when moving & not dragging (GTA feel)
+  if (!cam.drag && speed > 3) {
+    const behind = Math.atan2(v.x, v.z) + Math.PI;
+    cam.yaw = lerpAngle(cam.yaw, behind, Math.min(1, 2.2 * dt));
+  }
+  const ch = Math.cos(cam.pitch) * cam.dist;
+  _clook.set(p.x, p.y + 1.1, p.z);
+  _cdes.set(p.x + Math.sin(cam.yaw) * ch, p.y + 2.0 + Math.sin(cam.pitch) * cam.dist, p.z + Math.cos(cam.yaw) * ch);
+  // obstacle pull-in: don't let the camera clip through walls behind the car
+  _cfwd.copy(_cdes).sub(_clook);
+  const len = _cfwd.length(); _cfwd.normalize();
+  const hit = world.castRay(new RAPIER.Ray(_clook, _cfwd), len, true, undefined, undefined, undefined, car.body);
+  if (hit) {
+    const toi = (hit.timeOfImpact ?? hit.toi) * 0.85;
+    _cdes.copy(_clook).addScaledVector(_cfwd, Math.min(len, toi));
+  }
+  camera.position.lerp(_cdes, 1 - Math.pow(0.0016, dt));
+  cam.look.lerp(_clook, 1 - Math.pow(0.0022, dt));
+  camera.lookAt(cam.look);
+}
+
+function updateFreeCam(dt) {
+  _cfwd.set(Math.sin(cam.freeYaw) * Math.cos(cam.freePitch), Math.sin(cam.freePitch), Math.cos(cam.freeYaw) * Math.cos(cam.freePitch));
+  const spd = cam.freeSpeed * dt * (keys.ShiftLeft ? 3 : 1);
+  const rx = Math.cos(cam.freeYaw), rz = -Math.sin(cam.freeYaw);   // horizontal right
+  if (keys.KeyW) cam.freePos.addScaledVector(_cfwd, spd);
+  if (keys.KeyS) cam.freePos.addScaledVector(_cfwd, -spd);
+  if (keys.KeyD) { cam.freePos.x += rx * spd; cam.freePos.z += rz * spd; }
+  if (keys.KeyA) { cam.freePos.x -= rx * spd; cam.freePos.z -= rz * spd; }
+  if (keys.KeyE || keys.Space) cam.freePos.y += spd;
+  if (keys.KeyQ) cam.freePos.y -= spd;
+  camera.position.copy(cam.freePos);
+  camera.lookAt(cam.freePos.x + _cfwd.x, cam.freePos.y + _cfwd.y, cam.freePos.z + _cfwd.z);
 }
 
 function onResize() {
@@ -321,8 +408,8 @@ function buildHUD() {
     <div class="row"><span>wheels off / debris</span><b id="h-dmg">0 / 0</b></div>
     <label>spring stiffness <span class="val" id="v-k">30000</span></label>
     <input id="s-k" type="range" min="5000" max="80000" step="500" value="30000">
-    <label>spring damping <span class="val" id="v-d">4000</span></label>
-    <input id="s-d" type="range" min="0" max="12000" step="100" value="4000">
+    <label>spring damping <span class="val" id="v-d">1500</span></label>
+    <input id="s-d" type="range" min="0" max="12000" step="100" value="1500">
     <label>rest length <span class="val" id="v-rest">0.50</span></label>
     <input id="s-rest" type="range" min="0.2" max="0.9" step="0.01" value="0.50">
     <label>engine force <span class="val" id="v-eng">8000</span></label>
@@ -333,10 +420,10 @@ function buildHUD() {
     <input id="s-rg" type="range" min="0.3" max="1.2" step="0.02" value="1.00">
     <label>CoG height (low↔bus) <span class="val" id="v-cog">-0.45</span></label>
     <input id="s-cog" type="range" min="-0.5" max="0.5" step="0.02" value="-0.45">
-    <label>anti-roll bar <span class="val" id="v-arb">6000</span></label>
-    <input id="s-arb" type="range" min="0" max="60000" step="1000" value="6000">
+    <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
+    <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake · [R] drop · [T] hard drop · [P] repair</div>
+    <div class="hint">WASD drive · Space handbrake · drag=orbit · scroll=zoom · [C] free-cam (WASD+QE fly) · [R] drop · [P] repair</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 

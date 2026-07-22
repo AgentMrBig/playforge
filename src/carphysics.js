@@ -60,7 +60,7 @@ export class Car {
     wheelRadius = 0.35,
     suspRest = 0.5,        // rest length of the spring (m)
     suspStiff = 30000,     // N/m  — ~0.2m sag under 300kg/corner at g=20
-    suspDamp = 4000,       // N per (m/s)
+    suspDamp = 1500,       // N per (m/s)  — Erik's feel default
     suspTravel = 0.35,     // max compression past rest before bottoming
     // drivetrain / tires
     engineForce = 8000,    // N per driven wheel at full throttle
@@ -72,7 +72,7 @@ export class Car {
     rollResist = 0.015,    // rolling resistance fraction of load
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
-    antiRoll = 6000,       // sway-bar stiffness — resists body roll without stiffening bump
+    antiRoll = 29000,      // sway-bar stiffness (Erik default) — resists body roll, not bump
     // impact deform (Stage 5). Rapier contact forces run huge (~22k N per km/h of
     // closing speed), so these are in the 100k-millions range: dent from ~15 km/h,
     // full crumple by ~100 km/h.
