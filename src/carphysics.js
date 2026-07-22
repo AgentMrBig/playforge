@@ -507,6 +507,7 @@ export class Car {
         this.mesh.attach(pivot);                  // chassis space, keep scale/orientation
         pivot.rotation.set(0, 0, 0);              // wheel has no rotation rel. to the body
         w.modelWheel = pivot;
+        w._wheelScale = pivot.scale.clone();      // remembered so reset can restore it exactly
       }
     }
 
@@ -687,6 +688,8 @@ export class Car {
       if (w.detached && w.modelWheel) {
         w.modelWheel.traverse((o) => { if (o.material) { o.material.opacity = 1; o.material.transparent = false; } });
         this.mesh.add(w.modelWheel);      // back on the car; _placeWheels re-seats it
+        w.modelWheel.rotation.set(0, 0, 0);                        // clear debris tumble (was canting it)
+        if (w._wheelScale) w.modelWheel.scale.copy(w._wheelScale); // restore exact scale
         w.detached = false;
       }
     }
