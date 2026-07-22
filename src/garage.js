@@ -3,6 +3,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import { Car } from "./carphysics.js";
 import { loadVehicle } from "./vehicledef.js";
 import { VehicleAudio } from "./vehicleaudio.js";
+import { SkidTrails } from "./skidtrails.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -27,7 +28,7 @@ const CARS = {
 const FIXED = 1 / 60;                 // fixed physics dt — deterministic, refresh-independent
 const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 
-let world, car, scene, camera, renderer, eventQueue;
+let world, car, scene, camera, renderer, eventQueue, skid;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
@@ -135,13 +136,14 @@ async function main() {
   // ---- the car --------------------------------------------------------
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
   scene.add(car.mesh);
+  skid = new SkidTrails(scene);
 
   buildHUD();
 
   // debug/verification handle — the agent Browser pane throttles rAF to ~0fps,
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
-    world, car, RAPIER, scene, camera, renderer, audio, frames: 0,
+    world, car, RAPIER, scene, camera, renderer, audio, skid, frames: 0,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -175,6 +177,7 @@ async function main() {
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
     if (e.code === "KeyP") car.repair();    // un-dent the body
     if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
+    if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -274,6 +277,7 @@ function frame() {
   const alpha = acc / FIXED;            // leftover fraction → smooth interpolation
   car.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
+  skid.update(car);                     // lay tyre skid marks where wheels slide/spin
   audio.update(dt, car);                // procedural engine + tyre squeal
 
   updateCamera(dt);
@@ -432,7 +436,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake · drag=orbit · scroll=zoom · [C] free-cam (WASD+QE fly) · [R] drop · [P] repair</div>
+    <div class="hint">WASD drive · Space handbrake/burnout · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 

@@ -360,7 +360,10 @@ export class Car {
             _imp.z -= (_vel.z / vh) * scrape;
           }
         }
-        body.addForceAtPoint(_imp, { x: _wpos.x + _down.x * toi, y: _wpos.y + _down.y * toi, z: _wpos.z + _down.z * toi }, true);
+        w.cx = _wpos.x + _down.x * toi;   // world ground-contact point (for skid marks)
+        w.cy = _wpos.y + _down.y * toi;
+        w.cz = _wpos.z + _down.z * toi;
+        body.addForceAtPoint(_imp, { x: w.cx, y: w.cy, z: w.cz }, true);
       } else {
         w.grounded = false;
         w.dist = this.suspRest;                                 // droop to full extension
