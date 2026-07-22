@@ -279,10 +279,17 @@ async function main() {
   setupCameraInput(renderer.domElement);
   buildTouchControls();                     // on-screen buttons on touch devices
 
-  // audio needs a user gesture to start (browser autoplay policy)
-  const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); };
+  // audio needs a user gesture to start (browser autoplay policy) — on phones the
+  // only gestures are TOUCHES, so listen for those too or mobile stays silent
+  const startAudio = () => {
+    audio.start();
+    removeEventListener("keydown", startAudio);
+    removeEventListener("mousedown", startAudio);
+    removeEventListener("touchstart", startAudio);
+  };
   addEventListener("keydown", startAudio);
   addEventListener("mousedown", startAudio);
+  addEventListener("touchstart", startAudio);
 
   requestAnimationFrame(frame);
 
