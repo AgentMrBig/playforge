@@ -347,8 +347,10 @@ export class Car {
     for (const w of this.wheels) {
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
       w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
-      // model wheels (pivots use YXZ order): steer about Y, roll about X
+      // model wheels: same suspension-driven placement as the cylinders so they
+      // stay planted while the body heaves/rolls; steer about Y, roll about X
       if (w.modelWheel) {
+        w.modelWheel.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
         w.modelWheel.rotation.x = w.spin;
         if (w.front) w.modelWheel.rotation.y = this.steer;
       }
@@ -426,24 +428,41 @@ export class Car {
     for (const w of this.wheels) w.mesh.visible = false;
 
     const v = rig.visual;
+    this.mesh.add(v);
     v.updateWorldMatrix(true, true);
-    const bb = new THREE.Box3().setFromObject(v);   // v-local (not parented yet)
-    // Drop the model so its wheels/underside sit on the GROUND LINE. The chassis
-    // center floats at ride height; the ground is this far below it (mount − rest
-    // compression − tyre radius). Aligns the visual with where the tyres contact.
+
+    // adopt the model's tyre radius so suspension reach + contact height match
+    if (rig.wheelRadius) this.wheelRadius = rig.wheelRadius;
+
+    // Pull each model wheel OUT of the body and into chassis space, and move my
+    // suspension mounts to the model's actual wheel positions. Now the body can
+    // heave/pitch/roll on the springs while the wheels are re-planted every frame
+    // (in _placeWheels) at their own ray-computed ground height — no ground clip.
+    if (rig.wheels) {
+      const map = { FL: "fl", FR: "fr", RL: "rl", RR: "rr" };
+      const wp = new THREE.Vector3();
+      for (const w of this.wheels) {
+        const pivot = rig.wheels[map[w.name]];
+        if (!pivot) { w.modelWheel = null; continue; }
+        pivot.getWorldPosition(wp);
+        this.mesh.worldToLocal(wp);
+        w.mount.x = wp.x; w.mount.z = wp.z;       // ray + wheel X/Z = the real wheel well
+        this.mesh.attach(pivot);                  // chassis space, keep scale/orientation
+        pivot.rotation.set(0, 0, 0);              // wheel has no rotation rel. to the body
+        w.modelWheel = pivot;
+      }
+    }
+
+    // drop the BODY visual so its underside sits on the ground line
+    const bb = new THREE.Box3().setFromObject(v);
     const groundY = this.wheels[0].mount.y - this.suspRest * 0.6 - this.wheelRadius;
     v.position.y += groundY - bb.min.y;
-    this.mesh.add(v);
     this.modelVisual = v;
 
-    // wheel meshes to exclude when picking the body
-    const wheelMeshes = new Set();
-    if (rig.wheels) for (const k in rig.wheels) rig.wheels[k]?.traverse((o) => { if (o.isMesh) wheelMeshes.add(o); });
-
-    // body = the largest non-wheel mesh
+    // body = the largest remaining mesh (wheels are already reparented out of v)
     let best = null, bestCount = -1;
     v.traverse((o) => {
-      if (!o.isMesh || wheelMeshes.has(o)) return;
+      if (!o.isMesh) return;
       const n = o.geometry.attributes.position.count;
       if (n > bestCount) { bestCount = n; best = o; }
     });
@@ -454,12 +473,6 @@ export class Car {
       this.origPos = Float32Array.from(best.geometry.attributes.position.array);
       this.bodyCenter = best.geometry.boundingBox.getCenter(new THREE.Vector3());
       this.dents = 0;
-    }
-
-    // map model wheels onto the suspension wheels (for later articulation)
-    if (rig.wheels) {
-      const map = { FL: "fl", FR: "fr", RL: "rl", RR: "rr" };
-      for (const w of this.wheels) w.modelWheel = rig.wheels[map[w.name]] || null;
     }
     this.modelName = rig.name || "car";
   }
