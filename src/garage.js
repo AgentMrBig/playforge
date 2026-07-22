@@ -6,6 +6,7 @@ import { VehicleAudio } from "./vehicleaudio.js";
 import { SkidTrails } from "./skidtrails.js";
 import { Cluster } from "./cluster.js";
 import { VehicleFX } from "./vehiclefx.js";
+import { Trailer } from "./trailer.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -30,7 +31,7 @@ const CARS = {
 const FIXED = 1 / 60;                 // fixed physics dt — deterministic, refresh-independent
 const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 
-let world, car, scene, camera, renderer, eventQueue, skid, fx;
+let world, car, scene, camera, renderer, eventQueue, skid, fx, trailer;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
@@ -182,6 +183,8 @@ async function main() {
   skid = new SkidTrails(scene);
   fx = new VehicleFX(scene);
   audio.onPop = (d) => fx.exhaustFlame(car, d);   // fire out the pipes on every backfire
+  trailer = new Trailer(world, RAPIER, { pos: [5, 0.5, -5] });   // spawn at ride height, no drop
+  scene.add(trailer.mesh);
 
   buildHUD();
 
@@ -189,9 +192,9 @@ async function main() {
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
     world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
-    replay, recordFrame, startReplay, stopReplay, updateReplay,
+    replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
-    step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); car.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); } return car.height; },
+    step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
     // headless deform metrics: how far the body mesh has moved from pristine
     dentStats() {
@@ -225,6 +228,7 @@ async function main() {
     if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
+    if (e.code === "KeyH") toggleHitch();   // hitch/unhitch the trailer
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -348,6 +352,19 @@ function readReplayFrame(f, pos, quat) {
   return idx;
 }
 
+/** [H]: hitch when the car's rear is near the tongue; unhitch when connected */
+const _hA = new THREE.Vector3(), _hB = new THREE.Vector3();
+function toggleHitch() {
+  if (trailer.joint) { trailer.unhitch(world, car); return; }
+  const hl = { x: 0, y: -0.65, z: -(car.half.z + 0.15) };   // car hitch, local (bumper-low —
+  // must match the trailer tongue's natural ride height or the trailer hangs and swings)
+  const cr = car.body.rotation(), ct = car.body.translation();
+  _rq1.set(cr.x, cr.y, cr.z, cr.w);
+  _hA.set(hl.x, hl.y, hl.z).applyQuaternion(_rq1).add(_hB.set(ct.x, ct.y, ct.z));
+  trailer.tongueWorld(_hB);
+  if (_hA.distanceTo(_hB) < 4.5) trailer.hitchTo(car, RAPIER, world, hl);
+}
+
 function updateReplay(dt) {
   replay.ph += dt * replay.speed * 60;
   if (replay.ph >= replay.len - 1.01) { stopReplay(); return; }
@@ -398,9 +415,12 @@ function frame() {
   let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
     car.snapshotPrev();
+    trailer.snapshotPrev();
     car.fixedUpdate(FIXED);     // suspension + tire forces BEFORE the solve
+    trailer.fixedUpdate(FIXED);
     physicsStep();
     car.snapshotCurr();
+    trailer.snapshotCurr();
     recordFrame();              // 60Hz ring buffer for the replay / crash cam
     acc -= FIXED;
     steps++;
@@ -411,6 +431,7 @@ function frame() {
   const alpha = acc / FIXED;            // leftover fraction → smooth interpolation
   handlePadExtras(dt);                  // gamepad one-shots + right-stick camera
   car.interpolate(alpha);
+  trailer.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
   fx.update(dt, car);                   // tyre smoke + sparks
@@ -580,7 +601,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake/burnout · [V] slow-mo replay · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
+    <div class="hint">WASD drive · Space handbrake/burnout · [V] slow-mo replay · [H] hitch trailer · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
     🎮 LS steer · RT gas · LT reverse · A handbrake · RS camera · Y reset · B repair · X clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
