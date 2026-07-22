@@ -62,6 +62,9 @@ export class VehicleAudio {
     b.handbrake = !!car.handbrake && !car.burnout;
     this.engine.update(dt, { entity: { components: [b] } });
 
+    // suspension clunk on hard bumps (kerbs, landings, potholes)
+    if (car.bumpPulse > 0) { this._thud(Math.min(1, car.bumpPulse)); car.bumpPulse = 0; }
+
     // tyre squeal: volume from slide×force, pitch from slide speed (Erik: force-driven)
     const sc = Math.max(0, Math.min(1, car.screech || 0));
     const pitch = Math.max(0, Math.min(1, car.screechPitch || 0));
@@ -70,6 +73,30 @@ export class VehicleAudio {
     this.screechBp.frequency.setTargetAtTime(1400 + pitch * 2600, now, 0.05);       // higher as it slides faster
     this.screechHp.frequency.setTargetAtTime(700 + pitch * 900, now, 0.06);
     this.screechBp.Q.setTargetAtTime(5 + pitch * 4, now, 0.06);                      // tighter/whinier at speed
+  }
+
+  /** one-shot procedural suspension clunk: low sine thump + a metallic noise tick */
+  _thud(mag) {
+    const ctx = this.ctx, now = ctx.currentTime;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.exponentialRampToValueAtTime(0.45 * mag + 0.05, now + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    g.connect(ctx.destination);
+    const o = ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.setValueAtTime(100 + 50 * mag, now);
+    o.frequency.exponentialRampToValueAtTime(42, now + 0.12);
+    o.connect(g); o.start(now); o.stop(now + 0.16);
+    const n = ctx.createBufferSource();
+    n.buffer = this.screechSrc.buffer;             // reuse the noise buffer
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 900 + 600 * mag; bp.Q.value = 2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.22 * mag, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    n.connect(bp); bp.connect(ng); ng.connect(ctx.destination);
+    n.start(now, Math.random() * 1.5); n.stop(now + 0.08);
   }
 
   get rpm() { return this.engine ? this.engine.rpm : 0; }

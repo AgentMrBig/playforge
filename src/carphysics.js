@@ -300,6 +300,13 @@ export class Car {
         if (load < 0) load = 0;
         w.force = load;
 
+        // hard-bump clunk for audio: a fast compression spike (kerb, landing, pothole)
+        w._bumpCd = Math.max(0, (w._bumpCd || 0) - dt);
+        if (springVel < -3 && w._bumpCd <= 0) {
+          this.bumpPulse = Math.max(this.bumpPulse || 0, Math.min(1, (-springVel - 3) / 6));
+          w._bumpCd = 0.3;
+        }
+
         // ---- tyre forces (a torn-off corner has none — the bare hub just drags) ----
         let fLong = 0, fLat = 0;
         if (!w.detached) {
