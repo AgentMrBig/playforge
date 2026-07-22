@@ -3,6 +3,7 @@ import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.j
 import { Animator } from "./animation.js";
 import { loadCharacter } from "./character.js";
 import { CharacterBody } from "./phys.js";
+import { Ragdoll } from "./ragdoll.js";
 
 /**
  * Pedestrians — cheap NPC walkers that bring the settlements to life.
@@ -21,7 +22,7 @@ import { CharacterBody } from "./phys.js";
  *   });
  */
 export class Pedestrian {
-  constructor({ heightAt, center, radius = 18, speed = 1.2, clips = { walk: "walk", idle: "idle" }, footOffset = 0 }) {
+  constructor({ heightAt, center, radius = 18, speed = 1.2, clips = { walk: "walk", idle: "idle" }, footOffset = 0, phys = null, bones = null }) {
     this.heightAt = heightAt;
     this.center = center;          // { x, z } home point
     this.radius = radius;
@@ -32,9 +33,39 @@ export class Pedestrian {
     this.footOffset = footOffset;
     this.target = null;
     this.pauseT = 0;
-    this.state = "stroll";         // stroll | idle | flee
+    this.state = "stroll";         // stroll | idle | flee | ragdoll (car-hit)
     this.fleeFrom = null; this.fleeT = 0;
     this.yaw = Math.random() * Math.PI * 2;
+    this.phys = phys; this.bones = bones; this.rag = null; this._downT = 0;   // car-hit ragdoll
+  }
+
+  /** a fast car right on top of me? → return its velocity so I get launched by it. */
+  _carHit(p) {
+    const pf = (typeof window !== "undefined") && window.__pf;
+    if (!pf) return null;
+    for (const car of pf.cars || []) {
+      const vb = car.components && car.components.find((c) => c.rb && c.velocity);
+      if (!vb) continue;
+      const sp = vb.velocity.length ? vb.velocity.length() : 0;
+      if (sp < 5) continue;
+      const cp = car.position;
+      if (Math.abs(cp.y - p.y) > 2) continue;
+      if ((cp.x - p.x) ** 2 + (cp.z - p.z) ** 2 < 3.2 * 3.2) return vb.velocity;
+    }
+    return null;
+  }
+
+  /** get hit by a car → drop the (kinematic) capsule so it stops brick-walling the car, and
+   * launch a real physics ragdoll off the hood (reuses the same Ragdoll that throws the player). */
+  _enterRagdoll(carVel, entity) {
+    if (!this.rag) this.rag = new Ragdoll(this.bones, this.phys, { tone: 1.4 });
+    const chest = entity.position.clone(); chest.y += 1.1;
+    this.rag.enter(carVel.clone().multiplyScalar(0.85).add(new THREE.Vector3(0, 2.5, 0)),
+      carVel.clone().multiplyScalar(11), chest);
+    if (this.body) this.body.setEnabled(false);          // capsule off → no more brick wall
+    this.state = "ragdoll"; this._downT = 0;
+    const pf = (typeof window !== "undefined") && window.__pf;
+    pf && pf.audio && pf.audio.playSfx && pf.audio.playSfx("thud_body", { volume: 0.9 });
   }
 
   /** ambient brain: is there something to run FROM right now? (gunfire nearby, a fast car
@@ -101,9 +132,33 @@ export class Pedestrian {
     if (this.body) { this.body.velocity.x = nx * this.speed; this.body.velocity.z = nz * this.speed; }
   }
 
+  fixedUpdate(dt) {                         // run the car-hit ragdoll's PD muscles at 60Hz
+    if (this.state === "ragdoll" && this.rag && this.rag.active) this.rag.fixedUpdate(dt);
+  }
+
   update(dt, { entity }) {
     const anim = entity.get(Animator);
     const p = entity.position;
+
+    // ── CAR-HIT RAGDOLL: launched off the hood, tumble, then pick myself back up ──
+    if (this.state === "ragdoll") {
+      if (this.rag) {
+        this.rag.update();                              // physics bodies → visual bones
+        const pv = this.rag.pelvisPos();
+        p.set(pv.x, Math.max(this.heightAt(pv.x, pv.z) - 0.2, pv.y - 0.9), pv.z);   // follow the flying body
+        this._downT += dt;
+        if (this._downT > 1.0 && this.rag.settled(0.8)) {                            // settled → get up
+          this.rag.exit();
+          const pv2 = this.rag.pelvisPos();
+          p.set(pv2.x, this.heightAt(pv2.x, pv2.z) + this.footOffset, pv2.z);
+          if (this.body) { this.body.setEnabled(true); this.body.velocity.set(0, 0, 0); }
+          this.state = "stroll"; this._pick(); this.pauseT = 0.6;
+        }
+      }
+      return;
+    }
+    // a fast car on top of me → ragdoll (drops the capsule so it stops brick-walling the car)
+    if (this.phys && this.bones) { const carVel = this._carHit(p); if (carVel) { this._enterRagdoll(carVel, entity); return; } }
 
     // ── FLEE: bolt away from gunfire / a speeding car ──
     const danger = this._danger(p);
@@ -177,7 +232,7 @@ export class Pedestrian {
 export async function spawnPedestrians(world, {
   models = null, model = null, texture = null, textureDir = "", flipY = true,
   targetHeight = 1.8, animations = null, retargetFrom = null,
-  heightAt, clusters = [], footOffset = 0, scaleJitter = 0.08, usePhysics = true,
+  heightAt, clusters = [], footOffset = 0, scaleJitter = 0.08, usePhysics = true, phys = null,
 } = {}) {
   const specs = models || [{ model, texture, textureDir, flipY, targetHeight, animations, retargetFrom }];
   const bases = [];
@@ -218,9 +273,12 @@ export async function spawnPedestrians(world, {
       // SOLID physics body — a Rapier capsule so the NPC collides with walls, cars, the
       // player + each other (no more clipping through). CharacterBody finds Physics itself.
       if (usePhysics) e.add(new CharacterBody({ radius: 0.28, height: 1.7, massKg: 70 }));
+      // this clone's own bones → a car-hit ragdoll can throw it (per-NPC, built on first hit)
+      const bones = {}; visual.traverse((o) => { if (o.isBone && !bones[o.name]) bones[o.name] = o; });
       e.add(new Pedestrian({
         heightAt, center: { x: c.x, z: c.z }, radius: c.radius || 16,
         speed: 1.0 + Math.random() * 0.7, clips: { walk: base._walk, idle: base._idle, run: base._run }, footOffset,
+        phys: usePhysics ? phys : null, bones,
       }));
       // desync the crowd — advance each mixer a random beat so they don't lockstep
       anim.play(base._walk); anim.update(Math.random() * 1.8);

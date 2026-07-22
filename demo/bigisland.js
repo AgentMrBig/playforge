@@ -588,7 +588,7 @@ spawnPedestrians(world, {
     "SK_Chr_StreetGirl_01", "SK_Chr_Asian_Gangster_Male_01", "SK_Chr_Italian_Gangster_01",
     "SK_Chr_Cook_Male_01", "SK_Chr_Cook_Female_01", "SK_Chr_DEA_Plainclothes_Male_01",
   ].map((n) => ({ model: `models/gangwarfare/${n}.FBX`, ...GW_CHAR })),
-  heightAt,
+  heightAt, phys,
   clusters: [
     { x: RUN.x0 + 20, z: RUN.z + RUN.w / 2 + 8, radius: 14, count: 6 },  // right by spawn
     { x: start.x, z: start.z, radius: 22, count: 8 },                     // the start town
