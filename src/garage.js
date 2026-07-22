@@ -49,7 +49,7 @@ function physicsStep() {
         }
       });
     } catch (err) { /* no manifold → deform falls back to the force direction */ }
-    car.deform(point, mag, dir);
+    car.impact(point, mag, dir);
   });
 }
 
@@ -263,6 +263,7 @@ function frame() {
 
   const alpha = acc / FIXED;            // leftover fraction → smooth interpolation
   car.interpolate(alpha);
+  car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
 
   updateCamera(dt);
   updateHUD();
@@ -317,6 +318,7 @@ function buildHUD() {
     <div class="row"><span>speed</span><b id="h-kmh">–</b></div>
     <div class="row"><span>wheels grounded</span><b id="h-wg">–</b></div>
     <div class="row"><span>dents</span><b id="h-dent">0</b></div>
+    <div class="row"><span>wheels off / debris</span><b id="h-dmg">0 / 0</b></div>
     <label>spring stiffness <span class="val" id="v-k">30000</span></label>
     <input id="s-k" type="range" min="5000" max="80000" step="500" value="30000">
     <label>spring damping <span class="val" id="v-d">4000</span></label>
@@ -375,6 +377,7 @@ function updateHUD() {
   set("h-kmh", car.speedKmh.toFixed(0) + " km/h");
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
+  set("h-dmg", car.wheelsOff + " / " + car.debris.length);
 }
 function set(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 

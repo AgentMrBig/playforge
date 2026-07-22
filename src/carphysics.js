@@ -42,6 +42,9 @@ const _vp = new THREE.Vector3();       // vertex scratch
 const _off = new THREE.Vector3();      // vertex offset-from-original
 const _m1 = new THREE.Matrix4();       // body-mesh world→local
 const _sc = new THREE.Vector3();       // scale extraction
+const _dp = new THREE.Vector3();       // debris: impact point
+const _dc = new THREE.Vector3();       // debris: car world center
+const _dw = new THREE.Vector3();       // debris: wheel world pos
 const ANTIROLL_AXLES = [[0, 1], [2, 3]];   // [FL,FR], [RL,RR]
 export class Car {
   constructor(world, RAPIER, {
@@ -78,6 +81,9 @@ export class Car {
     dentRadius = 0.9,        // base dent spread (m)
     dentDepth = 0.28,        // base dent depth at full severity (m)
     dentMax = 0.5,           // max total displacement any vertex can accumulate (m)
+    // mechanical damage (Stage 6)
+    wheelDetachForce = 1100000, // contact force to tear a wheel off (~50 km/h corner hit)
+    chunkForce = 1600000,       // force to break off a body chunk (~72 km/h)
   } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
@@ -105,6 +111,9 @@ export class Car {
     this.dentMax = dentMax;
     this.half = { x: size[0] / 2, y: size[1] / 2, z: size[2] / 2 };
     this.dents = 0;
+    this.wheelDetachForce = wheelDetachForce;
+    this.chunkForce = chunkForce;
+    this.debris = [];          // loose pieces (knocked-off wheels + body chunks)
     this.mass = mass;
     // driver input (set each frame via setInput)
     this.throttle = 0;      // -1 (reverse) .. 1 (forward)
@@ -250,6 +259,7 @@ export class Car {
 
     const reach = this.suspRest + this.wheelRadius;   // ray length: rest + tyre
     for (const w of this.wheels) {
+      if (w.detached) { w.grounded = false; continue; }   // no wheel → no spring, no grip
       // mount in world space = chassis pos + rotated local mount
       _wpos.copy(w.mount).applyQuaternion(_q).add(_tpos.set(t.x, t.y, t.z));
       w.mwx = _wpos.x; w.mwy = _wpos.y; w.mwz = _wpos.z;   // mount world pos (anti-roll point)
@@ -345,6 +355,7 @@ export class Car {
   /** position wheel visuals along their travel + steer + roll (local space) */
   _placeWheels() {
     for (const w of this.wheels) {
+      if (w.detached) continue;                 // it's loose debris now — don't move it
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
       w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
       // model wheels: same suspension-driven placement as the cylinders so they
@@ -483,6 +494,92 @@ export class Car {
     this.modelName = rig.name || "car";
   }
 
+  /**
+   * A hard hit landed: crumple the body, and above bigger thresholds tear off the
+   * nearest wheel (with a real handling consequence) or break off a body chunk.
+   */
+  impact(worldPoint, mag, worldDir) {
+    this.deform(worldPoint, mag, worldDir);     // crumple (also syncs mesh pose)
+    if (!worldPoint) return;
+    this.mesh.updateWorldMatrix(true, true);     // refresh WHEEL matrices for the distance test
+    _dp.set(worldPoint.x, worldPoint.y, worldPoint.z);
+
+    // wheel tear-off: nearest still-attached wheel within reach of the contact
+    if (mag >= this.wheelDetachForce) {
+      let near = null, nd = 1.6;
+      for (const w of this.wheels) {
+        if (w.detached || !w.modelWheel) continue;
+        const d = w.modelWheel.getWorldPosition(_dw).distanceTo(_dp);
+        if (d < nd) { nd = d; near = w; }
+      }
+      if (near) this._detachWheel(near);
+    }
+    // body chunk break-off on a really big hit
+    if (mag >= this.chunkForce && this.debris.length < 20) this._spawnChunk(worldPoint, worldDir, mag);
+  }
+
+  /** tear a wheel off → loose debris; that corner loses spring + grip (it drags) */
+  _detachWheel(w) {
+    const scene = this.mesh.parent;
+    const wheel = w.modelWheel;
+    if (!scene || !wheel) return;
+    w.detached = true;
+    wheel.getWorldPosition(_dw);
+    scene.attach(wheel);                         // keep world pose + scale
+    wheel.userData.wheelRef = w;                 // so reset() can re-fit it
+    const lv = this.body.linvel();
+    this.mesh.getWorldPosition(_dc);
+    _dp.copy(_dw).sub(_dc).setY(0).normalize();  // outward from car
+    this._registerDebris(wheel,
+      lv.x + _dp.x * 3, lv.y + 4, lv.z + _dp.z * 3, 9);
+  }
+
+  /** break a body-colored chunk off at the impact + gouge a deep dent there */
+  _spawnChunk(worldPoint, worldDir, mag) {
+    const scene = this.mesh.parent;
+    if (!scene) return;
+    const s = 0.35 + Math.random() * 0.3;
+    const chunk = new THREE.Mesh(
+      new THREE.BoxGeometry(s, 0.12, s * 0.8),
+      new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.4, roughness: 0.6 })
+    );
+    chunk.castShadow = true;
+    chunk.position.set(worldPoint.x, worldPoint.y, worldPoint.z);
+    chunk.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    scene.add(chunk);
+    const lv = this.body.linvel();
+    this.mesh.getWorldPosition(_dc);
+    _dp.set(worldPoint.x, worldPoint.y, worldPoint.z).sub(_dc).setY(0).normalize();
+    this._registerDebris(chunk, lv.x + _dp.x * 4, lv.y + 4.5, lv.z + _dp.z * 4, 12);
+    this.deform(worldPoint, mag * 1.6, worldDir);   // deeper gouge where it tore away
+  }
+
+  _registerDebris(mesh, vx, vy, vz, spin) {
+    mesh.userData.vel = new THREE.Vector3(vx, vy, vz);
+    mesh.userData.spin = new THREE.Vector3((Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin);
+    mesh.userData.life = 6.0;
+    this.debris.push(mesh);
+  }
+
+  /** integrate loose debris in plain JS (no extra physics bodies) — call each frame */
+  updateDebris(dt) {
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const m = this.debris[i], ud = m.userData;
+      ud.vel.y += -20 * dt;
+      m.position.addScaledVector(ud.vel, dt);
+      m.rotation.x += ud.spin.x * dt; m.rotation.y += ud.spin.y * dt; m.rotation.z += ud.spin.z * dt;
+      if (m.position.y < 0.16) {                 // ground bounce + settle
+        m.position.y = 0.16; ud.vel.y *= -0.35;
+        ud.vel.x *= 0.7; ud.vel.z *= 0.7; ud.spin.multiplyScalar(0.6);
+      }
+      ud.life -= dt;
+      if (ud.life < 1) m.traverse((o) => { if (o.material) { o.material.transparent = true; o.material.opacity = Math.max(0, ud.life); } });
+      if (ud.life <= 0) { m.parent && m.parent.remove(m); this.debris.splice(i, 1); }
+    }
+  }
+
+  get wheelsOff() { return this.wheels.filter((w) => w.detached).length; }
+
   /** restore the pristine body shape (repair) */
   repair() {
     const pos = this.bodyMesh.geometry.attributes.position;
@@ -542,6 +639,14 @@ export class Car {
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
     this.repair();          // fresh body on reset
+    // make the car whole: re-fit knocked-off wheels, delete chunk debris
+    for (const m of this.debris) {
+      m.traverse((o) => { if (o.material) { o.material.opacity = 1; o.material.transparent = false; } });
+      if (m.userData.wheelRef) { this.mesh.attach(m); m.userData.wheelRef.detached = false; }
+      else m.parent && m.parent.remove(m);
+    }
+    this.debris.length = 0;
+    for (const w of this.wheels) w.detached = false;
   }
 
   // live-tunable setters (wired to the Garage HUD sliders)
