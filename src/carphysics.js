@@ -43,6 +43,7 @@ export class Car {
     angDamp = 0.4,
     restitution = 0.2,
     friction = 0.9,
+    comY = null,           // CoG height offset from box center (null = auto low/sports-car)
     // suspension tuning (per wheel)
     wheelRadius = 0.35,
     suspRest = 0.5,        // rest length of the spring (m)
@@ -93,10 +94,14 @@ export class Car {
     // stops a hard corner from tipping the car onto its roof. We set explicit mass
     // properties instead of the uniform-density default (which puts CoM at box
     // center). Inertia = solid-box tensor about that CoM.
-    const comDrop = Math.min(0.45, hy * 0.9);        // lower CoM this far below center
     const Ixx = (mass / 3) * (hy * hy + hz * hz);
     const Iyy = (mass / 3) * (hx * hx + hz * hz);
     const Izz = (mass / 3) * (hx * hx + hy * hy);
+    this.inertia = { x: Ixx, y: Iyy, z: Izz };
+    // CoG height (offset from box center): negative = LOW = stable sports car,
+    // positive = HIGH = tippy bus/SUV. Live-adjustable via setCoM(). This is what
+    // decides how easily a hard corner tips the car.
+    this.comY = comY == null ? -Math.min(0.45, hy * 0.9) : comY;
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(pos[0], pos[1], pos[2])
       .setLinearDamping(linDamp)
@@ -104,8 +109,8 @@ export class Car {
       .setCanSleep(false)               // never sleep — we drive it every step
       .setAdditionalMassProperties(
         mass,
-        { x: 0, y: -comDrop, z: 0 },    // low center of mass
-        { x: Ixx, y: Iyy, z: Izz },
+        { x: 0, y: this.comY, z: 0 },
+        this.inertia,
         { x: 0, y: 0, z: 0, w: 1 }
       );
     this.body = world.createRigidBody(bodyDesc);
@@ -133,6 +138,14 @@ export class Car {
     nose.position.set(0, size[1] * 0.28, hz);   // +Z is forward
     nose.castShadow = true;
     this.mesh.add(nose);
+
+    // visible CoG marker (bright sphere) so the CoG height is legible while tuning
+    this.comMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 12),
+      new THREE.MeshStandardMaterial({ color: 0x33ff99, emissive: 0x0a3a22 })
+    );
+    this.comMarker.position.set(0, this.comY, 0);
+    this.mesh.add(this.comMarker);
 
     // ---- wheels: 4 corner mounts (local space) + cylinder visuals -------
     // mount slightly inboard of the shell and near its floor; +Z forward.
@@ -275,6 +288,13 @@ export class Car {
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
       w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
     }
+  }
+
+  /** live CoG height (offset from chassis center: − = low/stable, + = high/tippy) */
+  setCoM(comY) {
+    this.comY = comY;
+    this.body.setAdditionalMassProperties(this.mass, { x: 0, y: comY, z: 0 }, this.inertia, { x: 0, y: 0, z: 0, w: 1 }, true);
+    if (this.comMarker) this.comMarker.position.set(0, comY, 0);
   }
 
   /** driver input for this frame */
