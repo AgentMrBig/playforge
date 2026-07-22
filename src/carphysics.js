@@ -70,6 +70,7 @@ export class Car {
     tireGrip = 2.2,        // peak lateral grip as a multiple of vertical load
     rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
     rollResist = 0.015,    // rolling resistance fraction of load
+    aeroDrag = 16,         // N per (m/s)² — the speed governor: throttle level ⇒ cruise speed
     wheelInertia = 6,      // lumped driven-wheel inertia (higher = spins up slower)
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
@@ -103,6 +104,7 @@ export class Car {
     this.tireGrip = tireGrip;
     this.rearGripMul = rearGripMul;
     this.rollResist = rollResist;
+    this.aeroDrag = aeroDrag;
     this.wheelInertia = wheelInertia;
     this.tireStiffB = tireStiffB;
     this.tireShapeC = tireShapeC;
@@ -278,6 +280,15 @@ export class Car {
     const lv = body.linvel();
     const av = body.angvel();
 
+    // aerodynamic drag (∝ v²): the speed governor a real car has — part throttle
+    // now settles at a cruise speed instead of creeping to top speed. Same
+    // per-step force semantics as the wheel forces below.
+    const spd3 = Math.hypot(lv.x, lv.y, lv.z);
+    if (spd3 > 0.5) {
+      const fd = this.aeroDrag * spd3;
+      body.addForce({ x: -lv.x * fd, y: -lv.y * fd * 0.5, z: -lv.z * fd }, true);
+    }
+
     for (const w of this.wheels) {
       // a torn-off corner rides the bare hub: shorter rest (sits lower), heavier
       // damping (no pogo), and no tyre grip below — so it DRAGS, not springs/flips.
@@ -331,7 +342,11 @@ export class Car {
           // kinetic friction: a spinning tyre grips LESS than a hooked-up one, so once
           // it breaks loose it keeps spinning on throttle alone (sustains a burnout
           // after you let off the handbrake) — more spin, less grip
-          if (w.driven && Math.abs(w.spinRate || 0) > 4) gripBudget *= 0.45;
+          // kinetic friction while spinning — but a spinning tyre re-grips as ROAD
+          // speed rises (slip ratio falls): burnouts sustain at low speed, a full-
+          // throttle launch smokes off the line then hooks up around ~80 km/h.
+          if (w.driven && Math.abs(w.spinRate || 0) > 4)
+            gripBudget *= Math.min(1, 0.45 + (spdAbs / 3.6) / 45);
 
           // longitudinal: engine + brake + rolling resistance
           if (w.driven) fLong += this.throttle * this.engineForce * this._boost;
