@@ -18,6 +18,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         roads: resolve(__dirname, "roads.html"),
         character: resolve(__dirname, "character.html"),
+        proving: resolve(__dirname, "proving.html"),   // vehicle-physics sandbox
       },
     },
   },
