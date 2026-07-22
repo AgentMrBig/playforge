@@ -308,7 +308,7 @@ function buildHUD() {
   hud = document.createElement("div");
   hud.id = "hud";
   hud.innerHTML = `
-    <h1>THE GARAGE · STAGE 1</h1>
+    <h1>THE GARAGE · PROVING GROUND</h1>
     <div class="row"><span>fps</span><b id="h-fps">–</b></div>
     <div class="row"><span>frame ms</span><b id="h-ms">–</b></div>
     <div class="row"><span>2s peak ms</span><b id="h-peak">–</b></div>

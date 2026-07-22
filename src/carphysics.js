@@ -430,6 +430,9 @@ export class Car {
     const v = rig.visual;
     this.mesh.add(v);
     v.updateWorldMatrix(true, true);
+    // measure the tyre-contact line NOW, while the wheels are still in the model
+    // (its bbox bottom = where the tyres touch). Used to seat the body on the ground.
+    const modelMinY = new THREE.Box3().setFromObject(v).min.y;
 
     // adopt the model's tyre radius so suspension reach + contact height match
     if (rig.wheelRadius) this.wheelRadius = rig.wheelRadius;
@@ -453,10 +456,10 @@ export class Car {
       }
     }
 
-    // drop the BODY visual so its underside sits on the ground line
-    const bb = new THREE.Box3().setFromObject(v);
+    // drop the body so the TYRE-CONTACT line (measured with wheels, above) sits on
+    // the ground — not the wheels-removed body underside (that sinks the body)
     const groundY = this.wheels[0].mount.y - this.suspRest * 0.6 - this.wheelRadius;
-    v.position.y += groundY - bb.min.y;
+    v.position.y += groundY - modelMinY;
     this.modelVisual = v;
 
     // body = the largest remaining mesh (wheels are already reparented out of v)
