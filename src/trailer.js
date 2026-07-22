@@ -18,20 +18,20 @@ export class Trailer {
   constructor(world, RAPIER, { pos = [5, 1.0, -5] } = {}) {
     this.world = world;
     this.RAPIER = RAPIER;
-    this.mass = 320;
+    this.mass = 200;
     const bd = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(pos[0], pos[1], pos[2])
-      .setLinearDamping(0.1).setAngularDamping(1.1).setCanSleep(false);
+      .setLinearDamping(0.1).setAngularDamping(2.0).setCanSleep(false);   // sway damps out
     this.body = world.createRigidBody(bd);
     // density, NOT setMass: setMass left the angular inertia degenerate — solver
     // noise alone torqued the free body (it tumbled itself). Density derives a
-    // valid inertia tensor from the shape. 0.8×0.18×1.3 halves ≈ 1.5 m³ → ~320 kg.
+    // valid inertia tensor from the shape. ≈1.5 m³ → ~200 kg (light = less joint stress).
     this.collider = world.createCollider(
-      RAPIER.ColliderDesc.cuboid(0.8, 0.18, 1.3).setDensity(213).setFriction(0.8).setRestitution(0.05),
+      RAPIER.ColliderDesc.cuboid(0.8, 0.18, 1.3).setDensity(133).setFriction(0.8).setRestitution(0.05),
       this.body);
 
     this.wheelRadius = 0.3; this.suspRest = 0.35;
-    this.stiff = 9000; this.damp = 1500; this.grip = 1.9;
+    this.stiff = 6000; this.damp = 2200; this.grip = 1.9;   // near-critical: settles dead, no visible bounce
     // axle pair + jockey under the tongue tip (holds it up when unhitched)
     this.points = [
       { x: -0.78, y: 0, z: -0.45, wheel: true },
@@ -84,6 +84,16 @@ export class Trailer {
   fixedUpdate(dt) {
     const body = this.body;
     body.resetForces(false);       // Rapier forces PERSIST — clear last step's or they stack to orbit
+    // hitch SNAP: like a real safety coupling, extreme violence breaks the hitch —
+    // ends the constraint fight cleanly instead of barrel-rolling the whole rig
+    if (this.joint) {
+      const vw = body.linvel();
+      if (Math.abs(vw.y) > 12 || Math.hypot(vw.x, vw.y, vw.z) > 45) {
+        this.world.removeImpulseJoint(this.joint, true);
+        this.joint = null;
+        this.snapped = true;             // HUD/debug flag — the hitch tore off
+      }
+    }
     // watchdog: a rare intermittent solver kick can launch the trailer (still
     // hunting the root). If it ever runs away, calmly re-park it instead.
     {
