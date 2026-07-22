@@ -104,6 +104,18 @@ function buildTouchControls() {
   };
   mk("tL", "◀", "left"); mk("tR", "▶", "right");
   mk("tGas", "▲", "gas"); mk("tRev", "▼", "rev"); mk("tHb", "✋", "hb");
+  // tiny ⚙ toggle: the debug panel is hidden on phones — tap to peek at it
+  const gear = document.createElement("div");
+  gear.textContent = "⚙";
+  gear.style.cssText = "position:fixed;top:10px;left:10px;z-index:36;width:40px;height:40px;" +
+    "border-radius:50%;background:rgba(28,38,48,.5);color:#9fb4c4;display:flex;align-items:center;" +
+    "justify-content:center;font-size:22px;user-select:none;-webkit-user-select:none;touch-action:none";
+  gear.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    const hud = document.getElementById("hud");
+    if (hud) hud.style.display = hud.style.display === "block" ? "none" : "block";  // inline beats the media query
+  }, { passive: false });
+  document.body.appendChild(gear);
 }
 
 /** map current key + gamepad + touch state → car input */
@@ -602,8 +614,7 @@ function buildHUD() {
     #hud .hint{margin-top:8px;color:#6f8496;font-size:11px}
     #hud .stamp{color:#5a6b7a;font-size:10px;margin-top:6px}
     @media (max-width: 760px) {
-      #hud{width:148px;padding:6px 8px;font-size:10px;line-height:1.35}
-      #hud input,#hud label,#hud canvas,#hud .hint{display:none}
+      #hud{display:none}     /* phone: clear screen — ⚙ button brings it back */
     }`;
   document.head.appendChild(style);
 
