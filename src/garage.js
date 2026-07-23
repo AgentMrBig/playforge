@@ -20,6 +20,12 @@ const CARS = {
   muscle: { file: "models/fabpack/SK_veh_Muscle_01.fbx", len: 4.6, opts: AV },
   sedan:  { file: "models/fabpack/SK_veh_Sedan_01.fbx", len: 4.5, opts: AV },
   suv:    { file: "models/fabpack/SK_veh_SUV_01.fbx", len: 4.7, opts: AV },
+  tank:   { file: "models/military/SK_Veh_Tank_USA_01.FBX", len: 6.8,
+            opts: { textureDir: "models/military", textureFlipY: true,
+                    textureMap: { material: "T_PolygonMilitary_01_A.PNG" }, preYaw: Math.PI / 2 },
+            car: { mass: 6000, size: [3.0, 1.4, 6.4], engineForce: 22000, brakeForce: 26000,
+                   suspStiff: 150000, suspDamp: 10000, tireGrip: 2.6, maxSteer: 0.35,
+                   dragLin: 2600, dragQuad: 8, antiRoll: 120000, wheelRadius: 0.45 } },   // heavy, slow, planted
 };
 
 /**
@@ -316,7 +322,9 @@ async function main() {
   buildDummy();
 
   // ---- the car --------------------------------------------------------
-  car = new Car(world, RAPIER, { pos: [0, 3, 0] });
+  const pickEarly = new URLSearchParams(location.search).get("car") || "lowcar";
+  const carOverrides = (CARS[pickEarly] || {}).car || {};   // tank gets heavier/slower physics
+  car = new Car(world, RAPIER, { pos: [0, 3, 0], ...carOverrides });
   scene.add(car.mesh);
   skid = new SkidTrails(scene);
   fx = new VehicleFX(scene);

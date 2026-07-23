@@ -3,7 +3,7 @@ speed   ${(Math.abs(a.speedKmh)*.621371).toFixed(0)} mph
 lean    ${(a.lean*57.3).toFixed(0)}°
 steer   ${(a.steer*57.3).toFixed(1)}°
 ${a.crashed?"CRASHED — [R] reset":"WASD ride · Space rear brake · R reset"}
-build 07-23 18:23`},z={left:!1,right:!1,gas:!1,rev:!1};if("ontouchstart"in window||navigator.maxTouchPoints>0){const e=document.createElement("style");e.textContent=`
+build 07-23 18:45`},z={left:!1,right:!1,gas:!1,rev:!1};if("ontouchstart"in window||navigator.maxTouchPoints>0){const e=document.createElement("style");e.textContent=`
       .tbtn{position:fixed;z-index:35;width:76px;height:76px;border-radius:50%;
         background:rgba(28,38,48,.55);border:2px solid rgba(127,215,255,.45);color:#cfe;
         font:700 28px ui-monospace,monospace;display:flex;align-items:center;justify-content:center;
