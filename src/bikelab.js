@@ -5,6 +5,7 @@ import { loadCharacter } from "./character.js";
 import { Ragdoll } from "./ragdoll.js";
 import { initRapier } from "./phys.js";
 import { solveTwoBone } from "./ik.js";
+import { VehicleAudio } from "./vehicleaudio.js";
 
 // BIKE LAB — lean, minimal sandbox for the motorcycle controller. Same fixed-
 // step + render-interpolation discipline as the proving ground, none of the
@@ -80,6 +81,14 @@ async function main() {
   // ---- the bike ---------------------------------------------------------
   bike = new Bike(world, RAPIER, { pos: [0, 1.2, 0] });
   scene.add(bike.mesh);
+
+  // engine audio — same procedural engine as the car, smaller lung (screamier
+  // rev range comes from the lower hp + the bike's own speed profile)
+  const audio = new VehicleAudio({ hp: 180 });
+  const startAudio = () => { audio.start?.(); removeEventListener("pointerdown", startAudio); removeEventListener("touchstart", startAudio); removeEventListener("keydown", startAudio); };
+  addEventListener("pointerdown", startAudio);
+  addEventListener("touchstart", startAudio);
+  addEventListener("keydown", startAudio);
 
   // ---- the rider: the main character, seated — ragdolls off on a crash ----
   let rider = null;
@@ -258,6 +267,7 @@ async function main() {
     }
     bike.interpolate(Math.max(0, Math.min(1, acc / FIXED)));
     updateRider(dt);                      // dismount detection + bones←physics
+    audio.update(dt, bike);               // procedural engine + squeal
 
     // chase cam
     const bp = bike.mesh.position;

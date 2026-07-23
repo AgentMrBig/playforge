@@ -264,6 +264,32 @@ export class Bike {
     this.grounded = groundedCount > 0;
     this.wheelspin = this.driveSpin > 0;
     this.sliding = this.screech > 0.3;
+
+    // ---- WHEELIE / STOPPIE (stage 3) ---------------------------------------
+    // pitch about chassis-right: +right torque = nose UP (right-hand rule).
+    // Wheelie: hard throttle at street speed piles weight-transfer torque on —
+    // enough to beat the rear-contact gravity moment (~2.2 kN·m), so the front
+    // lifts and BALANCES on throttle; let off (or tap brake) and it drops.
+    // Loop-out: hold it past ~65° and you're off the back — crash, free tumble.
+    const pitch = Math.asin(THREE.MathUtils.clamp(_fwd.y, -1, 1));   // + = nose up
+    this.pitch = pitch;
+    const pitchRate = av.x * _right.x + av.y * _right.y + av.z * _right.z;
+    if (!this.crashed) {
+      const rearGrounded = this.wheels[1].grounded;
+      const frontGrounded = this.wheels[0].grounded;
+      // NOTE probed sign: −right torque = nose UP on this frame (z-fwd, x-right)
+      let tq = 0;
+      if (this.throttle > 0.85 && rearGrounded && spd > 1.5 && spd < 24)
+        tq -= 3400 * this.throttle * (1 - spd / 26) * Math.max(0, 1 - pitch / 1.1);
+      // stoppie: hard FRONT brake at speed vaults the tail up (nose-down torque)
+      if (this.brakeInput > 0.85 && frontGrounded && spd > 7)
+        tq += 2800 * Math.min(1, spd / 14) * Math.max(0, 1 + pitch / 0.8);
+      tq -= 520 * pitchRate;                       // rider modulation (keeps it rideable)
+      if (tq !== 0)
+        body.addTorque({ x: _right.x * tq, y: _right.y * tq, z: _right.z * tq }, true);
+      // over the balance point → looped out; past a stoppie endo → highside
+      if (pitch > 1.15 || pitch < -0.95) this.crashed = true;
+    }
   }
 
   /** RENDER: interpolate + pose the visual (wheels along travel, fork steer) */
