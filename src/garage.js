@@ -1001,6 +1001,9 @@ function setupCameraInput(dom) {
     if (cam.mode === "chase") {
       cam.yaw -= dx * 0.005;
       cam.pitch = Math.max(-0.25, Math.min(1.25, cam.pitch + dy * 0.005));
+    } else if (cam.mode === "cockpit") {
+      cam.cockYaw -= dx * 0.004;
+      cam.cockPitch = Math.max(-0.8, Math.min(0.8, cam.cockPitch - dy * 0.004));
     } else {
       cam.freeYaw -= dx * 0.004;
       cam.freePitch = Math.max(-1.45, Math.min(1.45, cam.freePitch - dy * 0.004));
@@ -1015,20 +1018,77 @@ function setupCameraInput(dom) {
 }
 
 function toggleFreeCam() {
+  // [C] cycles chase → COCKPIT → free → chase
   if (cam.mode === "chase") {
+    cam.mode = "cockpit";
+    cam.cockYaw = 0; cam.cockPitch = 0;
+    cam._baseFov = camera.fov; camera.fov = 74; camera.updateProjectionMatrix();
+  } else if (cam.mode === "cockpit") {
     cam.mode = "free";
+    camera.up.set(0, 1, 0);
+    if (cam._baseFov) { camera.fov = cam._baseFov; camera.updateProjectionMatrix(); }
     cam.freePos.copy(camera.position);
-    // aim the free cam where the chase cam was looking
     _cfwd.copy(cam.look).sub(camera.position).normalize();
     cam.freeYaw = Math.atan2(_cfwd.x, _cfwd.z);
     cam.freePitch = Math.asin(Math.max(-1, Math.min(1, _cfwd.y)));
   } else {
     cam.mode = "chase";
+    if (cam._baseFov) { camera.fov = cam._baseFov; camera.updateProjectionMatrix(); }
   }
+}
+
+// ---- COCKPIT CAM (Erik #3): sitting in the driver's seat, camera IS the
+// driver's head — G-force sway (head lags acceleration on a spring), speed
+// vibration, look-into-the-turn, mouse look-around, crash shake. ----------
+const _hq = new THREE.Quaternion();
+const _hup = new THREE.Vector3();
+const _hoff = new THREE.Vector3();
+function updateCockpitCam(dt) {
+  const m = car.mesh;                       // interpolated pose (smooth at any fps)
+  cam.sway = cam.sway || new THREE.Vector3();
+  cam.pv = cam.pv || new THREE.Vector3();
+  const v = car.body.linvel();
+  // world acceleration → car-local (head lags it: brake = lean forward, corner = lean out)
+  _hoff.set((v.x - cam.pv.x) / Math.max(dt, 1e-3), 0, (v.z - cam.pv.z) / Math.max(dt, 1e-3));
+  cam.pv.set(v.x, v.y, v.z);
+  _hq.copy(m.quaternion).invert();
+  _hoff.applyQuaternion(_hq);
+  _hoff.x = THREE.MathUtils.clamp(-_hoff.x * 0.006, -0.09, 0.09);
+  _hoff.z = THREE.MathUtils.clamp(-_hoff.z * 0.006, -0.11, 0.07);
+  _hoff.y = 0;
+  cam.sway.lerp(_hoff, Math.min(1, 7 * dt));
+  // head position: driver's seat + sway + speed vibration + crash shake
+  const spd = Math.abs(car.speedKmh);
+  const vib = spd > 25 ? (spd / 900) : 0;
+  _cdes.set(0.37 + cam.sway.x, 0.3, 0.12 + cam.sway.z);   // seat height (origin = chassis CENTER)
+  _cdes.x += (Math.random() - 0.5) * vib;
+  _cdes.y += (Math.random() - 0.5) * vib * 0.7 + ((car.bumpPulse || 0) > 0 ? (Math.random() - 0.5) * 0.04 : 0);
+  m.localToWorld(_cdes);
+  if ((cam.shakeAmt || 0) > 0.01) {
+    _cdes.x += (Math.random() - 0.5) * cam.shakeAmt * 0.2;
+    _cdes.y += (Math.random() - 0.5) * cam.shakeAmt * 0.15;
+    cam.shakeAmt *= Math.pow(0.02, dt);
+  }
+  camera.position.copy(_cdes);
+  // look: car-forward + mouse offset + a natural glance INTO the turn
+  if (!cam.drag) cam.cockYaw = lerpAngle(cam.cockYaw, 0, Math.min(1, 3 * dt));   // recenter
+  const turnGlance = THREE.MathUtils.clamp(car.body.angvel().y * 0.14, -0.3, 0.3);
+  _hq.copy(m.quaternion);
+  _hup.set(0, 1, 0).applyQuaternion(_hq);
+  _hq.premultiply(new THREE.Quaternion().setFromAxisAngle(_hup, cam.cockYaw + turnGlance));
+  _cfwd.set(Math.sin(0), 0, 1).applyQuaternion(_hq);
+  _cfwd.y += cam.cockPitch;
+  _clook.copy(camera.position).add(_cfwd);
+  // up vector: mostly the CAR's up (you roll with the crash) blended toward
+  // world-up so normal driving doesn't feel seasick
+  camera.up.copy(_hup).lerp(new THREE.Vector3(0, 1, 0), 0.35).normalize();
+  camera.lookAt(_clook);
 }
 
 function updateCamera(dt) {
   if (cam.mode === "free") return updateFreeCam(dt);
+  if (cam.mode === "cockpit") return updateCockpitCam(dt);
+  camera.up.set(0, 1, 0);                  // leaving cockpit: level the horizon
   const p = car.mesh.position;
   const v = car.body.linvel();
   const speed = Math.hypot(v.x, v.z);
