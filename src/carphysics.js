@@ -97,7 +97,7 @@ export class Car {
     dentDepth = 0.7,         // base dent depth at full severity (m)
     dentMax = 1.15,          // max total displacement any vertex can accumulate (m) — pancake territory
     // mechanical damage (Stage 6)
-    wheelDetachForce = 1100000, // contact force to tear a wheel off (~50 km/h corner hit)
+    wheelDetachForce = 900000,  // contact force to tear a wheel off (~41 km/h hit)
     chunkForce = 1600000,       // force to break off body chunks (~72 km/h)
     glassBreakForce = 700000,   // force to shatter the glass (~32 km/h)
   } = {}) {
@@ -540,10 +540,15 @@ export class Car {
       _lp.copy(this.bodyCenter).addScaledVector(_ld, -this.dentRadius / s);
     }
 
-    // push toward the body's center → the panel caves as a unit (no per-vertex pinch)
-    _ld.copy(this.bodyCenter).sub(_lp);
-    if (_ld.lengthSq() < 1e-9) _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1);
+    // crush along the IMPACT direction — the way the metal was actually hit. A
+    // head-on folds the nose straight back (not a sideways shear toward center).
+    _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1);
+    if (_ld.lengthSq() < 1e-6) _ld.copy(this.bodyCenter).sub(_lp);
     _ld.normalize();
+    // safety: the force direction must point INTO the body, whichever way Rapier
+    // ordered the contact pair
+    _off.copy(this.bodyCenter).sub(_lp);
+    if (_ld.dot(_off) < 0) _ld.negate();
 
     // D1: which panel did we hit? Deform stays inside that zone (a bumper hit
     // can't bleed into the hood even if the radius reaches it).
@@ -570,6 +575,10 @@ export class Car {
         if (d >= radius) continue;
         const fall = 1 - d / radius;                          // deepest at the epicenter
         _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
+        const jit = 0.22 * depth * fall * zw;                 // crumple texture — bent metal is irregular
+        _vp.x += (Math.random() - 0.5) * jit;
+        _vp.y += (Math.random() - 0.5) * jit;
+        _vp.z += (Math.random() - 0.5) * jit;
         _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
         if (_off.length() > maxD) _off.setLength(maxD);       // accumulation cap
         pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
@@ -690,7 +699,7 @@ export class Car {
 
     // wheel tear-off: nearest still-attached wheel within reach of the contact
     if (mag >= this.wheelDetachForce) {
-      let near = null, nd = 1.6;
+      let near = null, nd = 1.9;
       for (const w of this.wheels) {
         if (w.detached || !w.modelWheel) continue;
         const d = w.modelWheel.getWorldPosition(_dw).distanceTo(_dp);
