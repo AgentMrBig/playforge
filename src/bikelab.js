@@ -4,6 +4,7 @@ import { Bike } from "./bikephysics.js";
 import { loadCharacter } from "./character.js";
 import { Ragdoll } from "./ragdoll.js";
 import { initRapier } from "./phys.js";
+import { solveTwoBone } from "./ik.js";
 
 // BIKE LAB — lean, minimal sandbox for the motorcycle controller. Same fixed-
 // step + render-interpolation discipline as the proving ground, none of the
@@ -86,18 +87,31 @@ async function main() {
     textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
   }).then(async (ch) => {
     await initRapier();                     // ragdoll.js reads phys.js's R handle
-    // seat him on the bike, inside the lean group so he leans with it
-    ch.visual.position.set(0, 0.42, -0.32);
+    // seat him on the bike, inside the lean group so he leans with it.
+    // origin is at his FEET — drop it so his butt lands ON the seat (hips y≈0.35
+    // in lean-group space — verified by bone-position probe, not eyeball)
+    ch.visual.position.set(0, -0.67, -0.30);
     bike.leanGroup.add(ch.visual);
-    // static riding pose on the real bones (no sit clip in the pack): crouch the
-    // legs onto the pegs, reach the arms to the bars, tuck the torso forward
+    // riding pose: coarse FK for legs/torso (probed signs), then two-bone IK
+    // reaches the hands to the bar grips — axis-agnostic, no more sign guessing
     const B = ch.bones;
     const rot = (n, x, y = 0, z = 0) => { if (B[n]) B[n].rotation.set(B[n].rotation.x + x, B[n].rotation.y + y, B[n].rotation.z + z); };
-    rot("LeftUpLeg", -0.95, 0, 0.12); rot("RightUpLeg", -0.95, 0, -0.12);
-    rot("LeftLeg", 1.25); rot("RightLeg", 1.25);
+    rot("LeftUpLeg", -1.35, 0, 0.14); rot("RightUpLeg", -1.35, 0, -0.14);
+    rot("LeftLeg", -1.35); rot("RightLeg", -1.35);
     rot("Spine", 0.35); rot("Spine1", 0.2); rot("Neck", -0.3);
-    rot("LeftArm", 0.85, 0, 0.25); rot("RightArm", 0.85, 0, -0.25);
-    rot("LeftForeArm", 0.35); rot("RightForeArm", 0.35);
+    bike.mesh.updateWorldMatrix(true, true);
+    const L = (x, y, z) => bike.leanGroup.localToWorld(new THREE.Vector3(x, y, z));
+    for (const s of [1, -1]) {
+      const pre = s > 0 ? "Left" : "Right";
+      if (B[pre + "Arm"] && B[pre + "ForeArm"] && B[pre + "Hand"])
+        solveTwoBone({ root: B[pre + "Arm"], mid: B[pre + "ForeArm"], eff: B[pre + "Hand"],
+          target: L(s * 0.28, 0.52, 0.58), pole: L(s * 0.7, 0.3, 0.1), iterations: 8 });
+    }
+    // snapshot the riding pose — ragdoll exit() restores bone POSITIONS but the
+    // quaternions keep the death pose; remount puts the whole pose back
+    const poseSnap = [];
+    ch.visual.traverse((o) => { if (o.isBone) poseSnap.push([o, o.quaternion.clone(), o.position.clone()]); });
+    ch._poseSnap = poseSnap;
     // ragdoll ignores the chassis bit — he flies OFF the bike, not into it
     const rag = new Ragdoll(ch.bones, { world }, { collisionGroups: (0x0002 << 16) | (0xffff & ~0x0004) });
     rider = { ch, rag, mounted: true };
@@ -130,7 +144,8 @@ async function main() {
     rider.rag.exit();
     const v = rider.ch.visual;
     bike.leanGroup.attach(v);
-    v.position.set(0, 0.42, -0.32); v.rotation.set(0, 0, 0); v.scale.setScalar(v.scale.x);
+    v.position.set(0, -0.67, -0.30); v.rotation.set(0, 0, 0); v.scale.setScalar(v.scale.x);
+    for (const [o, q, p] of rider.ch._poseSnap) { o.quaternion.copy(q); o.position.copy(p); }
     rider.mounted = true;
   };
   window.__bikeRemount = remount;
@@ -150,6 +165,43 @@ async function main() {
       `build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}`;
   };
 
+  // ---- mobile touch controls (same pattern as the proving ground) ---------
+  const touch = { left: false, right: false, gas: false, rev: false };
+  if (("ontouchstart" in window) || navigator.maxTouchPoints > 0) {
+    const css = document.createElement("style");
+    css.textContent = `
+      .tbtn{position:fixed;z-index:35;width:76px;height:76px;border-radius:50%;
+        background:rgba(28,38,48,.55);border:2px solid rgba(127,215,255,.45);color:#cfe;
+        font:700 28px ui-monospace,monospace;display:flex;align-items:center;justify-content:center;
+        user-select:none;-webkit-user-select:none;touch-action:none}
+      .tbtn.on{background:rgba(80,140,190,.8)}
+      #tL{left:14px;bottom:92px} #tR{left:106px;bottom:92px}
+      #tGas{right:14px;bottom:160px} #tRev{right:14px;bottom:64px} #tRst{right:108px;bottom:112px}`;
+    document.head.appendChild(css);
+    const mk = (id, txt, key, tap = null) => {
+      const el = document.createElement("div");
+      el.id = id; el.className = "tbtn"; el.textContent = txt;
+      document.body.appendChild(el);
+      el.addEventListener("touchstart", (e) => { e.preventDefault(); if (tap) return tap(); touch[key] = true; el.classList.add("on"); }, { passive: false });
+      const off = (e) => { if (e) e.preventDefault(); touch[key] = false; el.classList.remove("on"); };
+      el.addEventListener("touchend", off); el.addEventListener("touchcancel", off);
+    };
+    mk("tL", "◀", "left"); mk("tR", "▶", "right");
+    mk("tGas", "▲", "gas"); mk("tRev", "▼", "rev");
+    mk("tRst", "↺", null, () => { bike.reset(); remount(); });
+    hud.style.display = "none";                 // phone: HUD hidden, ⚙ peeks
+    const gear = document.createElement("div");
+    gear.textContent = "⚙";
+    gear.style.cssText = "position:fixed;top:10px;left:10px;z-index:36;width:40px;height:40px;" +
+      "border-radius:50%;background:rgba(28,38,48,.5);color:#9fb4c4;display:flex;align-items:center;" +
+      "justify-content:center;font-size:22px;user-select:none;-webkit-user-select:none;touch-action:none";
+    gear.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      hud.style.display = hud.style.display === "none" ? "block" : "none";
+    }, { passive: false });
+    document.body.appendChild(gear);
+  }
+
   addEventListener("keydown", (e) => { keys[e.code] = true; if (e.code === "KeyR") { bike.reset(); remount(); } });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
   addEventListener("resize", () => {
@@ -159,7 +211,14 @@ async function main() {
 
   // debug handle — same manual-step pattern as __garage (headless rAF ~0)
   window.__bike = {
-    world, bike, scene, camera, RAPIER,
+    world, bike, scene, camera, RAPIER, renderer,
+    snap(wpx = 480, hpx = 640) {          // headless visual proof (rAF ~0 in agent pane)
+      renderer.render(scene, camera);
+      const c2 = document.createElement("canvas");
+      c2.width = wpx; c2.height = hpx;
+      c2.getContext("2d").drawImage(renderer.domElement, 0, 0, wpx, hpx);
+      return c2.toDataURL("image/jpeg", 0.72);
+    },
     step(n = 1) {
       for (let i = 0; i < n; i++) {
         bike.snapshotPrev(); bike.fixedUpdate(FIXED); world.step(); bike.snapshotCurr();
@@ -180,10 +239,13 @@ async function main() {
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     acc += dt;
 
-    // input
-    const steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
-    const thr = keys.KeyW ? 1 : 0;
-    const brk = keys.KeyS ? 1 : 0;
+    // input (keys + touch)
+    let steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+    let thr = keys.KeyW ? 1 : 0;
+    let brk = keys.KeyS ? 1 : 0;
+    if (touch.left || touch.right) steer = (touch.left ? 1 : 0) - (touch.right ? 1 : 0);
+    if (touch.gas) thr = 1;
+    if (touch.rev) brk = 1;
     bike.setInput({ throttle: thr, steer, brake: brk, handbrake: !!keys.Space });
 
     while (acc >= FIXED) {
