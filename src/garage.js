@@ -622,6 +622,8 @@ function frame() {
 
   lastInput = readInput();
   car.setInput(lastInput);
+  // gear-shift latency: torque cut exactly while the audio gearbox is mid-shift
+  car.shiftCut = !!(audio.engine && audio.engine.running && audio.engine._shiftT > 0);
 
   let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
@@ -799,6 +801,7 @@ function buildHUD() {
     <div class="row"><span>wheels grounded</span><b id="h-wg">–</b></div>
     <div class="row"><span>dents</span><b id="h-dent">0</b></div>
     <div class="row"><span>wheels off / debris</span><b id="h-dmg">0 / 0</b></div>
+    <div class="row"><span>zones F/R/L/Ri/Ro</span><b id="h-zone">100 100 100 100 100</b></div>
     <div class="row"><span>input thr/brk/str</span><b id="h-inp">0 / 0 / 0</b></div>
     <label>spring stiffness <span class="val" id="v-k">30000</span></label>
     <input id="s-k" type="range" min="5000" max="80000" step="500" value="30000">
@@ -871,6 +874,10 @@ function updateHUD() {
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
   set("h-dmg", car.wheelsOff + " / " + car.debris.length);
+  if (car.zoneHealth) {
+    const z = car.zoneHealth;
+    set("h-zone", [z.front, z.rear, z.left, z.right, z.roof].map((v) => Math.round(v * 100)).join(" "));
+  }
   if (drag.active) dragUI(`⏱ ${drag.t.toFixed(2)}s · ${Math.round(car.speedKmh)} km/h`);
   set("h-inp", Math.round(lastInput.throttle * 100) + " / " + Math.round(lastInput.brake * 100) + " / " + Math.round(lastInput.steer * 100));
   set("h-eng", Math.round(audio.rpm) + " / " + car.screech.toFixed(2));

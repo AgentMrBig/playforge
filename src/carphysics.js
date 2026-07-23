@@ -46,6 +46,18 @@ const _dp = new THREE.Vector3();       // debris: impact point
 const _dc = new THREE.Vector3();       // debris: car world center
 const _dw = new THREE.Vector3();       // debris: wheel world pos
 const ANTIROLL_AXLES = [[0, 1], [2, 3]];   // [FL,FR], [RL,RR]
+
+// damage zones (D1): stable panel identity from a one-time spatial partition of
+// the welded body mesh in its own local space — a bumper hit can't dent the roof.
+export const ZONES = ["front", "rear", "left", "right", "roof", "center"];
+function zoneOf(nx, ny, nz) {              // normalized [-1,1] local coords
+  if (nz > 0.55) return 0;                 // front
+  if (nz < -0.55) return 1;                // rear
+  if (ny > 0.6) return 4;                  // roof
+  if (nx < -0.35) return 2;                // left
+  if (nx > 0.35) return 3;                 // right
+  return 5;                                // center/cabin
+}
 export class Car {
   constructor(world, RAPIER, {
     pos = [0, 3, 0],
@@ -190,6 +202,9 @@ export class Car {
     this.bodyMesh = bodyMesh;
     this.origPos = Float32Array.from(bodyGeo.attributes.position.array);   // pristine, for repair
     this.bodyCenter = new THREE.Vector3(0, 0, 0);   // deform pushes verts toward here (local)
+    this.shiftCut = false;                          // torque cut during gear shifts
+    bodyGeo.computeBoundingBox();
+    this._buildZones();                             // zones work on the placeholder box too
     const nose = new THREE.Mesh(
       new THREE.BoxGeometry(size[0] * 0.55, size[1] * 0.5, size[2] * 0.12),
       new THREE.MeshStandardMaterial({ color: 0xffdd33 })
@@ -351,7 +366,9 @@ export class Car {
             gripBudget *= Math.min(1, 0.45 + (spdAbs / 3.6) / 45);
 
           // longitudinal: engine + brake + rolling resistance
-          if (w.driven) fLong += this.throttle * this.engineForce * this._boost;
+          // gear-shift latency: torque cut synced to the audio gearbox's shift dip
+          const driveMul = this._boost * (this.shiftCut ? 0.15 : 1);
+          if (w.driven) fLong += this.throttle * this.engineForce * driveMul;
           // burnout: brake the FRONTS (hold the car); drift: brake the rears
           // in burnout mode ALL braking goes to the FRONTS (hold the car) — the rears
           // must stay free to spin; otherwise brakeInput brakes all four as normal
@@ -377,7 +394,7 @@ export class Car {
           // faster than the ground (real traction break). Chassis force stays grip-
           // limited above; this is the surplus torque winding the wheel. -----------
           if (w.driven) {
-            const driveForce = this.throttle * this.engineForce * this._boost;
+            const driveForce = this.throttle * this.engineForce * driveMul;
             // Flooring AGAINST the direction of travel: the tyre fights the ground and
             // breaks loose immediately — the spin you get dropping it into reverse at
             // speed. Now symmetric: flooring W while rolling backwards spins them too,
@@ -528,6 +545,11 @@ export class Car {
     if (_ld.lengthSq() < 1e-9) _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1);
     _ld.normalize();
 
+    // D1: which panel did we hit? Deform stays inside that zone (a bumper hit
+    // can't bleed into the hood even if the radius reaches it).
+    const zn = this._zoneNorm;
+    const hitZone = zn ? zoneOf((_lp.x - zn.cx) / zn.hx, (_lp.y - zn.cy) / zn.hy, (_lp.z - zn.cz) / zn.hz) : -1;
+
     const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
     const radius = (this.dentRadius / s) * (0.5 + sev);    // radius/depth in local units
     const depth = (this.dentDepth / s) * sev;
@@ -537,6 +559,7 @@ export class Car {
     const op = this.origPos;
     let touched = false;
     for (let i = 0; i < pos.count; i++) {
+      if (this.vertexZone && hitZone >= 0 && this.vertexZone[i] !== hitZone) continue;   // D1 zone bound
       _vp.fromBufferAttribute(pos, i);
       const d = _vp.distanceTo(_lp);
       if (d >= radius) continue;
@@ -553,6 +576,7 @@ export class Car {
       this.bodyMesh.geometry.computeVertexNormals();        // dents catch light correctly
       this.dents++;
     }
+    return touched && hitZone >= 0 ? ZONES[hitZone] : null; // which panel took it
   }
 
   /**
@@ -619,6 +643,7 @@ export class Car {
       this.origPos = Float32Array.from(best.geometry.attributes.position.array);
       this.bodyCenter = best.geometry.boundingBox.getCenter(new THREE.Vector3());
       this.dents = 0;
+      this._buildZones();                                 // D1: per-vertex panel identity
     }
     // find glass materials (named "glass" or transparent) so we can shatter them
     this.glassMats = []; this.glassBroken = false;
@@ -641,7 +666,12 @@ export class Car {
    * nearest wheel (with a real handling consequence) or break off a body chunk.
    */
   impact(worldPoint, mag, worldDir) {
-    this.deform(worldPoint, mag, worldDir);     // crumple (also syncs mesh pose)
+    const zone = this.deform(worldPoint, mag, worldDir);   // crumple (also syncs mesh pose)
+    // D1: dock the hit panel's health — feeds frame bend (D2) + mechanical states (D3)
+    if (zone && this.zoneHealth) {
+      const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
+      this.zoneHealth[zone] = Math.max(0, this.zoneHealth[zone] - (0.1 + sev * 0.3));
+    }
     if (!worldPoint) return;
     this.mesh.updateWorldMatrix(true, true);     // refresh WHEEL matrices for the distance test
     _dp.set(worldPoint.x, worldPoint.y, worldPoint.z);
@@ -764,6 +794,28 @@ export class Car {
 
   get wheelsOff() { return this.wheels.filter((w) => w.detached).length; }
 
+  /**
+   * D1: one-time spatial partition of the body mesh into damage zones. Each vertex
+   * gets a stable panel id from its normalized position in the body's own bbox;
+   * per-zone health drives the mechanical consequences (D2/D3).
+   */
+  _buildZones() {
+    const geo = this.bodyMesh.geometry;
+    const bb = geo.boundingBox;
+    const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
+    const hx = Math.max(0.001, (bb.max.x - bb.min.x) / 2);
+    const hy = Math.max(0.001, (bb.max.y - bb.min.y) / 2);
+    const hz = Math.max(0.001, (bb.max.z - bb.min.z) / 2);
+    this._zoneNorm = { cx, cy, cz, hx, hy, hz };
+    const pos = geo.attributes.position;
+    this.vertexZone = new Uint8Array(pos.count);
+    for (let i = 0; i < pos.count; i++) {
+      this.vertexZone[i] = zoneOf(
+        (pos.getX(i) - cx) / hx, (pos.getY(i) - cy) / hy, (pos.getZ(i) - cz) / hz);
+    }
+    this.zoneHealth = { front: 1, rear: 1, left: 1, right: 1, roof: 1, center: 1 };
+  }
+
   /** restore the pristine body shape (repair) */
   repair() {
     const pos = this.bodyMesh.geometry.attributes.position;
@@ -836,6 +888,8 @@ export class Car {
         w.detached = false;
       }
     }
+    // panels good as new
+    if (this.zoneHealth) for (const k in this.zoneHealth) this.zoneHealth[k] = 1;
     // un-shatter the glass
     if (this.glassBroken) {
       for (const m of this.glassMats) { m.visible = true; m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
