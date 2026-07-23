@@ -494,7 +494,7 @@ export class Car {
   /** position wheel visuals along their travel + steer + roll (local space) */
   _placeWheels() {
     for (const w of this.wheels) {
-      if (w.detached) continue;                 // it's loose debris now — don't move it
+      if (w.detached && !w._rfit) continue;     // loose debris — unless the replay re-fitted it
       w.mesh.position.set(w.mount.x, w.mount.y - w.dist, w.mount.z);
       w.mesh.rotation.set(w.spin, w.front ? this.steer : 0, 0, "YXZ");
       // model wheels: same suspension-driven placement as the cylinders so they
@@ -551,7 +551,7 @@ export class Car {
     const hitZone = zn ? zoneOf((_lp.x - zn.cx) / zn.hx, (_lp.y - zn.cy) / zn.hy, (_lp.z - zn.cz) / zn.hz) : -1;
 
     const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
-    const radius = (this.dentRadius / s) * (0.5 + sev);    // radius/depth in local units
+    const radius = (this.dentRadius / s) * (0.5 + sev * 1.7);   // big hits reach the hood
     const depth = (this.dentDepth / s) * sev;
     const maxD = this.dentMax / s;
 
@@ -561,7 +561,7 @@ export class Car {
     for (let i = 0; i < pos.count; i++) {
       // D1 soft zone bound: full crumple in the hit panel, 30% spillover into
       // neighbours (fenders/hood catch real deformation without losing identity)
-      const zw = (!this.vertexZone || hitZone < 0 || this.vertexZone[i] === hitZone) ? 1 : 0.3;
+      const zw = (!this.vertexZone || hitZone < 0 || this.vertexZone[i] === hitZone) ? 1 : 0.5;
       _vp.fromBufferAttribute(pos, i);
       const d = _vp.distanceTo(_lp);
       if (d >= radius) continue;
@@ -885,9 +885,11 @@ export class Car {
       if (w.detached && w.modelWheel) {
         w.modelWheel.traverse((o) => { if (o.material) { o.material.opacity = 1; o.material.transparent = false; } });
         this.mesh.add(w.modelWheel);      // back on the car; _placeWheels re-seats it
+        w.modelWheel.visible = true;
         w.modelWheel.rotation.set(0, 0, 0);                        // clear debris tumble (was canting it)
         if (w._wheelScale) w.modelWheel.scale.copy(w._wheelScale); // restore exact scale
         w.detached = false;
+        w._rfit = false;
       }
     }
     // panels good as new

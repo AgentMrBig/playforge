@@ -455,6 +455,19 @@ function startReplay() {
   replay.fStart = replay.f - replay.len;
   car.repair();
   glassVisual(false);
+  // rewind the WHEELS + hide wreckage debris: the car replays WHOLE, not wrecked
+  for (const m of car.debris) m.visible = false;
+  for (const w of car.wheels) {
+    if (w.detached && w.modelWheel) {
+      const di = car.debris.indexOf(w.modelWheel);
+      if (di >= 0) car.debris.splice(di, 1);
+      car.mesh.add(w.modelWheel);
+      w.modelWheel.visible = true;
+      w.modelWheel.rotation.set(0, 0, 0);
+      if (w._wheelScale) w.modelWheel.scale.copy(w._wheelScale);
+      w._rfit = true;                       // placed from the recording during playback
+    }
+  }
   for (const ev of replay.events) if (ev.f < replay.fStart) applyDamageEvent(ev, false);  // pre-window damage stays
   replay.evtQueue = replay.events.filter((ev) => ev.f >= replay.fStart);
   replay.evtIdx = 0;
@@ -465,6 +478,11 @@ function stopReplay() {
   // fast-forward any un-played damage so the car leaves the replay in its true state
   while (replay.evtIdx < replay.evtQueue.length) applyDamageEvent(replay.evtQueue[replay.evtIdx++], false);
   glassVisual(!!car.glassBroken);
+  for (const m of car.debris) m.visible = true;
+  for (const w of car.wheels) if (w._rfit) {
+    w._rfit = false;
+    if (w.detached && w.modelWheel) w.modelWheel.visible = false;   // wheel's truly gone
+  }
   showReplayUI(false);
 }
 
@@ -649,7 +667,7 @@ function updateReplay(dt) {
   car.mesh.position.lerpVectors(_rp1, _rp2, frac);               // lerped = smooth slow-mo
   car.mesh.quaternion.copy(_rq1).slerp(_rq2, frac);
   const d = replay.data;
-  for (let k = 0; k < 4; k++) { const w2 = car.wheels[k]; if (w2.detached) continue; w2.spin = d[idx + 7 + k]; w2.dist = d[idx + 11 + k]; }
+  for (let k = 0; k < 4; k++) { const w2 = car.wheels[k]; if (w2.detached && !w2._rfit) continue; w2.spin = d[idx + 7 + k]; w2.dist = d[idx + 11 + k]; }
   car.steer = d[idx + 15];
   car._placeWheels();
   // cinematic slow orbit around the wreck
@@ -891,14 +909,40 @@ function buildHUD() {
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
 
-  bindSlider("s-k", "v-k", (v) => { car.suspStiff = v; }, 0);
+  bindSlider("s-k", "v-k", (v) => {
+    // stiffer springs compress less — compensate rest length so ride height stays put
+    car.suspStiff = v;
+    const rest = parseFloat(document.getElementById("s-rest").value);
+    car.suspRest = rest + car.mass * 5 * (1 / v - 1 / 30000);
+  }, 0);
   bindSlider("s-d", "v-d", (v) => { car.suspDamp = v; }, 0);
-  bindSlider("s-rest", "v-rest", (v) => { car.suspRest = v; });
+  bindSlider("s-rest", "v-rest", (v) => { car.suspRest = v + car.mass * 5 * (1 / car.suspStiff - 1 / 30000); });
   bindSlider("s-eng", "v-eng", (v) => { car.engineForce = v; }, 0);
   bindSlider("s-grip", "v-grip", (v) => { car.tireGrip = v; });
   bindSlider("s-rg", "v-rg", (v) => { car.rearGripMul = v; });
   bindSlider("s-cog", "v-cog", (v) => car.setCoM(v));
   bindSlider("s-arb", "v-arb", (v) => { car.antiRoll = v; }, 0);
+
+  // save current sliders as defaults (localStorage) + restore them on load
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "💾 save as default";
+  saveBtn.style.cssText = "margin-top:8px;width:100%;background:#1c2a38;color:#7fd7ff;border:1px solid #2c3a48;" +
+    "border-radius:6px;padding:5px;font:11px ui-monospace,monospace;cursor:pointer";
+  saveBtn.addEventListener("click", () => {
+    const o = {};
+    hud.querySelectorAll('input[type="range"]').forEach((el) => { o[el.id] = el.value; });
+    localStorage.setItem("pg.defaults", JSON.stringify(o));
+    saveBtn.textContent = "✔ saved";
+    setTimeout(() => (saveBtn.textContent = "💾 save as default"), 1200);
+  });
+  hud.appendChild(saveBtn);
+  try {
+    const saved = JSON.parse(localStorage.getItem("pg.defaults") || "null");
+    if (saved) for (const [id, v] of Object.entries(saved)) {
+      const el = document.getElementById(id);
+      if (el) { el.value = v; el.dispatchEvent(new Event("input")); }
+    }
+  } catch (e) { /* corrupt save — ignore */ }
 
   ftCanvas = document.getElementById("ftg");
   ftCtx = ftCanvas.getContext("2d");
