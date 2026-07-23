@@ -44,10 +44,11 @@ export class VehicleFX {
             st.acc -= 1;
             const gray = (0.74 - h * 0.34) + Math.random() * 0.1;   // darker as it heats
             this.smoke.spawn({
+              // HEAVY smoke: barely rises, hangs low and rolls (real burnout smoke)
               x: w.cx + (Math.random() - 0.5) * 0.35, y: 0.12, z: w.cz + (Math.random() - 0.5) * 0.35,
-              vx: (Math.random() - 0.5) * 1.5, vy: 0.5 + Math.random() * 0.9 + h * 0.7, vz: (Math.random() - 0.5) * 1.5,
+              vx: (Math.random() - 0.5) * 1.6, vy: 0.12 + Math.random() * 0.3 + h * 0.25, vz: (Math.random() - 0.5) * 1.6,
               size: 0.5 + h * 0.5, grow: 2.8 + Math.random() * 1.6 + h * 2.2, r: gray, g: gray, b: gray,
-              a: 0.1 + inten * 0.26 + h * 0.16, life: 1.7 + Math.random() * 1.5 + h * 1.2, drag: 1.05, gravity: 0.32,
+              a: 0.1 + inten * 0.26 + h * 0.16, life: 2.2 + Math.random() * 1.8 + h * 1.4, drag: 1.35, gravity: 0.03,
             });
           }
         }
@@ -58,8 +59,29 @@ export class VehicleFX {
         for (let k = 0; k < n; k++) this._spark(w.cx, w.cy ?? 0.1, w.cz);
       }
     }
+    this._carAvoid(car);       // smoke flows AROUND the body, not through it
     this.smoke.update(dt);
     this.sparks.update(dt);
+  }
+
+  /** cheap car-aware smoke: particles inside the car's ellipsoid slide out sideways */
+  _carAvoid(car) {
+    const t = car.body.translation();
+    const cx = t.x, cy = t.y + 0.35, cz = t.z, R = 2.2, R2 = R * R;
+    const P = this.smoke;
+    for (let i = 0; i < P.max; i++) {
+      if (P.life[i] <= 0) continue;
+      const dx = P.x[i] - cx, dy = (P.y[i] - cy) * 1.9, dz = P.z[i] - cz;   // squashed → ellipsoid
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < R2 && d2 > 1e-4) {
+        const d = Math.sqrt(d2), push = (R - d) / R;
+        const ux = dx / d, uz = dz / d;
+        P.x[i] += ux * push * 0.3;
+        P.z[i] += uz * push * 0.3;
+        P.vx[i] += ux * push * 0.06;
+        P.vz[i] += uz * push * 0.06;
+      }
+    }
   }
 
   _spark(x, y, z) {
@@ -80,7 +102,7 @@ export class VehicleFX {
       for (const side of [-1, 1]) {
         _p.set(side * 0.38, -0.5, -hz).applyQuaternion(m.quaternion).add(m.position);
         _d.set(side * 0.12, 0.12, -1).applyQuaternion(m.quaternion);   // out the back
-        const n = 5 + Math.floor(Math.random() * 4);
+        const n = 9 + Math.floor(Math.random() * 6);   // more fire (Erik)
         for (let i = 0; i < n; i++) {
           const spd = 3 + Math.random() * 5;
           this.sparks.spawn({

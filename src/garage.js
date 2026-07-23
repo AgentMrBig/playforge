@@ -73,8 +73,8 @@ function physicsStep() {
       if (replay.events.length > 60) replay.events.shift();
     }
     if (mag > 400000) cam.shakeAmt = Math.max(cam.shakeAmt || 0, Math.min(1, mag / 1800000));  // crash shake
-    if (mag > 2200000 && !replay.active && replay.cooldown <= 0) {
-      replay.pending = 1.3;               // monster crash → slow-mo crash cam after it plays out
+    if (replay.auto && mag > 2200000 && !replay.active && replay.cooldown <= 0) {
+      replay.pending = 1.3;               // monster crash → slow-mo crash cam (opt-in; [V] anytime)
       replay.cooldown = 25;
     }
   });
@@ -261,6 +261,13 @@ async function main() {
   }
   // one clean reinforced crash wall (−Z), square-on to the spawn
   addWall([0, 0, -45], 16, 3.2, 1.6);
+  // perimeter walls — no more driving off the edge of the world
+  addWall([0, 0, 298], 600, 2.5, 2);
+  addWall([0, 0, -298], 600, 2.5, 2);
+  addWall([298, 0, 0], 2, 2.5, 600);
+  addWall([-298, 0, 0], 2, 2.5, 600);
+  buildSweeper();
+  buildDummy();
 
   // ---- the car --------------------------------------------------------
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
@@ -539,6 +546,95 @@ function readReplayFrame(f, pos, quat) {
   return idx;
 }
 
+// ------------------------------------------------- mechanical obstacle + dummy ----
+// THE SWEEPER: kinematic horizontal pole with a big ball on each end, spinning —
+// time your pass or get swatted. Real colliders, real impacts.
+let sweeper = null;
+function buildSweeper() {
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(-20, 1.1, 60));
+  world.createCollider(RAPIER.ColliderDesc.cuboid(8, 0.18, 0.18), body);
+  for (const s of [-8, 8]) world.createCollider(RAPIER.ColliderDesc.ball(1.25).setTranslation(s, 0, 0), body);
+  const g2 = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.BoxGeometry(16, 0.36, 0.36),
+    new THREE.MeshStandardMaterial({ color: 0x8a929c, metalness: 0.7, roughness: 0.4 }));
+  pole.castShadow = true;
+  g2.add(pole);
+  for (const s of [-8, 8]) {
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(1.25, 18, 14),
+      new THREE.MeshStandardMaterial({ color: 0xb0413e, metalness: 0.5, roughness: 0.45 }));
+    ball.position.x = s;
+    ball.castShadow = true;
+    g2.add(ball);
+  }
+  g2.position.set(-20, 1.1, 60);
+  scene.add(g2);
+  sweeper = { body, mesh: g2, ang: 0, speed: 0.9 };
+}
+function updateSweeper() {
+  if (!sweeper) return;
+  sweeper.ang += sweeper.speed * FIXED;
+  const h = sweeper.ang / 2;
+  sweeper.body.setNextKinematicRotation({ x: 0, y: Math.sin(h), z: 0, w: Math.cos(h) });
+  sweeper.mesh.rotation.y = sweeper.ang;
+}
+
+// THE DUMMY: our little guy, wandering the pad — hit him and he flies (respawns)
+let dummy = null;
+function buildDummy() {
+  const g2 = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.8 });
+  const acc = new THREE.MeshStandardMaterial({ color: 0xe07a2a, roughness: 0.8 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.62, 0.24), acc); torso.position.y = 1.05;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), mat); head.position.y = 1.55;
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.75, 0.16), mat); legL.position.set(-0.11, 0.375, 0);
+  const legR = legL.clone(); legR.position.x = 0.11;
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.55, 0.13), mat); armL.position.set(-0.29, 1.1, 0);
+  const armR = armL.clone(); armR.position.x = 0.29;
+  g2.add(torso, head, legL, legR, armL, armR);
+  g2.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  scene.add(g2);
+  dummy = { mesh: g2, pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
+    walk: 0, flying: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), downT: 0 };
+  dummy.mesh.position.copy(dummy.pos);
+}
+function updateDummy(dt) {
+  if (!dummy) return;
+  const d = dummy, ct = car.body.translation(), cv = car.body.linvel();
+  if (!d.flying) {
+    // wander near spawn
+    if (d.pos.distanceTo(d.tgt) < 0.6) d.tgt.set(6 + Math.random() * 22, 0, 4 + Math.random() * 28);
+    const dirx = d.tgt.x - d.pos.x, dirz = d.tgt.z - d.pos.z, L = Math.hypot(dirx, dirz) || 1;
+    d.pos.x += (dirx / L) * 1.25 * dt; d.pos.z += (dirz / L) * 1.25 * dt;
+    d.mesh.position.set(d.pos.x, 0, d.pos.z);
+    d.mesh.rotation.y = Math.atan2(dirx, dirz);
+    d.walk += dt * 7;
+    d.mesh.children[2].rotation.x = Math.sin(d.walk) * 0.5;      // legs swing
+    d.mesh.children[3].rotation.x = -Math.sin(d.walk) * 0.5;
+    // car contact → LAUNCH
+    const dx = ct.x - d.pos.x, dz = ct.z - d.pos.z;
+    const spd = Math.hypot(cv.x, cv.z);
+    if (Math.hypot(dx, dz) < 1.7 && spd > 2) {
+      d.flying = true;
+      d.vel.set(cv.x * 1.15, 3 + spd * 0.35, cv.z * 1.15);
+      d.spin.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+      if (fx) fx.onImpact({ x: d.pos.x, y: 1, z: d.pos.z }, 600000);
+      car.bumpPulse = Math.max(car.bumpPulse || 0, 0.7);         // thud
+    }
+  } else {
+    d.vel.y -= 20 * dt;
+    d.mesh.position.addScaledVector(d.vel, dt);
+    d.mesh.rotation.x += d.spin.x * dt; d.mesh.rotation.y += d.spin.y * dt; d.mesh.rotation.z += d.spin.z * dt;
+    if (d.mesh.position.y < 0.4) { d.mesh.position.y = 0.4; d.vel.set(d.vel.x * 0.6, Math.abs(d.vel.y) * 0.3, d.vel.z * 0.6); d.spin.multiplyScalar(0.6); }
+    d.downT += dt;
+    if (d.downT > 6) {                    // dust himself off, back to wandering
+      d.flying = false; d.downT = 0;
+      d.pos.set(d.mesh.position.x, 0, d.mesh.position.z);
+      d.mesh.rotation.set(0, 0, 0);
+      d.mesh.position.y = 0;
+    }
+  }
+}
+
 // ---------------------------------------------------------- test gadgets ----
 // Deformation-testing arsenal (Erik): [1]/[2]/[3] fire a small/medium/heavy ball
 // from the camera at the car; [4] drops a small weight on it, [5] drops the BIG
@@ -605,6 +701,7 @@ function updateGadgets(dt) {
 const DRAG_MARKS = [["60ft", 18.29], ["330ft", 100.58], ["1/8mi", 201.17], ["1000ft", 304.8], ["1/4mi", 402.34]];
 const drag = { x: 150, z0: -280, active: false, t: 0, splits: [], best: null, prev: 1,
   tree: 0, treeT: 0, green: false, red: false };
+replay.auto = false;   // auto crash-cam OFF by default (Erik) — [V] replays manually
 
 function dragUI(html, show = true) {
   let el = document.getElementById("dragui");
@@ -791,6 +888,7 @@ function frame() {
     trailer.snapshotCurr();
     recordFrame();              // 60Hz ring buffer for the replay / crash cam
     updateDragTimer();          // fixed-step-accurate quarter-mile timing
+    updateSweeper();            // spin the ball-sweeper (kinematic)
     acc -= FIXED;
     steps++;
   }
@@ -803,6 +901,7 @@ function frame() {
   trailer.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   updateGadgets(dt);                    // sync + expire thrown/dropped test objects
+  updateDummy(dt);                      // the little guy wanders… and flies
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
   fx.update(dt, car);                   // tyre smoke + sparks
   audio.update(dt, car);                // procedural engine + tyre squeal

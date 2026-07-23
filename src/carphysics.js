@@ -810,7 +810,7 @@ export class Car {
   _registerDebris(mesh, vx, vy, vz, spin) {
     mesh.userData.vel = new THREE.Vector3(vx, vy, vz);
     mesh.userData.spin = new THREE.Vector3((Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin);
-    mesh.userData.life = 6.0;
+    mesh.userData.life = 14.0;
     this.debris.push(mesh);
   }
 
@@ -825,6 +825,7 @@ export class Car {
         m.position.y = 0.16; ud.vel.y *= -0.35;
         ud.vel.x *= 0.7; ud.vel.z *= 0.7; ud.spin.multiplyScalar(0.6);
       }
+      if (ud.wheelRef) continue;              // WHEELS are keepers — they lie where they fell
       ud.life -= dt;
       if (ud.life < 1) m.traverse((o) => { if (o.material) { o.material.transparent = true; o.material.opacity = Math.max(0, ud.life); } });
       if (ud.life <= 0) { m.parent && m.parent.remove(m); this.debris.splice(i, 1); }
