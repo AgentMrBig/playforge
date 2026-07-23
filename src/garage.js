@@ -527,9 +527,7 @@ function expireGadget(g2) {
 }
 function fireBall(size) {
   const [r, mass, sp] = { 1: [0.16, 25, 75], 2: [0.32, 110, 55], 3: [0.55, 400, 42] }[size];
-  const ct = car.body.translation();               // aim at the BODY (mesh can be stale)
-  _gdir.set(ct.x, ct.y + 0.6, ct.z).sub(camera.position);
-  _gdir.normalize();
+  camera.getWorldDirection(_gdir);                 // fire wherever the camera POINTS
   const o = camera.position;
   const bd = RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(o.x + _gdir.x * 2, o.y + _gdir.y * 2, o.z + _gdir.z * 2)
@@ -832,7 +830,7 @@ function updateCamera(dt) {
 function updateFreeCam(dt) {
   _cfwd.set(Math.sin(cam.freeYaw) * Math.cos(cam.freePitch), Math.sin(cam.freePitch), Math.cos(cam.freeYaw) * Math.cos(cam.freePitch));
   const spd = cam.freeSpeed * dt * (keys.ShiftLeft ? 3 : 1);
-  const rx = Math.cos(cam.freeYaw), rz = -Math.sin(cam.freeYaw);   // horizontal right
+  const rx = -Math.cos(cam.freeYaw), rz = Math.sin(cam.freeYaw);   // horizontal right (was mirrored)
   if (keys.KeyW) cam.freePos.addScaledVector(_cfwd, spd);
   if (keys.KeyS) cam.freePos.addScaledVector(_cfwd, -spd);
   if (keys.KeyD) { cam.freePos.x += rx * spd; cam.freePos.z += rz * spd; }
