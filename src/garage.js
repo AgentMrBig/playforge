@@ -8,6 +8,8 @@ import { Cluster } from "./cluster.js";
 import { VehicleFX } from "./vehiclefx.js";
 import { Trailer } from "./trailer.js";
 import { loadCharacter } from "./character.js";
+import { Ragdoll } from "./ragdoll.js";
+import { initRapier } from "./phys.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -288,6 +290,7 @@ async function main() {
     world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
     replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch, drag, updateDragTimer,
     fireBall, dropWeight, gadgets, updateGadgets,
+    get dummy() { return dummy; }, updateDummy, updateDummyFixed,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -589,11 +592,15 @@ function buildDummy() {
       { name: "idle", url: "models/character/anims/idle.fbx" },
       { name: "walk", url: "models/character/anims/walking.fbx" },
     ],
-  }).then((ch) => {
+  }).then(async (ch) => {
+    await initRapier();                       // ragdoll.js reads phys.js's R handle
     scene.add(ch.visual);
-    dummy = { mesh: ch.visual, animator: ch.animator,
+    // the REAL ragdoll tech: jointed capsule skeleton + PD muscles + reflexes,
+    // simulating in this world — same system as the main game's death ragdoll
+    const rag = new Ragdoll(ch.bones, { world }, {});
+    dummy = { mesh: ch.visual, animator: ch.animator, rag,
       pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
-      flying: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), downT: 0 };
+      flying: false, downT: 0 };
     dummy.mesh.position.copy(dummy.pos);
     ch.animator.play("walk");
   }).catch((e) => console.warn("dummy character failed to load:", e.message));
@@ -609,29 +616,38 @@ function updateDummy(dt) {
     d.mesh.position.set(d.pos.x, 0, d.pos.z);
     d.mesh.rotation.y = Math.atan2(dirx, dirz);
     d.animator.update(dt);                                       // real walk cycle
-    // car contact → LAUNCH
+    // car contact → RAGDOLL (the real tech: capsules + joints + muscles)
     const dx = ct.x - d.pos.x, dz = ct.z - d.pos.z;
     const spd = Math.hypot(cv.x, cv.z);
-    if (Math.hypot(dx, dz) < 1.7 && spd > 2) {
-      d.flying = true;
-      d.vel.set(cv.x * 1.15, 3 + spd * 0.35, cv.z * 1.15);
-      d.spin.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+    if (Math.hypot(dx, dz) < 1.7 && spd > 2 && d.rag) {
+      d.flying = true; d.downT = 0;
+      _dv.set(cv.x * 1.1, 2 + spd * 0.3, cv.z * 1.1);           // inherit the car's momentum
+      _di.set(cv.x * 25, spd * 10, cv.z * 25);                  // contact impulse → body spins off the hit
+      _dp.set(ct.x, 0.8, ct.z);                                 // hit lands at bumper height
+      d.rag.enter(_dv, _di, _dp);
       if (fx) fx.onImpact({ x: d.pos.x, y: 1, z: d.pos.z }, 600000);
       car.bumpPulse = Math.max(car.bumpPulse || 0, 0.7);         // thud
     }
   } else {
-    d.vel.y -= 20 * dt;
-    d.mesh.position.addScaledVector(d.vel, dt);
-    d.mesh.rotation.x += d.spin.x * dt; d.mesh.rotation.y += d.spin.y * dt; d.mesh.rotation.z += d.spin.z * dt;
-    if (d.mesh.position.y < 0.4) { d.mesh.position.y = 0.4; d.vel.set(d.vel.x * 0.6, Math.abs(d.vel.y) * 0.3, d.vel.z * 0.6); d.spin.multiplyScalar(0.6); }
+    d.animator.update(dt);                // clip keeps playing — it's the muscle PD target
+    d.rag.update();                       // physics bodies → bones
     d.downT += dt;
-    if (d.downT > 6) {                    // dust himself off, back to wandering
+    if (d.rag.settled(1.4) || d.downT > 10) {   // at rest → get up, walk it off
+      const p = d.rag.pelvisPos();
+      d.rag.exit();
       d.flying = false; d.downT = 0;
-      d.pos.set(d.mesh.position.x, 0, d.mesh.position.z);
+      d.pos.set(p.x, 0, p.z);
+      d.mesh.position.set(p.x, 0, p.z);
       d.mesh.rotation.set(0, 0, 0);
-      d.mesh.position.y = 0;
+      d.tgt.set(6 + Math.random() * 22, 0, 4 + Math.random() * 28);
+      d.animator.play("walk");
     }
   }
+}
+const _dv = new THREE.Vector3(), _di = new THREE.Vector3(), _dp = new THREE.Vector3();
+// ragdoll muscles run at the physics rate, inside the substep loop
+function updateDummyFixed() {
+  if (dummy?.rag?.active) dummy.rag.fixedUpdate(FIXED);
 }
 
 // ---------------------------------------------------------- test gadgets ----
@@ -888,6 +904,7 @@ function frame() {
     recordFrame();              // 60Hz ring buffer for the replay / crash cam
     updateDragTimer();          // fixed-step-accurate quarter-mile timing
     updateSweeper();            // spin the ball-sweeper (kinematic)
+    updateDummyFixed();         // ragdoll PD muscles (needs the fixed rate)
     acc -= FIXED;
     steps++;
   }
