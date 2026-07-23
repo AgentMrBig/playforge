@@ -137,6 +137,16 @@ export class Car {
     this.glassMats = [];       // glass materials (dimmed to 0 when shattered)
     this.glassBroken = false;
     this.debris = [];          // loose pieces (knocked-off wheels + body chunks + glass shards)
+    // SHARED debris resources — building a fresh geometry + MeshStandardMaterial
+    // per chunk on a big hit compiled ~40 shader variants + GPU-uploaded ~40
+    // buffers in ONE frame, which is the multi-frame hang on a high-speed wall
+    // hit (Erik). Reuse two unit geometries (scaled per piece) + a few materials.
+    this._debGeo = { tet: new THREE.TetrahedronGeometry(1), box: new THREE.BoxGeometry(1, 0.5, 0.8) };
+    this._debMat = {
+      body: new THREE.MeshStandardMaterial({ color: 0x777b80, metalness: 0.55, roughness: 0.55 }),
+      paint: new THREE.MeshStandardMaterial({ color: 0xcc3333, metalness: 0.55, roughness: 0.55 }),
+      glass: new THREE.MeshStandardMaterial({ color: 0xbfe6ef, transparent: true, opacity: 0.5, metalness: 0.1, roughness: 0.05 }),
+    };
     this.screech = 0;          // tyre-squeal volume (0..1) — slide × force
     this.screechPitch = 0;     // tyre-squeal pitch (0..1) — slide speed / force
     this.mass = mass;
@@ -853,17 +863,16 @@ export class Car {
     const lv = this.body.linvel();
     this.mesh.getWorldPosition(_dc);
     _dp.set(worldPoint.x, worldPoint.y, worldPoint.z).sub(_dc).setY(0).normalize();
-    const bodyCol = this.bodyMesh.material?.color ? this.bodyMesh.material.color.getHex() : 0x777b80;
     // harder hit = more + bigger + more varied pieces
     const sev2 = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
     const n = 4 + Math.floor(sev2 * 12 + Math.random() * 3);
     for (let i = 0; i < n; i++) {
       const s = 0.08 + Math.random() * (0.16 + sev2 * 0.3);
-      const geo = Math.random() < 0.5 ? new THREE.TetrahedronGeometry(s)
-        : new THREE.BoxGeometry(s, s * 0.5, s * (0.6 + Math.random()));
-      const piece = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-        color: i % 3 === 0 ? bodyCol : 0x777b80, metalness: 0.55, roughness: 0.55,
-      }));
+      // SHARED geo + mat (scaled per piece) — no per-chunk shader compile/upload
+      const piece = new THREE.Mesh(
+        Math.random() < 0.5 ? this._debGeo.tet : this._debGeo.box,
+        i % 3 === 0 ? this._debMat.paint : this._debMat.body);
+      piece.scale.setScalar(s);
       piece.castShadow = true;
       piece.position.set(worldPoint.x + (Math.random() - 0.5) * 0.3, worldPoint.y + (Math.random() - 0.5) * 0.3, worldPoint.z + (Math.random() - 0.5) * 0.3);
       piece.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
@@ -894,10 +903,8 @@ export class Car {
     const n = 12 + Math.floor(Math.random() * 8);
     for (let i = 0; i < n; i++) {
       const s = 0.05 + Math.random() * 0.11;
-      const shard = new THREE.Mesh(
-        new THREE.TetrahedronGeometry(s),
-        new THREE.MeshStandardMaterial({ color: 0xbfe6ef, transparent: true, opacity: 0.5, metalness: 0.1, roughness: 0.05 })
-      );
+      const shard = new THREE.Mesh(this._debGeo.tet, this._debMat.glass);   // shared — no per-shard compile
+      shard.scale.setScalar(s);
       // scatter around the greenhouse (upper body), rotated with the car
       _off.set((Math.random() - 0.5) * 1.5, 0.7 + Math.random() * 0.5, (Math.random() - 0.5) * 2.2).applyQuaternion(_iq);
       shard.position.set(_dc.x + _off.x, _dc.y + _off.y, _dc.z + _off.z);
@@ -928,7 +935,9 @@ export class Car {
       }
       if (ud.wheelRef) continue;              // WHEELS are keepers — they lie where they fell
       ud.life -= dt;
-      if (ud.life < 1) m.traverse((o) => { if (o.material) { o.material.transparent = true; o.material.opacity = Math.max(0, ud.life); } });
+      // shrink out (NOT material-opacity — the material is shared now; fading it
+      // would ghost every other piece and permanently corrupt the shared mat)
+      if (ud.life < 1) { const b = ud.baseScale ?? (ud.baseScale = m.scale.x); m.scale.setScalar(b * Math.max(0.001, ud.life)); }
       if (ud.life <= 0) { m.parent && m.parent.remove(m); this.debris.splice(i, 1); }
     }
   }

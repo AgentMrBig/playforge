@@ -425,7 +425,12 @@ async function main() {
 // re-target when reached or stuck, brief reverse to unstick. Hunt them down.
 const aiCars = [];
 function spawnDerby() {
-  const picks = [["sedan", [60, -60]], ["suv", [-70, 70]], ["lowcar", [-50, -90]]];
+  // more cars for the derby (Erik) — 7 roaming the 600m pad
+  const keys = ["sedan", "suv", "lowcar", "sedan", "suv", "lowcar", "sedan"];
+  const picks = keys.map((k, i) => {
+    const a = (i / keys.length) * Math.PI * 2;
+    return [k, [Math.cos(a) * 95, Math.sin(a) * 95]];
+  });
   for (const [key, [x, z]] of picks) {
     const spec2 = CARS[key];
     const ai = new Car(world, RAPIER, { pos: [x, 2, z] });
@@ -725,76 +730,89 @@ function updateSweeper() {
   sweeper.mesh.rotation.y = sweeper.ang;
 }
 
-// THE DUMMY: our little guy, wandering the pad — hit him and he flies (respawns)
-let dummy = null;
+// THE DUMMIES: several skinned guys wandering the pad — hit one and he ragdolls
+// (more NPCs, Erik). Each loads the main character; they share nothing but code.
+const dummies = [];
+let dummy = null;              // back-compat alias → dummies[0]
+const DUMMY_SPOTS = [[12, 18], [-30, 40], [50, 10], [-15, -35], [35, -50]];
 function buildDummy() {
-  // THE guy — the main game's skinned character, walking his loop until fate arrives
-  loadCharacter("models/character/humanoid_male.fbx", {
-    textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
-    animations: [
-      { name: "idle", url: "models/character/anims/idle.fbx" },
-      { name: "walk", url: "models/character/anims/walking.fbx" },
-    ],
-  }).then(async (ch) => {
-    await initRapier();                       // ragdoll.js reads phys.js's R handle
-    scene.add(ch.visual);
-    // the REAL ragdoll tech: jointed capsule skeleton + PD muscles + reflexes,
-    // simulating in this world — same system as the main game's death ragdoll
-    // ragdoll collides with ground/walls/sweeper but NOT the car (filter out its
-    // 0x0004 bit) — the car plows through him like the main game's pedestrians;
-    // his limbs were wedging in the bodywork and racking up dents (Erik lol)
-    const rag = new Ragdoll(ch.bones, { world }, { collisionGroups: (0x0002 << 16) | (0xffff & ~0x0004) });
-    dummy = { mesh: ch.visual, animator: ch.animator, rag,
-      pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
-      flying: false, downT: 0 };
-    dummy.mesh.position.copy(dummy.pos);
-    ch.animator.play("walk");
-  }).catch((e) => console.warn("dummy character failed to load:", e.message));
+  for (let n = 0; n < DUMMY_SPOTS.length; n++) {
+    const [sx, sz] = DUMMY_SPOTS[n];
+    loadCharacter("models/character/humanoid_male.fbx", {
+      textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+      animations: [
+        { name: "idle", url: "models/character/anims/idle.fbx" },
+        { name: "walk", url: "models/character/anims/walking.fbx" },
+      ],
+    }).then(async (ch) => {
+      await initRapier();                       // ragdoll.js reads phys.js's R handle
+      scene.add(ch.visual);
+      // the REAL ragdoll tech: jointed capsule skeleton + PD muscles + reflexes.
+      // ragdoll collides with ground/walls/sweeper but NOT the cars (filter the
+      // 0x0004 chassis bit) — cars plow through peds instead of wedging on them
+      const rag = new Ragdoll(ch.bones, { world }, { collisionGroups: (0x0002 << 16) | (0xffff & ~0x0004) });
+      const d = { mesh: ch.visual, animator: ch.animator, rag, home: new THREE.Vector3(sx, 0, sz),
+        pos: new THREE.Vector3(sx, 0, sz), tgt: new THREE.Vector3(sx, 0, sz), flying: false, downT: 0 };
+      d.mesh.position.copy(d.pos);
+      ch.animator.play("walk");
+      dummies.push(d);
+      dummy = dummies[0];
+    }).catch((e) => console.warn("dummy character failed to load:", e.message));
+  }
 }
-function updateDummy(dt) {
-  if (!dummy) return;
-  const d = dummy, ct = car.body.translation(), cv = car.body.linvel();
+// nearest car (player or AI) to a walker, for the hit test + ragdoll momentum
+function _nearestCar(pos) {
+  let best = car, bd = Infinity;
+  for (const c of [car, ...aiCars]) {
+    const t = c.body.translation();
+    const dd = (t.x - pos.x) ** 2 + (t.z - pos.z) ** 2;
+    if (dd < bd) { bd = dd; best = c; }
+  }
+  return best;
+}
+function updateOneDummy(d, dt) {
   if (!d.flying) {
-    // wander near spawn
-    if (d.pos.distanceTo(d.tgt) < 0.6) d.tgt.set(6 + Math.random() * 22, 0, 4 + Math.random() * 28);
+    // wander around home base
+    if (d.pos.distanceTo(d.tgt) < 0.6)
+      d.tgt.set(d.home.x + (Math.random() - 0.5) * 40, 0, d.home.z + (Math.random() - 0.5) * 40);
     const dirx = d.tgt.x - d.pos.x, dirz = d.tgt.z - d.pos.z, L = Math.hypot(dirx, dirz) || 1;
     d.pos.x += (dirx / L) * 1.25 * dt; d.pos.z += (dirz / L) * 1.25 * dt;
     d.mesh.position.set(d.pos.x, 0, d.pos.z);
     d.mesh.rotation.y = Math.atan2(dirx, dirz);
-    d.animator.update(dt);                                       // real walk cycle
-    // car contact → RAGDOLL (the real tech: capsules + joints + muscles)
+    d.animator.update(dt);
+    // ANY car that runs him down launches the ragdoll
+    const hitter = _nearestCar(d.pos), ct = hitter.body.translation(), cv = hitter.body.linvel();
     const dx = ct.x - d.pos.x, dz = ct.z - d.pos.z;
     const spd = Math.hypot(cv.x, cv.z);
     if (Math.hypot(dx, dz) < 1.7 && spd > 2 && d.rag) {
       d.flying = true; d.downT = 0;
-      _dv.set(cv.x * 1.1, 2 + spd * 0.3, cv.z * 1.1);           // inherit the car's momentum
-      _di.set(cv.x * 25, spd * 10, cv.z * 25);                  // contact impulse → body spins off the hit
-      _dp.set(ct.x, 0.8, ct.z);                                 // hit lands at bumper height
+      _dv.set(cv.x * 1.1, 2 + spd * 0.3, cv.z * 1.1);
+      _di.set(cv.x * 25, spd * 10, cv.z * 25);
+      _dp.set(ct.x, 0.8, ct.z);
       d.rag.enter(_dv, _di, _dp);
       if (fx) fx.onImpact({ x: d.pos.x, y: 1, z: d.pos.z }, 600000);
-      car.bumpPulse = Math.max(car.bumpPulse || 0, 0.7);         // thud
+      hitter.bumpPulse = Math.max(hitter.bumpPulse || 0, 0.7);
     }
   } else {
-    d.animator.update(dt);                // clip keeps playing — it's the muscle PD target
-    d.rag.update();                       // physics bodies → bones
+    d.animator.update(dt);
+    d.rag.update();
     d.downT += dt;
-    if (d.rag.settled(1.4) || d.downT > 10) {   // at rest → get up, walk it off
+    if (d.rag.settled(1.4) || d.downT > 10) {
       const p = d.rag.pelvisPos();
       d.rag.exit();
       d.flying = false; d.downT = 0;
       d.pos.set(p.x, 0, p.z);
       d.mesh.position.set(p.x, 0, p.z);
       d.mesh.rotation.set(0, 0, 0);
-      d.tgt.set(6 + Math.random() * 22, 0, 4 + Math.random() * 28);
+      d.tgt.set(d.home.x + (Math.random() - 0.5) * 40, 0, d.home.z + (Math.random() - 0.5) * 40);
       d.animator.play("walk");
     }
   }
 }
+function updateDummy(dt) { for (const d of dummies) updateOneDummy(d, dt); }
 const _dv = new THREE.Vector3(), _di = new THREE.Vector3(), _dp = new THREE.Vector3();
 // ragdoll muscles run at the physics rate, inside the substep loop
-function updateDummyFixed() {
-  if (dummy?.rag?.active) dummy.rag.fixedUpdate(FIXED);
-}
+function updateDummyFixed() { for (const d of dummies) if (d.rag?.active) d.rag.fixedUpdate(FIXED); }
 
 // ---------------------------------------------------------- test gadgets ----
 // Deformation-testing arsenal (Erik): [1]/[2]/[3] fire a small/medium/heavy ball
