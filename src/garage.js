@@ -336,7 +336,7 @@ async function main() {
     fireBall, dropWeight, gadgets, updateGadgets,
     get dummy() { return dummy; }, updateDummy, updateDummyFixed,
     get fire() { return fire; },
-    aiCars, updateAI,
+    aiCars, updateAI, updateDerbyScore,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -473,6 +473,45 @@ function updateAI() {
 }
 const _q2ai = new THREE.Quaternion();
 const _aiFwd = new THREE.Vector3();
+
+// ---- derby score: wreck an AI (2 wheels off / panels dead / burned out) and
+// the tally ticks; total them all and a fresh batch rolls in after a breather
+let wreckCount = 0, wreckUI = null, respawnT = 0;
+function updateDerbyScore(dt) {
+  if (!aiCars.length) return;
+  if (!wreckUI) {
+    wreckUI = document.createElement("div");
+    wreckUI.style.cssText = "position:fixed;top:10px;right:10px;z-index:30;color:#ffd479;" +
+      "font:700 13px ui-monospace,monospace;background:rgba(12,16,20,.82);border:1px solid #2c3a48;" +
+      "border-radius:8px;padding:8px 12px;user-select:none";
+    document.body.appendChild(wreckUI);
+    wreckUI.textContent = "🏆 wrecks: 0";
+  }
+  for (const ai of aiCars) {
+    if (ai._wrecked) continue;
+    const zh = ai.zoneHealth;
+    let sum = 0, n = 0; for (const k in zh) { sum += zh[k]; n++; }
+    if (ai.wheelsOff >= 2 || sum / n < 0.45 || (ai._fire && ai._fire.fuel <= 0)) {
+      ai._wrecked = true;
+      wreckCount++;
+      wreckUI.textContent = `🏆 wrecks: ${wreckCount}`;
+    }
+  }
+  if (aiCars.every((a) => a._wrecked)) {
+    respawnT += dt;
+    wreckUI.textContent = `🏆 wrecks: ${wreckCount} · fresh meat in ${Math.max(0, 6 - respawnT).toFixed(0)}s`;
+    if (respawnT > 6) {
+      respawnT = 0;
+      for (const ai of aiCars) {
+        ai.reset();                          // back to spawn, repaired (reset calls repair)
+        ai._fire?.douse();
+        ai._wrecked = false;
+        ai._ai.tgt.set(Math.random() * 300 - 150, 0, Math.random() * 300 - 150);
+      }
+      wreckUI.textContent = `🏆 wrecks: ${wreckCount}`;
+    }
+  }
+}
 
 /** angled ramp box: pos = base center [x,0,z], rotX in radians (tilt) */
 /** smooth ramp: right-triangular prism, thin edge FLUSH with the ground (no lip).
@@ -1026,6 +1065,7 @@ function frame() {
   car.interpolate(alpha);
   trailer.interpolate(alpha);
   for (const ai of aiCars) { ai.interpolate(alpha); ai.updateDebris(dt); ai._fire?.update(dt); }
+  updateDerbyScore(dt);                 // wreck tally + fresh-meat respawn
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   updateGadgets(dt);                    // sync + expire thrown/dropped test objects
   updateDummy(dt);                      // the little guy wanders… and flies
