@@ -42,6 +42,7 @@ const _vp = new THREE.Vector3();       // vertex scratch
 const _off = new THREE.Vector3();      // vertex offset-from-original
 const _m1 = new THREE.Matrix4();       // body-mesh world→local
 const _sc = new THREE.Vector3();       // scale extraction
+const _ck = new THREE.Vector3();       // crack plane normal (traveling tear)
 const _dp = new THREE.Vector3();       // debris: impact point
 const _dc = new THREE.Vector3();       // debris: car world center
 const _dw = new THREE.Vector3();       // debris: wheel world pos
@@ -540,6 +541,9 @@ export class Car {
       _lp.copy(this.bodyCenter).addScaledVector(_ld, -this.dentRadius / s);
     }
 
+    // one coherent CRACK plane per impact (the "traveling tear"): verts past it
+    // shear extra, opening a single realistic rip instead of shredding every edge
+    _ck.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
     // crush along the IMPACT direction — the way the metal was actually hit. A
     // head-on folds the nose straight back (not a sideways shear toward center).
     _ld.set(worldDir.x, worldDir.y, worldDir.z).transformDirection(_m1);
@@ -549,6 +553,8 @@ export class Car {
     // ordered the contact pair
     _off.copy(this.bodyCenter).sub(_lp);
     if (_ld.dot(_off) < 0) _ld.negate();
+    _ck.cross(_ld).normalize();                 // crack plane normal ⊥ crush direction
+    if (_ck.lengthSq() < 1e-6) _ck.set(1, 0, 0);
 
     // D1: which panel did we hit? Deform stays inside that zone (a bumper hit
     // can't bleed into the hood even if the radius reaches it).
@@ -575,10 +581,20 @@ export class Car {
         if (d >= radius) continue;
         const fall = 1 - d / radius;                          // deepest at the epicenter
         _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
-        const jit = 0.22 * depth * fall * zw;                 // crumple texture — bent metal is irregular
-        _vp.x += (Math.random() - 0.5) * jit;
-        _vp.y += (Math.random() - 0.5) * jit;
-        _vp.z += (Math.random() - 0.5) * jit;
+        // crumple texture: POSITION-hashed jitter — coincident (unwelded) verts get
+        // identical offsets, so seams stay closed instead of shredding every edge
+        const ox = op[i * 3], oy = op[i * 3 + 1], oz = op[i * 3 + 2];
+        const jit = 0.2 * depth * fall * zw;
+        const s1 = Math.sin(ox * 12.9898 + oy * 78.233 + oz * 37.719) * 43758.5453;
+        const s2 = Math.sin(ox * 93.989 + oy * 67.345 + oz * 24.123) * 24634.6345;
+        const s3 = Math.sin(ox * 45.332 + oy * 12.788 + oz * 76.211) * 56445.2342;
+        _vp.x += (s1 - Math.floor(s1) - 0.5) * jit;
+        _vp.y += (s2 - Math.floor(s2) - 0.5) * jit;
+        _vp.z += (s3 - Math.floor(s3) - 0.5) * jit;
+        // the traveling tear: one side of the crack plane shears extra → a single
+        // coherent rip radiating from the hit (fades with distance)
+        const sd = (ox - _lp.x) * _ck.x + (oy - _lp.y) * _ck.y + (oz - _lp.z) * _ck.z;
+        if (sd > 0) _vp.addScaledVector(_ld, 0.3 * depth * fall * zw);
         _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
         if (_off.length() > maxD) _off.setLength(maxD);       // accumulation cap
         pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
