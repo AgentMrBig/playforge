@@ -265,6 +265,7 @@ async function main() {
   audio.onPop = (d) => fx.exhaustFlame(car, d);   // fire out the pipes on every backfire
   trailer = new Trailer(world, RAPIER, { pos: [5, 0.5, -5] });   // spawn at ride height, no drop
   scene.add(trailer.mesh);
+  buildDragStrip();
 
   buildHUD();
 
@@ -272,7 +273,7 @@ async function main() {
   // so headless checks drive the fixed step manually instead of trusting the loop.
   window.__garage = {
     world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
-    replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch,
+    replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch, drag, updateDragTimer,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -309,6 +310,16 @@ async function main() {
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
     if (e.code === "KeyH") toggleHitch();   // hitch/unhitch the trailer
+    if (e.code === "KeyG") {                // teleport to the drag strip staging area
+      const b = car.body;
+      b.setTranslation({ x: drag.x, y: 0.97, z: drag.z0 - 12 }, true);
+      b.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+      b.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      car.snapshotCurr(); car.snapshotPrev();
+      drag.active = false;
+      dragUI("staged — send it 🏁");
+    }
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -472,6 +483,82 @@ function readReplayFrame(f, pos, quat) {
   return idx;
 }
 
+// ---------------------------------------------------------------- drag strip ----
+// A real quarter-mile at x=150: staging line, split markers (60ft/330/1-8/1000ft),
+// gold finish line. Timer arms when you cross the start moving forward; fixed-step
+// accurate; prints a time slip with splits + trap speed. [G] teleports to staging.
+const DRAG_MARKS = [["60ft", 18.29], ["330ft", 100.58], ["1/8mi", 201.17], ["1000ft", 304.8], ["1/4mi", 402.34]];
+const drag = { x: 150, z0: -280, active: false, t: 0, splits: [], best: null, prev: 1 };
+
+function dragUI(html, show = true) {
+  let el = document.getElementById("dragui");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "dragui";
+    el.style.cssText = "position:fixed;top:14px;right:14px;z-index:34;background:rgba(12,16,20,.85);" +
+      "border:1px solid #2c3a48;border-radius:8px;padding:10px 14px;color:#eaf6ff;" +
+      "font:12px ui-monospace,monospace;text-align:right;line-height:1.6;min-width:170px";
+    document.body.appendChild(el);
+  }
+  el.style.display = show ? "block" : "none";
+  if (html != null) el.innerHTML = html;
+}
+
+function updateDragTimer() {
+  const p = car.currPos;
+  const zRel = p.z - drag.z0;
+  const inLane = Math.abs(p.x - drag.x) < 8;
+  if (!drag.active) {
+    if (inLane && drag.prev <= 0 && zRel > 0 && car.body.linvel().z > 0.5) {
+      drag.active = true; drag.t = 0; drag.splits = [];
+    }
+  } else {
+    drag.t += FIXED;
+    if (!inLane || zRel < -3 || drag.t > 90) { drag.active = false; dragUI("run cancelled"); }
+    else {
+      for (const [name, dz] of DRAG_MARKS) {
+        if (zRel >= dz && !drag.splits.find((s) => s[0] === name)) {
+          drag.splits.push([name, drag.t, car.speedKmh]);
+          if (name === "1/4mi") {
+            drag.active = false;
+            const et = drag.t, trap = car.speedKmh;
+            if (!drag.best || et < drag.best) drag.best = et;
+            const rows = drag.splits.map(([n, t2, v]) => `${n}: ${t2.toFixed(2)}s @ ${v.toFixed(0)}`).join("<br>");
+            dragUI(`<b style="color:#ffe066;font-size:14px">🏁 ${et.toFixed(2)}s @ ${trap.toFixed(0)} km/h</b><br>` +
+              rows + `<br><span style="color:#7fd7ff">session best ${drag.best.toFixed(2)}s</span>`);
+          }
+        }
+      }
+    }
+  }
+  drag.prev = zRel;
+}
+
+function buildDragStrip() {
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(16, 430),
+    new THREE.MeshStandardMaterial({ color: 0x23272c, roughness: 0.95 }));
+  strip.rotation.x = -Math.PI / 2;
+  strip.position.set(drag.x, 0.012, drag.z0 + 205);
+  strip.receiveShadow = true;
+  scene.add(strip);
+  const line = (dz, depth, col) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(16, depth), new THREE.MeshBasicMaterial({ color: col }));
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(drag.x, 0.02, drag.z0 + dz);
+    scene.add(m);
+  };
+  line(0, 0.8, 0xdddddd);                                   // staging line
+  for (const [, dz] of DRAG_MARKS) line(dz, 0.4, 0xbbbbbb); // splits
+  line(402.34, 1.2, 0xffe066);                              // gold finish
+  for (const dz of [0, 402.34]) for (const s of [-8.6, 8.6]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.7, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0xffe066, emissive: 0x554400 }));
+    post.position.set(drag.x + s, 0.85, drag.z0 + dz);
+    post.castShadow = true;
+    scene.add(post);
+  }
+}
+
 /** [H]: hitch when the car's rear is near the tongue; unhitch when connected */
 const _hA = new THREE.Vector3(), _hB = new THREE.Vector3();
 function toggleHitch() {
@@ -546,6 +633,7 @@ function frame() {
     car.snapshotCurr();
     trailer.snapshotCurr();
     recordFrame();              // 60Hz ring buffer for the replay / crash cam
+    updateDragTimer();          // fixed-step-accurate quarter-mile timing
     acc -= FIXED;
     steps++;
   }
@@ -729,7 +817,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake/burnout · [V] slow-mo replay · [H] hitch trailer · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
+    <div class="hint">WASD drive · Space handbrake/burnout · [G] DRAG STRIP · [V] slow-mo replay · [H] hitch trailer · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
     🎮 LS steer · RT gas · LT reverse · A handbrake · RS camera · Y reset · B repair · X clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
@@ -783,6 +871,7 @@ function updateHUD() {
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
   set("h-dmg", car.wheelsOff + " / " + car.debris.length);
+  if (drag.active) dragUI(`⏱ ${drag.t.toFixed(2)}s · ${Math.round(car.speedKmh)} km/h`);
   set("h-inp", Math.round(lastInput.throttle * 100) + " / " + Math.round(lastInput.brake * 100) + " / " + Math.round(lastInput.steer * 100));
   set("h-eng", Math.round(audio.rpm) + " / " + car.screech.toFixed(2));
 }
