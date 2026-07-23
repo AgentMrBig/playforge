@@ -231,31 +231,36 @@ async function main() {
     groundBody
   );
 
-  // ---- STUNT PARK (Erik: 3× bigger, better obstacles + jumps) --------------
-  // near spawn: suspension testers
-  addRamp([-14, 0, 6], 5, 1.0, 5, 0.35);        // side kicker
-  addKerb([10, 0, 4], 12, 0.18, 0.8);           // rumble strip
-  // drag strip of jumps down +Z: medium → BIG AIR → table-top
-  addRamp([0, 0, 40], 10, 2.0, 8, -0.3);
-  addRamp([0, 0, 95], 12, 4.0, 14, -0.33);      // the big one — send it
-  addRamp([0, 0, 150], 10, 2.4, 9, -0.3);       // table-top: up…
-  addWall([0, 0, 160], 10, 2.4, 8);             // …flat deck (land or clear it)…
-  addRamp([0, 0, 170], 10, 2.4, 9, 0.3);        // …down
-  // kicker field (+X): staggered launches at angles
-  addRamp([35, 0, 20], 6, 1.2, 5, -0.3);
-  addRamp([50, 0, 38], 6, 1.6, 5, -0.32);
-  addRamp([64, 0, 22], 6, 1.2, 5, 0.3);
-  addRamp([44, 0, 60], 7, 2.2, 7, -0.31);
-  // elevated platform (+X far): ramp up, jump OFF the ledge
-  addWall([95, 0, 65], 20, 3.0, 20);
-  addRamp([95, 0, 48], 10, 3.0, 14, -0.215);
-  // slalom pillars (−X)
-  for (let i = 0; i < 7; i++) addWall([-45 + (i % 2 ? 5 : -5), 0, -20 + i * 15], 1.2, 2.6, 1.2);
-  // crash zone (−Z): walls + an alley to wreck through
-  addWall([0, 0, -40], 10, 3, 1);
-  addWall([-12, 0, -55], 1, 3, 16);
-  addWall([12, 0, -55], 1, 3, 16);
-  addWall([0, 0, -72], 14, 3.5, 1.2);
+  // ---- PROVING GROUNDS (Erik: real car-testing facility, no giant cubes) ----
+  // Modeled on real vehicle-dynamics facilities: drag strip w/ tree (built in
+  // buildDragStrip), smooth flush-entry wedge ramps, jump + landing, skidpad
+  // rings, slalom cones, one clean crash wall. Wedges are convex prisms whose
+  // leading edge sits AT ground level — zero lip, smooth transition.
+  // ramp park (+X): small → medium → LAUNCH with a landing wedge
+  addWedge([40, 10], 7, 0.8, 9, 0);
+  addWedge([60, 30], 9, 1.7, 13, 0);
+  addWedge([85, 55], 11, 3.2, 19, 0);            // launch…
+  addWedge([85, 110], 11, 2.4, 15, Math.PI);     // …landing wedge, facing back
+  // skidpad (−X): painted concentric rings for steady-state cornering
+  for (const rr of [14, 20, 26]) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(rr - 0.25, rr + 0.25, 64),
+      new THREE.MeshBasicMaterial({ color: 0xcfd8e0, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(-80, 0.015, 30);
+    scene.add(ring);
+  }
+  // slalom line (−X south): proper cone-sized posts
+  for (let i = 0; i < 8; i++) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.4, 1.0, 10),
+      new THREE.MeshStandardMaterial({ color: 0xe07a2a }));
+    post.position.set(-40, 0.5, -30 + i * 14);
+    post.castShadow = true;
+    scene.add(post);
+    const pb = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(-40, 0.5, -30 + i * 14));
+    world.createCollider(RAPIER.ColliderDesc.cylinder(0.5, 0.35), pb);
+  }
+  // one clean reinforced crash wall (−Z), square-on to the spawn
+  addWall([0, 0, -45], 16, 3.2, 1.6);
 
   // ---- the car --------------------------------------------------------
   car = new Car(world, RAPIER, { pos: [0, 3, 0] });
@@ -355,6 +360,32 @@ async function main() {
 }
 
 /** angled ramp box: pos = base center [x,0,z], rotX in radians (tilt) */
+/** smooth ramp: right-triangular prism, thin edge FLUSH with the ground (no lip).
+ *  Drive up from the -z side (local), rotated by yaw. Convex-hull collider. */
+function addWedge([x, z], w, h, l, yaw = 0) {
+  const hw = w / 2, hl = l / 2;
+  // p0/p1 ground approach edge · p2/p3 ground far edge · p4/p5 top far edge
+  const P = [[-hw, 0, -hl], [hw, 0, -hl], [-hw, 0, hl], [hw, 0, hl], [-hw, h, hl], [hw, h, hl]];
+  const tri = (a, b2, c) => [...P[a], ...P[b2], ...P[c]];
+  const verts = new Float32Array([
+    ...tri(0, 5, 1), ...tri(0, 4, 5),     // slope face
+    ...tri(2, 3, 5), ...tri(2, 5, 4),     // back face
+    ...tri(0, 2, 4), ...tri(1, 5, 3),     // sides
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x565f68, roughness: 0.9, side: THREE.DoubleSide }));
+  mesh.position.set(x, 0.005, z);
+  mesh.rotation.y = yaw;
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0));
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, 0, z)
+    .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }));
+  world.createCollider(RAPIER.ColliderDesc.convexHull(new Float32Array(P.flat())), body);
+}
+
 function addRamp([x, , z], w, h, l, rotX) {
   const geo = new THREE.BoxGeometry(w, h, l);
   const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6b5b4a, roughness: 0.9 }));
@@ -455,6 +486,7 @@ function startReplay() {
   replay.fStart = replay.f - replay.len;
   car.repair();
   glassVisual(false);
+  while (gadgets.length) expireGadget(gadgets[0]);   // anvils/balls don't haunt the replay
   // rewind the WHEELS + hide wreckage debris: the car replays WHOLE, not wrecked
   for (const m of car.debris) m.visible = false;
   for (const w of car.wheels) {
@@ -534,7 +566,8 @@ function fireBall(size) {
     .setLinvel(_gdir.x * sp, _gdir.y * sp, _gdir.z * sp).setCcdEnabled(true);
   const body = world.createRigidBody(bd);
   const density = mass / ((4 / 3) * Math.PI * r * r * r);
-  world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.6).setRestitution(0.3), body);
+  world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.6).setRestitution(0.3)
+    .setCollisionGroups((0x0008 << 16) | 0xffff), body);   // tagged so the camera ray ignores gadgets
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14),
     new THREE.MeshStandardMaterial({ color: 0x8899a6, metalness: 0.85, roughness: 0.3 }));
   mesh.castShadow = true;
@@ -547,7 +580,8 @@ function dropWeight(big) {
     .setTranslation(p.x + (Math.random() - 0.5) * 0.6, p.y + 7, p.z + (Math.random() - 0.5) * 0.6);
   const body = world.createRigidBody(bd);
   const density = mass / (w2 * h2 * d2);
-  world.createCollider(RAPIER.ColliderDesc.cuboid(w2 / 2, h2 / 2, d2 / 2).setDensity(density).setFriction(0.8).setRestitution(0.05), body);
+  world.createCollider(RAPIER.ColliderDesc.cuboid(w2 / 2, h2 / 2, d2 / 2).setDensity(density).setFriction(0.8).setRestitution(0.05)
+    .setCollisionGroups((0x0008 << 16) | 0xffff), body);   // camera ray ignores gadgets
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w2, h2, d2),
     new THREE.MeshStandardMaterial({ color: big ? 0x5a4632 : 0x6b7480, metalness: 0.6, roughness: 0.5 }));
   mesh.castShadow = true;
@@ -569,7 +603,8 @@ function updateGadgets(dt) {
 // gold finish line. Timer arms when you cross the start moving forward; fixed-step
 // accurate; prints a time slip with splits + trap speed. [G] teleports to staging.
 const DRAG_MARKS = [["60ft", 18.29], ["330ft", 100.58], ["1/8mi", 201.17], ["1000ft", 304.8], ["1/4mi", 402.34]];
-const drag = { x: 150, z0: -280, active: false, t: 0, splits: [], best: null, prev: 1 };
+const drag = { x: 150, z0: -280, active: false, t: 0, splits: [], best: null, prev: 1,
+  tree: 0, treeT: 0, green: false, red: false };
 
 function dragUI(html, show = true) {
   let el = document.getElementById("dragui");
@@ -590,9 +625,23 @@ function updateDragTimer() {
   const zRel = p.z - drag.z0;
   const inLane = Math.abs(p.x - drag.x) < 8;
   if (!drag.active) {
+    // stage the TREE: sit still just behind the line → ambers count you down
+    if (drag.tree === 0 && inLane && zRel > -8 && zRel <= 0 && Math.abs(car.speedKmh) < 2) {
+      drag.tree = 1; drag.treeT = 0; drag.green = false; setTree(0);
+    }
+    if (drag.tree >= 1 && !drag.green) {
+      drag.treeT += FIXED;
+      const stage = Math.min(4, 1 + Math.floor(drag.treeT / 0.5));
+      setTree(stage);
+      if (stage >= 4) drag.green = true;
+    }
     if (inLane && drag.prev <= 0 && zRel > 0 && car.body.linvel().z > 0.5) {
       drag.active = true; drag.t = 0; drag.splits = [];
+      drag.red = drag.tree >= 1 && !drag.green;      // jumped the tree = RED LIGHT
+      drag.tree = 0;
+      if (!drag.red) setTree(4);
     }
+    if (drag.tree >= 1 && (!inLane || zRel < -10)) { drag.tree = 0; drag.green = false; setTree(0); }  // rolled away
   } else {
     drag.t += FIXED;
     if (!inLane || zRel < -3 || drag.t > 90) { drag.active = false; dragUI("run cancelled"); }
@@ -605,8 +654,10 @@ function updateDragTimer() {
             const et = drag.t, trap = car.speedKmh;
             if (!drag.best || et < drag.best) drag.best = et;
             const rows = drag.splits.map(([n, t2, v]) => `${n}: ${t2.toFixed(2)}s @ ${v.toFixed(0)}`).join("<br>");
-            dragUI(`<b style="color:#ffe066;font-size:14px">🏁 ${et.toFixed(2)}s @ ${trap.toFixed(0)} km/h</b><br>` +
+            dragUI((drag.red ? `<b style="color:#ff4444">🔴 RED LIGHT</b><br>` : "") +
+              `<b style="color:#ffe066;font-size:14px">🏁 ${et.toFixed(2)}s @ ${trap.toFixed(0)} km/h</b><br>` +
               rows + `<br><span style="color:#7fd7ff">session best ${drag.best.toFixed(2)}s</span>`);
+            setTree(0);
           }
         }
       }
@@ -638,6 +689,29 @@ function buildDragStrip() {
     post.castShadow = true;
     scene.add(post);
   }
+  // THE TREE: pole beside the staging line — 3 ambers + green (+ red-light shame)
+  const pole = new THREE.Mesh(new THREE.BoxGeometry(0.15, 3.4, 0.15),
+    new THREE.MeshStandardMaterial({ color: 0x333a42 }));
+  pole.position.set(drag.x - 9.6, 1.7, drag.z0 - 1.5);
+  scene.add(pole);
+  drag.lights = [];
+  const cols = [0xff9a00, 0xff9a00, 0xff9a00, 0x22dd55];
+  for (let i = 0; i < 4; i++) {
+    const m = new THREE.MeshStandardMaterial({ color: 0x22262b, emissive: 0x000000 });
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), m);
+    bulb.position.set(drag.x - 9.6, 3.0 - i * 0.55, drag.z0 - 1.5);
+    scene.add(bulb);
+    drag.lights.push({ m, col: cols[i] });
+  }
+}
+
+function setTree(stage) {   // 0=dark 1..3=ambers 4=GREEN
+  if (!drag.lights) return;
+  drag.lights.forEach((L, i) => {
+    const on = stage >= 4 ? i === 3 : i < stage;
+    L.m.emissive.setHex(on ? L.col : 0x000000);
+    L.m.color.setHex(on ? L.col : 0x22262b);
+  });
 }
 
 /** [H]: hitch when the car's rear is near the tongue; unhitch when connected */
@@ -810,7 +884,8 @@ function updateCamera(dt) {
   // obstacle pull-in: don't let the camera clip through walls behind the car
   _cfwd.copy(_cdes).sub(_clook);
   const len = _cfwd.length(); _cfwd.normalize();
-  const hit = world.castRay(new RAPIER.Ray(_clook, _cfwd), len, true, undefined, undefined, undefined, car.body);
+  const hit = world.castRay(new RAPIER.Ray(_clook, _cfwd), len, true, undefined,
+    (0xffff << 16) | (0xffff & ~0x0008), undefined, car.body);   // ignore gadget group
   if (hit) {
     const toi = (hit.timeOfImpact ?? hit.toi) * 0.85;
     _cdes.copy(_clook).addScaledVector(_cfwd, Math.min(len, toi));

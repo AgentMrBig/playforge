@@ -95,7 +95,7 @@ export class Car {
     dentFullForce = 1100000, // force span above threshold for full severity (~62 km/h — saturates sooner)
     dentRadius = 1.35,       // base dent spread (m) — real crumple, not a scuff
     dentDepth = 0.7,         // base dent depth at full severity (m)
-    dentMax = 0.85,          // max total displacement any vertex can accumulate (m)
+    dentMax = 1.15,          // max total displacement any vertex can accumulate (m) — pancake territory
     // mechanical damage (Stage 6)
     wheelDetachForce = 1100000, // contact force to tear a wheel off (~50 km/h corner hit)
     chunkForce = 1600000,       // force to break off body chunks (~72 km/h)
@@ -555,30 +555,34 @@ export class Car {
     const depth = (this.dentDepth / s) * sev;
     const maxD = this.dentMax / s;
 
-    const pos = this.bodyMesh.geometry.attributes.position;
-    const op = this.origPos;
+    // crumple EVERY body mesh (paint shell + trim + lights — the whole skin)
+    const dfs = this.deformables || [{ mesh: this.bodyMesh, orig: this.origPos, zones: this.vertexZone }];
     let touched = false;
-    for (let i = 0; i < pos.count; i++) {
-      // D1 soft zone bound: full crumple in the hit panel, 30% spillover into
-      // neighbours (fenders/hood catch real deformation without losing identity)
-      const zw = (!this.vertexZone || hitZone < 0 || this.vertexZone[i] === hitZone) ? 1 : 0.5;
-      _vp.fromBufferAttribute(pos, i);
-      const d = _vp.distanceTo(_lp);
-      if (d >= radius) continue;
-      const fall = 1 - d / radius;                          // deepest at the epicenter
-      _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
-      // clamp accumulated displacement so repeated hits can't collapse the shell
-      _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
-      if (_off.length() > maxD) _off.setLength(maxD);
-      pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
-      touched = true;
+    for (const df of dfs) {
+      const pos = df.mesh.geometry.attributes.position;
+      const op = df.orig, zones2 = df.zones;
+      let hit = false;
+      for (let i = 0; i < pos.count; i++) {
+        // D1 soft zone bound: full crumple in the hit panel, 50% spillover into neighbours
+        const zw = (!zones2 || hitZone < 0 || zones2[i] === hitZone) ? 1 : 0.5;
+        _vp.fromBufferAttribute(pos, i);
+        const d = _vp.distanceTo(_lp);
+        if (d >= radius) continue;
+        const fall = 1 - d / radius;                          // deepest at the epicenter
+        _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
+        _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
+        if (_off.length() > maxD) _off.setLength(maxD);       // accumulation cap
+        pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);
+        hit = true;
+      }
+      if (hit) {
+        pos.needsUpdate = true;
+        df.mesh.geometry.computeVertexNormals();              // dents catch light correctly
+        touched = true;
+      }
     }
-    if (touched) {
-      pos.needsUpdate = true;
-      this.bodyMesh.geometry.computeVertexNormals();        // dents catch light correctly
-      this.dents++;
-    }
-    return touched && hitZone >= 0 ? ZONES[hitZone] : null; // which panel took it
+    if (touched) this.dents++;
+    return touched && hitZone >= 0 ? ZONES[hitZone] : null;   // which panel took it
   }
 
   /**
@@ -631,21 +635,27 @@ export class Car {
     v.position.y += groundY - modelMinY;
     this.modelVisual = v;
 
-    // body = the largest remaining mesh (wheels are already reparented out of v)
+    // deform EVERY body mesh — the Synty bake splits the car per-material (paint
+    // shell, trim, lights...); deforming only the largest left the painted body
+    // visually invincible while the lights mesh dented (Erik's exact report).
+    this.deformables = [];
     let best = null, bestCount = -1;
+    const combined = new THREE.Box3();
     v.traverse((o) => {
       if (!o.isMesh) return;
+      o.geometry = mergeVertices(o.geometry);             // weld → crumples as a skin
+      o.geometry.computeBoundingBox();
+      combined.union(o.geometry.boundingBox);             // shared frame (sibling meshes)
+      this.deformables.push({ mesh: o, orig: Float32Array.from(o.geometry.attributes.position.array), zones: null });
       const n = o.geometry.attributes.position.count;
       if (n > bestCount) { bestCount = n; best = o; }
     });
     if (best) {
-      best.geometry = mergeVertices(best.geometry);       // weld → crumples as a skin
-      best.geometry.computeBoundingBox();
       this.bodyMesh = best;
-      this.origPos = Float32Array.from(best.geometry.attributes.position.array);
-      this.bodyCenter = best.geometry.boundingBox.getCenter(new THREE.Vector3());
+      this.origPos = this.deformables.find((d) => d.mesh === best).orig;
+      this.bodyCenter = combined.getCenter(new THREE.Vector3());
       this.dents = 0;
-      this._buildZones();                                 // D1: per-vertex panel identity
+      this._buildZones(combined);                         // D1: per-vertex panel identity, all meshes
     }
     // find glass materials (named "glass" or transparent) so we can shatter them
     this.glassMats = []; this.glassBroken = false;
@@ -718,9 +728,11 @@ export class Car {
     this.mesh.getWorldPosition(_dc);
     _dp.set(worldPoint.x, worldPoint.y, worldPoint.z).sub(_dc).setY(0).normalize();
     const bodyCol = this.bodyMesh.material?.color ? this.bodyMesh.material.color.getHex() : 0x777b80;
-    const n = 4 + Math.floor(Math.random() * 5);      // 4-8 little pieces
+    // harder hit = more + bigger + more varied pieces
+    const sev2 = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
+    const n = 4 + Math.floor(sev2 * 12 + Math.random() * 3);
     for (let i = 0; i < n; i++) {
-      const s = 0.1 + Math.random() * 0.2;
+      const s = 0.08 + Math.random() * (0.16 + sev2 * 0.3);
       const geo = Math.random() < 0.5 ? new THREE.TetrahedronGeometry(s)
         : new THREE.BoxGeometry(s, s * 0.5, s * (0.6 + Math.random()));
       const piece = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
@@ -801,29 +813,34 @@ export class Car {
    * gets a stable panel id from its normalized position in the body's own bbox;
    * per-zone health drives the mechanical consequences (D2/D3).
    */
-  _buildZones() {
-    const geo = this.bodyMesh.geometry;
-    const bb = geo.boundingBox;
+  _buildZones(sharedBB = null) {
+    const bb = sharedBB || this.bodyMesh.geometry.boundingBox;
     const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
     const hx = Math.max(0.001, (bb.max.x - bb.min.x) / 2);
     const hy = Math.max(0.001, (bb.max.y - bb.min.y) / 2);
     const hz = Math.max(0.001, (bb.max.z - bb.min.z) / 2);
     this._zoneNorm = { cx, cy, cz, hx, hy, hz };
-    const pos = geo.attributes.position;
-    this.vertexZone = new Uint8Array(pos.count);
-    for (let i = 0; i < pos.count; i++) {
-      this.vertexZone[i] = zoneOf(
-        (pos.getX(i) - cx) / hx, (pos.getY(i) - cy) / hy, (pos.getZ(i) - cz) / hz);
+    if (!this.deformables) this.deformables = [{ mesh: this.bodyMesh, orig: this.origPos, zones: null }];
+    for (const df of this.deformables) {
+      const pos = df.mesh.geometry.attributes.position;
+      df.zones = new Uint8Array(pos.count);
+      for (let i = 0; i < pos.count; i++) {
+        df.zones[i] = zoneOf((pos.getX(i) - cx) / hx, (pos.getY(i) - cy) / hy, (pos.getZ(i) - cz) / hz);
+      }
     }
+    this.vertexZone = this.deformables.find((d) => d.mesh === this.bodyMesh)?.zones || null;
     this.zoneHealth = { front: 1, rear: 1, left: 1, right: 1, roof: 1, center: 1 };
   }
 
   /** restore the pristine body shape (repair) */
   repair() {
-    const pos = this.bodyMesh.geometry.attributes.position;
-    pos.array.set(this.origPos);
-    pos.needsUpdate = true;
-    this.bodyMesh.geometry.computeVertexNormals();
+    const dfs = this.deformables || [{ mesh: this.bodyMesh, orig: this.origPos }];
+    for (const df of dfs) {
+      const pos = df.mesh.geometry.attributes.position;
+      pos.array.set(df.orig);
+      pos.needsUpdate = true;
+      df.mesh.geometry.computeVertexNormals();
+    }
     this.dents = 0;
   }
 
