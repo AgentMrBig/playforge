@@ -463,6 +463,32 @@ function _aimBone(bone, bindWorld, deltaQ) {
 function updateTurret(dt) {
   if (!turret) return;
   if (turret.cd > 0) turret.cd = Math.max(0, turret.cd - dt);
+  // shell impact: when the in-flight shell suddenly slows (hit something) it
+  // EXPLODES — big spark burst + torch any AI car within blast radius
+  if (turret._shell) {
+    const sv = turret._shell.linvel(), spd = Math.hypot(sv.x, sv.y, sv.z);
+    const st = turret._shell.translation();
+    turret._shellSpd = turret._shellSpd ?? spd;
+    turret._shellAge = (turret._shellAge || 0) + dt;
+    // proximity fuse (deterministic): burst when it reaches a car, hits the
+    // ground, slows hard, or times out at max range
+    let near = st.y < 0.4;
+    for (const c of [car, ...aiCars]) {
+      const p = c.body.translation();
+      if (c !== car && Math.hypot(p.x - st.x, p.y - st.y, p.z - st.z) < 3.2) { near = true; break; }
+    }
+    if (near || spd < turret._shellSpd * 0.66 || spd < 15 || turret._shellAge > 2.5) {
+      if (fx) fx.onImpact({ x: st.x, y: st.y, z: st.z }, 1600000);   // spark burst
+      cam.shakeAmt = Math.max(cam.shakeAmt || 0, 0.5);
+      audio.crash(0.7);
+      for (const ai of aiCars) {
+        const at = ai.body.translation();
+        if (Math.hypot(at.x - st.x, at.y - st.y, at.z - st.z) < 5 && ai._fire)
+          ai._fire.ignite(Math.random() < 0.5 ? "front" : "rear", 0.4);
+      }
+      turret._shell = null; turret._shellSpd = null; turret._shellAge = 0;
+    } else turret._shellSpd = Math.max(turret._shellSpd, spd);
+  }
   // desired aim from the camera direction, expressed in the tank's body frame
   camera.getWorldDirection(_tv);
   const cr = car.body.rotation(); _tq2.set(cr.x, cr.y, cr.z, cr.w).invert();
@@ -487,14 +513,12 @@ function fireCannon() {
   // muzzle at the barrel tip, shell along the camera aim (reliable regardless of
   // exact bone visual); fast + heavy so it caves cars and knocks them flying
   camera.getWorldDirection(_gdir);
-  // spawn just ahead of the barrel tip. Refresh the bone matrices first (they can
-  // be a frame stale) and sanity-check the muzzle sits near the tank — otherwise
-  // fall back to a point ahead of the camera (always where you're aiming).
-  car.mesh.updateWorldMatrix(true, true);
-  const muzzle = (turret.bbone || turret.tbone).getWorldPosition(new THREE.Vector3());
-  const ct = car.body.translation();
-  if (muzzle.distanceTo(_tv.set(ct.x, ct.y, ct.z)) > 8) muzzle.copy(camera.position);
-  muzzle.addScaledVector(_gdir, 2.6);
+  // muzzle = a fixed point at turret height, in front of the tank, transformed by
+  // the tank's real body pose (deterministic — the bone world matrix was a frame
+  // stale and spawned the shell way high). Then push it out along the aim.
+  const ct = car.body.translation(), cr = car.body.rotation();
+  const muzzle = _tv.set(0, 1.6, 3.4).applyQuaternion(_tq.set(cr.x, cr.y, cr.z, cr.w)).add(_tv2.set(ct.x, ct.y, ct.z)).clone();
+  muzzle.addScaledVector(_gdir, 1.4);
   const sp = 120, r = 0.28, mass = 900;
   const bd = RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(muzzle.x, muzzle.y, muzzle.z)
@@ -513,7 +537,7 @@ function fireCannon() {
   if (fx) fx.onImpact({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, 800000);
   audio.crash(0.5);
   car.body.applyImpulse({ x: -_gdir.x * 9000, y: 0, z: -_gdir.z * 9000 }, true);   // kick back
-  turret._shell = body;                    // watch it for the explosion on contact
+  turret._shell = body; turret._shellSpd = sp; turret._shellAge = 0;   // watch for the explosion
 }
 
 // ------------------------------------------------------ AI TRAFFIC / DERBY ----
