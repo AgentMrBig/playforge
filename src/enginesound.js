@@ -154,7 +154,9 @@ export class EngineSound {
     this._shiftT = Math.max(0, this._shiftT - dt);
     // what the driven wheels ask of the engine through the current gear
     const inGear = Math.min(1.15, Math.max(0, (s - this._gear * band) / band));
-    let wheelRpmN = 0.12 + inGear * 0.88;
+    // floor 0.3 (was 0.12): a shift drops to ~2k rpm, not near-idle — cruise and
+    // top-gear revs read realistically on the tach (Erik)
+    let wheelRpmN = 0.3 + inGear * 0.7;
     if (body.wheelspin) wheelRpmN = Math.max(wheelRpmN, 0.93);   // burnout: revs flare free
     if (body.handbrake && s > 3) wheelRpmN *= 0.55;              // locked rears drag the clutch
     const idleN = this.idleRpm / this.redline;
@@ -178,7 +180,9 @@ export class EngineSound {
     // ---- firing frequency drives the stack (one octave down: warm, not
     // whiney — pitch still tracks rpm, just in a listenable register) -------
     const revN = this.rpm / this.redline;
-    const fire = (this.rpm / 60) * (this.cylinders / 2) * 0.5 * roughN;
+    // 0.72 register (was 0.5): Erik heard the engine an octave below the tach —
+    // closer to the true firing frequency while keeping the warm low-end
+    const fire = (this.rpm / 60) * (this.cylinders / 2) * 0.72 * roughN;
     if (n.peak) n.peak.frequency.value = 96 + revN * 90;              // body resonance rises slightly with revs
     for (let i = 0; i < n.oscs.length; i++) {
       const o = n.oscs[i];

@@ -70,7 +70,8 @@ export class Car {
     tireGrip = 2.2,        // peak lateral grip as a multiple of vertical load
     rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
     rollResist = 0.015,    // rolling resistance fraction of load
-    aeroDrag = 16,         // N per (m/s)² — the speed governor: throttle level ⇒ cruise speed
+    dragLin = 380,         // N per (m/s) — dominant: makes throttle % ≈ speed % (linear feel)
+    dragQuad = 2,          // N per (m/s)² — mild aero wall at the top (~180 km/h stock)
     wheelInertia = 6,      // lumped driven-wheel inertia (higher = spins up slower)
     tireStiffB = 8.0,      // Pacejka B — slip stiffness (higher = sharper grip onset)
     tireShapeC = 1.15,     // Pacejka C — curve shape; ~1.1-1.2 = forgiving plateau (>1.4 spins out)
@@ -104,7 +105,8 @@ export class Car {
     this.tireGrip = tireGrip;
     this.rearGripMul = rearGripMul;
     this.rollResist = rollResist;
-    this.aeroDrag = aeroDrag;
+    this.dragLin = dragLin;
+    this.dragQuad = dragQuad;
     this.wheelInertia = wheelInertia;
     this.tireStiffB = tireStiffB;
     this.tireShapeC = tireShapeC;
@@ -280,12 +282,12 @@ export class Car {
     const lv = body.linvel();
     const av = body.angvel();
 
-    // aerodynamic drag (∝ v²): the speed governor a real car has — part throttle
-    // now settles at a cruise speed instead of creeping to top speed. Same
-    // per-step force semantics as the wheel forces below.
+    // drag = linear (driveline/rolling, dominant) + mild quadratic (aero). The
+    // linear term makes throttle position map ~linearly to cruise speed — how a
+    // real pedal feels — instead of cramming street speeds into the bottom 5%.
     const spd3 = Math.hypot(lv.x, lv.y, lv.z);
     if (spd3 > 0.5) {
-      const fd = this.aeroDrag * spd3;
+      const fd = this.dragLin + this.dragQuad * spd3;   // F = −v · (k1 + k2·|v|)
       body.addForce({ x: -lv.x * fd, y: -lv.y * fd * 0.5, z: -lv.z * fd }, true);
     }
 

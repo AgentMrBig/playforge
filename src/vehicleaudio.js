@@ -16,7 +16,7 @@ export class VehicleAudio {
     this.hp = hp;
     this.engine = null;
     // reused adapter object EngineSound reads from (no per-frame allocation)
-    this._body = { speed: 0, throttle: 0, topSpeed: 24, wheelspin: false, handbrake: false };
+    this._body = { speed: 0, throttle: 0, topSpeed: 50, wheelspin: false, handbrake: false };  // ~180 km/h — gears spread the real range
   }
 
   /** create + resume the context (must be called from a user gesture) */
