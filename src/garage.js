@@ -73,6 +73,10 @@ function physicsStep() {
     if (carA) carA.impact(point, mag, dir);
     if (carB && carB !== carA) carB.impact(point, mag, dir);
     if (fx) fx.onImpact(point, mag);      // spark burst on hard hits
+    // AI fuel systems rupture too — hunted wrecks end up burning
+    for (const K of [carA, carB])
+      if (K && K !== car && K._fire && mag > 2000000 && Math.random() < 0.45)
+        K._fire.ignite(Math.random() < 0.5 ? "front" : "rear", 0.35);
     if (!isPlayer) return;                // everything below is player feedback
     // log the damage event on the replay timeline (with the pose it happened at)
     if (point && mag >= car.dentThreshold) {
@@ -431,6 +435,7 @@ function spawnDerby() {
     loadVehicle(spec2.file, { targetLength: spec2.len, ...spec2.opts })
       .then((rig) => { rig.name = key; ai.attachModel(rig); })
       .catch(() => {});
+    ai._fire = new CarFire(scene, ai);      // their wrecks burn too
     aiCars.push(ai);
   }
 }
@@ -1020,7 +1025,7 @@ function frame() {
   handlePadExtras(dt);                  // gamepad one-shots + right-stick camera
   car.interpolate(alpha);
   trailer.interpolate(alpha);
-  for (const ai of aiCars) { ai.interpolate(alpha); ai.updateDebris(dt); }
+  for (const ai of aiCars) { ai.interpolate(alpha); ai.updateDebris(dt); ai._fire?.update(dt); }
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   updateGadgets(dt);                    // sync + expire thrown/dropped test objects
   updateDummy(dt);                      // the little guy wanders… and flies
