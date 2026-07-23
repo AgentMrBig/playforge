@@ -43,8 +43,11 @@ const cluster = new Cluster();
 let lastInput = { throttle: 0, steer: 0, brake: 0, handbrake: false };
 
 /** one physics step + drain hard-impact events into the car's deform system */
+let crushCd = 0;          // D5: don't re-fire the crush while still sandwiched
 function physicsStep() {
   world.step(eventQueue);
+  crushCd = Math.max(0, crushCd - FIXED);
+  const stepEvs = [];     // D5: this step's chassis impacts, for the opposing-pair test
   eventQueue.drainContactForceEvents((e) => {
     const c1 = e.collider1(), c2 = e.collider2();
     // D4: the chassis is 5 sub-colliders now — accept a hit on ANY of them
@@ -81,7 +84,30 @@ function physicsStep() {
       replay.pending = 1.3;               // monster crash → slow-mo crash cam (opt-in; [V] anytime)
       replay.cooldown = 25;
     }
+    if (mag > 300000) stepEvs.push({ mag, point, dir: { x: dir.x, y: dir.y, z: dir.z } });
   });
+  // ---- D5 CRUSH DETECTION: two hard impacts in the SAME step from OPPOSING
+  // directions = the car is sandwiched (wall + anvil, wedged under the sweeper,
+  // pinned by a trailer). Both sides take a severe boosted crumple — thresholds
+  // don't matter when you're the meat in the press.
+  if (stepEvs.length >= 2 && crushCd <= 0) {
+    outer: for (let i = 0; i < stepEvs.length; i++) {
+      for (let j = i + 1; j < stepEvs.length; j++) {
+        const a = stepEvs[i], b2 = stepEvs[j];
+        const dot = a.dir.x * b2.dir.x + a.dir.y * b2.dir.y + a.dir.z * b2.dir.z;
+        if (dot < -0.8) {
+          const crushMag = Math.max(1.8e6, (a.mag + b2.mag) * 0.9);
+          car.impact(a.point, crushMag, a.dir);
+          car.impact(b2.point, crushMag, b2.dir);
+          cam.shakeAmt = 1;
+          audio.crash(1);
+          if (fx) { fx.onImpact(a.point, crushMag); fx.onImpact(b2.point, crushMag); }
+          crushCd = 0.6;
+          break outer;
+        }
+      }
+    }
+  }
 }
 
 // ---- Xbox / gamepad (standard mapping): LS steer, RT gas, LT reverse, A handbrake,
