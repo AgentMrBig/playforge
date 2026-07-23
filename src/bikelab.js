@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { Bike } from "./bikephysics.js";
+import { loadCharacter } from "./character.js";
+import { Ragdoll } from "./ragdoll.js";
+import { initRapier } from "./phys.js";
 
 // BIKE LAB — lean, minimal sandbox for the motorcycle controller. Same fixed-
 // step + render-interpolation discipline as the proving ground, none of the
@@ -77,6 +80,61 @@ async function main() {
   bike = new Bike(world, RAPIER, { pos: [0, 1.2, 0] });
   scene.add(bike.mesh);
 
+  // ---- the rider: the main character, seated — ragdolls off on a crash ----
+  let rider = null;
+  loadCharacter("models/character/humanoid_male.fbx", {
+    textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+  }).then(async (ch) => {
+    await initRapier();                     // ragdoll.js reads phys.js's R handle
+    // seat him on the bike, inside the lean group so he leans with it
+    ch.visual.position.set(0, 0.42, -0.32);
+    bike.leanGroup.add(ch.visual);
+    // static riding pose on the real bones (no sit clip in the pack): crouch the
+    // legs onto the pegs, reach the arms to the bars, tuck the torso forward
+    const B = ch.bones;
+    const rot = (n, x, y = 0, z = 0) => { if (B[n]) B[n].rotation.set(B[n].rotation.x + x, B[n].rotation.y + y, B[n].rotation.z + z); };
+    rot("LeftUpLeg", -0.95, 0, 0.12); rot("RightUpLeg", -0.95, 0, -0.12);
+    rot("LeftLeg", 1.25); rot("RightLeg", 1.25);
+    rot("Spine", 0.35); rot("Spine1", 0.2); rot("Neck", -0.3);
+    rot("LeftArm", 0.85, 0, 0.25); rot("RightArm", 0.85, 0, -0.25);
+    rot("LeftForeArm", 0.35); rot("RightForeArm", 0.35);
+    // ragdoll ignores the chassis bit — he flies OFF the bike, not into it
+    const rag = new Ragdoll(ch.bones, { world }, { collisionGroups: (0x0002 << 16) | (0xffff & ~0x0004) });
+    rider = { ch, rag, mounted: true };
+    window.__bike.rider = rider;
+    window.__bike.updateRider = updateRider;    // headless: rAF ~0 in the agent pane
+  }).catch((e) => console.warn("rider failed to load:", e.message));
+
+  // crash transition → THROW the rider (called from the frame loop)
+  function updateRider(dt) {
+    if (!rider) return;
+    if (rider.mounted && bike.crashed) {
+      // dismount: hand the visual to the scene at its current world pose
+      const v = rider.ch.visual;
+      v.updateWorldMatrix(true, true);
+      scene.attach(v);                       // keeps world transform
+      const lv = bike.body.linvel();
+      rider.rag.enter(
+        new THREE.Vector3(lv.x * 1.05, 2.5 + Math.hypot(lv.x, lv.z) * 0.25, lv.z * 1.05),
+        new THREE.Vector3(lv.x * 20, 300, lv.z * 20),
+        v.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
+      rider.mounted = false;
+    }
+    if (!rider.mounted && rider.rag.active) rider.rag.update();
+  }
+  function updateRiderFixed() {
+    if (rider && rider.rag.active) rider.rag.fixedUpdate(FIXED);
+  }
+  const remount = () => {
+    if (!rider || rider.mounted) return;
+    rider.rag.exit();
+    const v = rider.ch.visual;
+    bike.leanGroup.attach(v);
+    v.position.set(0, 0.42, -0.32); v.rotation.set(0, 0, 0); v.scale.setScalar(v.scale.x);
+    rider.mounted = true;
+  };
+  window.__bikeRemount = remount;
+
   // ---- HUD --------------------------------------------------------------
   const hud = document.createElement("div");
   hud.style.cssText = "position:fixed;left:12px;top:12px;color:#cfe3f5;font:12px ui-monospace,monospace;" +
@@ -92,7 +150,7 @@ async function main() {
       `build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}`;
   };
 
-  addEventListener("keydown", (e) => { keys[e.code] = true; if (e.code === "KeyR") bike.reset(); });
+  addEventListener("keydown", (e) => { keys[e.code] = true; if (e.code === "KeyR") { bike.reset(); remount(); } });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
   addEventListener("resize", () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -133,9 +191,11 @@ async function main() {
       bike.fixedUpdate(FIXED);
       world.step();
       bike.snapshotCurr();
+      updateRiderFixed();                 // ragdoll PD muscles at the fixed rate
       acc -= FIXED;
     }
     bike.interpolate(Math.max(0, Math.min(1, acc / FIXED)));
+    updateRider(dt);                      // dismount detection + bones←physics
 
     // chase cam
     const bp = bike.mesh.position;
