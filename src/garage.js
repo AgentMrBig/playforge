@@ -7,6 +7,7 @@ import { SkidTrails } from "./skidtrails.js";
 import { Cluster } from "./cluster.js";
 import { VehicleFX } from "./vehiclefx.js";
 import { Trailer } from "./trailer.js";
+import { loadCharacter } from "./character.js";
 
 // a few real Synty cars to crumple — pick with ?car=<key>
 const GWV = { textureDir: "models/gangwarfare", textureFlipY: true, textureMap: { material: "T_PolygonGangWarfare_Vehicle_01.PNG" } };
@@ -581,21 +582,21 @@ function updateSweeper() {
 // THE DUMMY: our little guy, wandering the pad — hit him and he flies (respawns)
 let dummy = null;
 function buildDummy() {
-  const g2 = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.8 });
-  const acc = new THREE.MeshStandardMaterial({ color: 0xe07a2a, roughness: 0.8 });
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.62, 0.24), acc); torso.position.y = 1.05;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), mat); head.position.y = 1.55;
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.75, 0.16), mat); legL.position.set(-0.11, 0.375, 0);
-  const legR = legL.clone(); legR.position.x = 0.11;
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.55, 0.13), mat); armL.position.set(-0.29, 1.1, 0);
-  const armR = armL.clone(); armR.position.x = 0.29;
-  g2.add(torso, head, legL, legR, armL, armR);
-  g2.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  scene.add(g2);
-  dummy = { mesh: g2, pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
-    walk: 0, flying: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), downT: 0 };
-  dummy.mesh.position.copy(dummy.pos);
+  // THE guy — the main game's skinned character, walking his loop until fate arrives
+  loadCharacter("models/character/humanoid_male.fbx", {
+    textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
+    animations: [
+      { name: "idle", url: "models/character/anims/idle.fbx" },
+      { name: "walk", url: "models/character/anims/walking.fbx" },
+    ],
+  }).then((ch) => {
+    scene.add(ch.visual);
+    dummy = { mesh: ch.visual, animator: ch.animator,
+      pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
+      flying: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), downT: 0 };
+    dummy.mesh.position.copy(dummy.pos);
+    ch.animator.play("walk");
+  }).catch((e) => console.warn("dummy character failed to load:", e.message));
 }
 function updateDummy(dt) {
   if (!dummy) return;
@@ -607,9 +608,7 @@ function updateDummy(dt) {
     d.pos.x += (dirx / L) * 1.25 * dt; d.pos.z += (dirz / L) * 1.25 * dt;
     d.mesh.position.set(d.pos.x, 0, d.pos.z);
     d.mesh.rotation.y = Math.atan2(dirx, dirz);
-    d.walk += dt * 7;
-    d.mesh.children[2].rotation.x = Math.sin(d.walk) * 0.5;      // legs swing
-    d.mesh.children[3].rotation.x = -Math.sin(d.walk) * 0.5;
+    d.animator.update(dt);                                       // real walk cycle
     // car contact → LAUNCH
     const dx = ct.x - d.pos.x, dz = ct.z - d.pos.z;
     const spd = Math.hypot(cv.x, cv.z);
