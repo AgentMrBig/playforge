@@ -92,10 +92,10 @@ export class Car {
     // closing speed), so these are in the 100k-millions range: dent from ~15 km/h,
     // full crumple by ~100 km/h.
     dentThreshold = 250000,  // min contact force (N) to leave a dent (~16 km/h)
-    dentFullForce = 2000000, // force span above threshold for full severity (~100 km/h)
-    dentRadius = 0.9,        // base dent spread (m)
-    dentDepth = 0.28,        // base dent depth at full severity (m)
-    dentMax = 0.5,           // max total displacement any vertex can accumulate (m)
+    dentFullForce = 1100000, // force span above threshold for full severity (~62 km/h — saturates sooner)
+    dentRadius = 1.35,       // base dent spread (m) — real crumple, not a scuff
+    dentDepth = 0.7,         // base dent depth at full severity (m)
+    dentMax = 0.85,          // max total displacement any vertex can accumulate (m)
     // mechanical damage (Stage 6)
     wheelDetachForce = 1100000, // contact force to tear a wheel off (~50 km/h corner hit)
     chunkForce = 1600000,       // force to break off body chunks (~72 km/h)
@@ -559,12 +559,14 @@ export class Car {
     const op = this.origPos;
     let touched = false;
     for (let i = 0; i < pos.count; i++) {
-      if (this.vertexZone && hitZone >= 0 && this.vertexZone[i] !== hitZone) continue;   // D1 zone bound
+      // D1 soft zone bound: full crumple in the hit panel, 30% spillover into
+      // neighbours (fenders/hood catch real deformation without losing identity)
+      const zw = (!this.vertexZone || hitZone < 0 || this.vertexZone[i] === hitZone) ? 1 : 0.3;
       _vp.fromBufferAttribute(pos, i);
       const d = _vp.distanceTo(_lp);
       if (d >= radius) continue;
       const fall = 1 - d / radius;                          // deepest at the epicenter
-      _vp.addScaledVector(_ld, depth * fall * fall);        // push metal inward
+      _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
       // clamp accumulated displacement so repeated hits can't collapse the shell
       _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
       if (_off.length() > maxD) _off.setLength(maxD);

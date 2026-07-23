@@ -274,6 +274,7 @@ async function main() {
   window.__garage = {
     world, car, RAPIER, scene, camera, renderer, audio, skid, fx, cluster, frames: 0,
     replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch, drag, updateDragTimer,
+    fireBall, dropWeight, gadgets, updateGadgets,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -310,6 +311,11 @@ async function main() {
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
     if (e.code === "KeyH") toggleHitch();   // hitch/unhitch the trailer
+    if (e.code === "Digit1") fireBall(1);   // deformation gun: small / medium / heavy
+    if (e.code === "Digit2") fireBall(2);
+    if (e.code === "Digit3") fireBall(3);
+    if (e.code === "Digit4") dropWeight(false);   // small weight drop
+    if (e.code === "Digit5") dropWeight(true);    // THE ANVIL
     if (e.code === "KeyG") {                // teleport to the drag strip staging area
       const b = car.body;
       b.setTranslation({ x: drag.x, y: 0.97, z: drag.z0 - 12 }, true);
@@ -483,6 +489,65 @@ function readReplayFrame(f, pos, quat) {
   return idx;
 }
 
+// ---------------------------------------------------------- test gadgets ----
+// Deformation-testing arsenal (Erik): [1]/[2]/[3] fire a small/medium/heavy ball
+// from the camera at the car; [4] drops a small weight on it, [5] drops the BIG
+// anvil. All real dynamic Rapier bodies — they dent whatever they hit — auto-
+// despawned after ~10 s, capped so the scene can't flood.
+const gadgets = [];
+const _gdir = new THREE.Vector3();
+function _gadget(body, mesh, life = 10) {
+  scene.add(mesh);
+  gadgets.push({ body, mesh, t: life });
+  if (gadgets.length > 10) expireGadget(gadgets[0]);
+}
+function expireGadget(g2) {
+  const i = gadgets.indexOf(g2);
+  if (i >= 0) gadgets.splice(i, 1);
+  scene.remove(g2.mesh);
+  world.removeRigidBody(g2.body);
+}
+function fireBall(size) {
+  const [r, mass, sp] = { 1: [0.16, 25, 75], 2: [0.32, 110, 55], 3: [0.55, 400, 42] }[size];
+  const ct = car.body.translation();               // aim at the BODY (mesh can be stale)
+  _gdir.set(ct.x, ct.y + 0.6, ct.z).sub(camera.position);
+  _gdir.normalize();
+  const o = camera.position;
+  const bd = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(o.x + _gdir.x * 2, o.y + _gdir.y * 2, o.z + _gdir.z * 2)
+    .setLinvel(_gdir.x * sp, _gdir.y * sp, _gdir.z * sp).setCcdEnabled(true);
+  const body = world.createRigidBody(bd);
+  const density = mass / ((4 / 3) * Math.PI * r * r * r);
+  world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.6).setRestitution(0.3), body);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14),
+    new THREE.MeshStandardMaterial({ color: 0x8899a6, metalness: 0.85, roughness: 0.3 }));
+  mesh.castShadow = true;
+  _gadget(body, mesh);
+}
+function dropWeight(big) {
+  const [w2, h2, d2, mass] = big ? [1.7, 1.0, 1.7, 2600] : [0.75, 0.55, 0.75, 300];
+  const p = car.body.translation();                // over the BODY (mesh can be stale)
+  const bd = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(p.x + (Math.random() - 0.5) * 0.6, p.y + 7, p.z + (Math.random() - 0.5) * 0.6);
+  const body = world.createRigidBody(bd);
+  const density = mass / (w2 * h2 * d2);
+  world.createCollider(RAPIER.ColliderDesc.cuboid(w2 / 2, h2 / 2, d2 / 2).setDensity(density).setFriction(0.8).setRestitution(0.05), body);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w2, h2, d2),
+    new THREE.MeshStandardMaterial({ color: big ? 0x5a4632 : 0x6b7480, metalness: 0.6, roughness: 0.5 }));
+  mesh.castShadow = true;
+  _gadget(body, mesh, big ? 14 : 10);
+}
+function updateGadgets(dt) {
+  for (let i = gadgets.length - 1; i >= 0; i--) {
+    const g2 = gadgets[i];
+    const t = g2.body.translation(), r = g2.body.rotation();
+    g2.mesh.position.set(t.x, t.y, t.z);
+    g2.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    g2.t -= dt;
+    if (g2.t <= 0 || t.y < -10) expireGadget(g2);
+  }
+}
+
 // ---------------------------------------------------------------- drag strip ----
 // A real quarter-mile at x=150: staging line, split markers (60ft/330/1-8/1000ft),
 // gold finish line. Timer arms when you cross the start moving forward; fixed-step
@@ -647,6 +712,7 @@ function frame() {
   car.interpolate(alpha);
   trailer.interpolate(alpha);
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
+  updateGadgets(dt);                    // sync + expire thrown/dropped test objects
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
   fx.update(dt, car);                   // tyre smoke + sparks
   audio.update(dt, car);                // procedural engine + tyre squeal
@@ -820,7 +886,7 @@ function buildHUD() {
     <label>anti-roll bar <span class="val" id="v-arb">29000</span></label>
     <input id="s-arb" type="range" min="0" max="60000" step="1000" value="29000">
     <canvas id="ftg" width="216" height="46"></canvas>
-    <div class="hint">WASD drive · Space handbrake/burnout · [G] DRAG STRIP · [V] slow-mo replay · [H] hitch trailer · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
+    <div class="hint">WASD drive · Space handbrake/burnout · [1-3] GUN s/m/heavy · [4] weight [5] ANVIL · [G] DRAG STRIP · [V] replay · [H] hitch · drag=orbit · scroll=zoom · [C] free-cam · [R] drop · [P] repair · [K] clear skids<br>
     🎮 LS steer · RT gas · LT reverse · A handbrake · RS camera · Y reset · B repair · X clear skids</div>
     <div class="stamp">build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}</div>`;
   document.body.appendChild(hud);
