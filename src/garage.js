@@ -76,6 +76,7 @@ function physicsStep() {
       if (replay.events.length > 60) replay.events.shift();
     }
     if (mag > 400000) cam.shakeAmt = Math.max(cam.shakeAmt || 0, Math.min(1, mag / 1800000));  // crash shake
+    if (mag > 450000) audio.crash(mag / 2200000);   // VIOLENT crash sound on hard hits
     if (replay.auto && mag > 2200000 && !replay.active && replay.cooldown <= 0) {
       replay.pending = 1.3;               // monster crash → slow-mo crash cam (opt-in; [V] anytime)
       replay.cooldown = 25;
@@ -760,14 +761,14 @@ function updateDragTimer() {
     else {
       for (const [name, dz] of DRAG_MARKS) {
         if (zRel >= dz && !drag.splits.find((s) => s[0] === name)) {
-          drag.splits.push([name, drag.t, car.speedKmh]);
+          drag.splits.push([name, drag.t, car.speedKmh * 0.621371]);
           if (name === "1/4mi") {
             drag.active = false;
-            const et = drag.t, trap = car.speedKmh;
+            const et = drag.t, trap = car.speedKmh * 0.621371;
             if (!drag.best || et < drag.best) drag.best = et;
             const rows = drag.splits.map(([n, t2, v]) => `${n}: ${t2.toFixed(2)}s @ ${v.toFixed(0)}`).join("<br>");
             dragUI((drag.red ? `<b style="color:#ff4444">🔴 RED LIGHT</b><br>` : "") +
-              `<b style="color:#ffe066;font-size:14px">🏁 ${et.toFixed(2)}s @ ${trap.toFixed(0)} km/h</b><br>` +
+              `<b style="color:#ffe066;font-size:14px">🏁 ${et.toFixed(2)}s @ ${trap.toFixed(0)} mph</b><br>` +
               rows + `<br><span style="color:#7fd7ff">session best ${drag.best.toFixed(2)}s</span>`);
             setTree(0);
           }
@@ -1168,7 +1169,7 @@ function updateHUD() {
   set("h-peak", ft.max2s.toFixed(1));
   set("h-sub", String(ft.sub));
   set("h-y", car.height.toFixed(2) + " m");
-  set("h-kmh", car.speedKmh.toFixed(0) + " km/h");
+  set("h-kmh", (car.speedKmh * 0.621371).toFixed(0) + " mph");
   set("h-wg", car.wheels.filter((w) => w.grounded).length + " / 4");
   set("h-dent", String(car.dents));
   set("h-dmg", car.wheelsOff + " / " + car.debris.length);
@@ -1176,7 +1177,7 @@ function updateHUD() {
     const z = car.zoneHealth;
     set("h-zone", [z.front, z.rear, z.left, z.right, z.roof].map((v) => Math.round(v * 100)).join(" "));
   }
-  if (drag.active) dragUI(`⏱ ${drag.t.toFixed(2)}s · ${Math.round(car.speedKmh)} km/h`);
+  if (drag.active) dragUI(`⏱ ${drag.t.toFixed(2)}s · ${Math.round(car.speedKmh * 0.621371)} mph`);
   set("h-inp", Math.round(lastInput.throttle * 100) + " / " + Math.round(lastInput.brake * 100) + " / " + Math.round(lastInput.steer * 100));
   set("h-eng", Math.round(audio.rpm) + " / " + car.screech.toFixed(2));
 }

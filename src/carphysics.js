@@ -565,6 +565,15 @@ export class Car {
     const radius = (this.dentRadius / s) * (0.5 + sev * 1.7);   // big hits reach the hood
     const depth = (this.dentDepth / s) * sev;
     const maxD = this.dentMax / s;
+    // STRUCTURAL CRUMPLE WAVE (Erik): a violent hit doesn't stop at the bumper —
+    // the shock travels down the frame. Above ~full dent force, EVERY vert gets a
+    // secondary compression along the impact direction that decays with distance
+    // downstream — nose takes the crater, the cockpit deforms some, the tail a
+    // whisper. Ignores zone bounds (it's the frame carrying the energy, not the
+    // panel), so a 50mph wall hit visibly shortens/wrinkles the whole car.
+    const waveK = Math.min(1, Math.max(0, mag / this.dentFullForce - 0.85));
+    const waveDepth = 0.3 * (this.dentDepth / s) * waveK;
+    const waveReach = 5.2 / s;                                  // ~full body length
 
     // crumple EVERY body mesh (paint shell + trim + lights — the whole skin)
     const dfs = this.deformables || [{ mesh: this.bodyMesh, orig: this.origPos, zones: this.vertexZone }];
@@ -578,13 +587,22 @@ export class Car {
         const zw = (!zones2 || hitZone < 0 || zones2[i] === hitZone) ? 1 : 0.5;
         _vp.fromBufferAttribute(pos, i);
         const d = _vp.distanceTo(_lp);
-        if (d >= radius) continue;
-        const fall = 1 - d / radius;                          // deepest at the epicenter
-        _vp.addScaledVector(_ld, depth * fall * fall * zw);   // push metal inward
+        const ox = op[i * 3], oy = op[i * 3 + 1], oz = op[i * 3 + 2];
+        // frame shock: axial distance downstream of the hit, along the crush dir
+        let wave = 0;
+        if (waveDepth > 0) {
+          const ax = (ox - _lp.x) * _ld.x + (oy - _lp.y) * _ld.y + (oz - _lp.z) * _ld.z;
+          if (ax > -0.3) {
+            const wf = 1 - Math.min(1, Math.max(0, ax) / waveReach);
+            wave = waveDepth * wf * wf;                       // quadratic falloff to the tail
+          }
+        }
+        if (d >= radius && wave < 1e-4) continue;
+        const fall = d < radius ? 1 - d / radius : 0;         // deepest at the epicenter
+        _vp.addScaledVector(_ld, depth * fall * fall * zw + wave);   // local crater + frame shock
         // crumple texture: POSITION-hashed jitter — coincident (unwelded) verts get
         // identical offsets, so seams stay closed instead of shredding every edge
-        const ox = op[i * 3], oy = op[i * 3 + 1], oz = op[i * 3 + 2];
-        const jit = 0.2 * depth * fall * zw;
+        const jit = 0.2 * depth * fall * zw + 0.35 * wave;    // the wave wrinkles what it passes through
         const s1 = Math.sin(ox * 12.9898 + oy * 78.233 + oz * 37.719) * 43758.5453;
         const s2 = Math.sin(ox * 93.989 + oy * 67.345 + oz * 24.123) * 24634.6345;
         const s3 = Math.sin(ox * 45.332 + oy * 12.788 + oz * 76.211) * 56445.2342;
@@ -594,7 +612,7 @@ export class Car {
         // the traveling tear: one side of the crack plane shears extra → a single
         // coherent rip radiating from the hit (fades with distance)
         const sd = (ox - _lp.x) * _ck.x + (oy - _lp.y) * _ck.y + (oz - _lp.z) * _ck.z;
-        if (sd > 0) _vp.addScaledVector(_ld, 0.3 * depth * fall * zw);
+        if (sd > 0 && fall > 0) _vp.addScaledVector(_ld, 0.3 * depth * fall * zw);
         _off.set(_vp.x - op[i * 3], _vp.y - op[i * 3 + 1], _vp.z - op[i * 3 + 2]);
         if (_off.length() > maxD) _off.setLength(maxD);       // accumulation cap
         pos.setXYZ(i, op[i * 3] + _off.x, op[i * 3 + 1] + _off.y, op[i * 3 + 2] + _off.z);

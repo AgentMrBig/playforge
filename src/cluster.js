@@ -72,6 +72,6 @@ export class Cluster {
     ctx.clearRect(0, 0, W, H);
     const r = 82, cy = 96;
     this._gauge(150, cy, r, this.rpm / this.maxRpm, (this.rpm / 1000).toFixed(1), "RPM x1000", this.redlineRpm / this.maxRpm);
-    this._gauge(310, cy, r, this.kmh / this.maxKmh, Math.round(this.kmh) + "", "KM/H", null);
+    this._gauge(310, cy, r, this.kmh / this.maxKmh, Math.round(this.kmh * 0.621371) + "", "MPH", null);
   }
 }

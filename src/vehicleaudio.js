@@ -127,5 +127,58 @@ export class VehicleAudio {
     n.start(now, Math.random() * 1.5); n.stop(now + 0.08);
   }
 
+  /** VIOLENT one-shot crash (Erik: "a more violent sound when it hits hard") —
+   *  sub-bass boom + distorted noise wall + ringing metal clangs, all scaled by
+   *  severity k (0..1). Rate-limited so a grinding scrape can't machine-gun it. */
+  crash(k) {
+    if (!this.ctx || !this.screechSrc) return;    // audio not started yet (needs a user gesture)
+    const ctx = this.ctx, now = ctx.currentTime;
+    if (this._crashT && now - this._crashT < 0.2) return;
+    this._crashT = now;
+    k = Math.max(0.15, Math.min(1, k));
+    // ---- master bus with a hard clipper for that overdriven slam ----
+    const sh = ctx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = i / 128 - 1; curve[i] = Math.tanh(x * (1.5 + 2.5 * k)); }
+    sh.curve = curve;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.5 + 0.45 * k, now);
+    sh.connect(master); master.connect(ctx.destination);
+    // ---- layer 1: sub-bass BOOM (the body slam you feel) ----
+    const o = ctx.createOscillator(); o.type = "sine";
+    o.frequency.setValueAtTime(60 + 25 * k, now);
+    o.frequency.exponentialRampToValueAtTime(24, now + 0.4);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.001, now);
+    og.gain.exponentialRampToValueAtTime(0.9 * k, now + 0.01);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    o.connect(og); og.connect(sh); o.start(now); o.stop(now + 0.6);
+    // ---- layer 2: crushing noise WALL (sheet metal folding) ----
+    const n = ctx.createBufferSource();
+    n.buffer = this.screechSrc.buffer;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass";
+    lp.frequency.setValueAtTime(3800 + 2000 * k, now);
+    lp.frequency.exponentialRampToValueAtTime(160, now + 0.55);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.85 * k, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    n.connect(lp); lp.connect(ng); ng.connect(sh);
+    n.start(now, Math.random() * 1.2); n.stop(now + 0.65);
+    // ---- layer 3: ringing metal CLANGS (parts banging around after) ----
+    const clangs = 2 + Math.floor(k * 3);
+    for (let i = 0; i < clangs; i++) {
+      const t0 = now + Math.random() * 0.22 * (i / clangs + 0.2);
+      const c = ctx.createBufferSource();
+      c.buffer = this.screechSrc.buffer;
+      const bp = ctx.createBiquadFilter(); bp.type = "bandpass";
+      bp.frequency.value = 380 + Math.random() * 2200; bp.Q.value = 9 + Math.random() * 7;
+      const cg = ctx.createGain();
+      cg.gain.setValueAtTime(0.28 * k, t0);
+      cg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.2 + Math.random() * 0.25);
+      c.connect(bp); bp.connect(cg); cg.connect(sh);
+      c.start(t0, Math.random() * 1.5); c.stop(t0 + 0.5);
+    }
+  }
+
   get rpm() { return this.engine ? this.engine.rpm : 0; }
 }
