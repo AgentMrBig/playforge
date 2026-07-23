@@ -8,6 +8,7 @@ import { Cluster } from "./cluster.js";
 import { VehicleFX } from "./vehiclefx.js";
 import { Trailer } from "./trailer.js";
 import { loadCharacter } from "./character.js";
+import { CarFire } from "./firesys.js";
 import { Ragdoll } from "./ragdoll.js";
 import { initRapier } from "./phys.js";
 
@@ -34,7 +35,7 @@ const CARS = {
 const FIXED = 1 / 60;                 // fixed physics dt — deterministic, refresh-independent
 const MAX_SUBSTEPS = 5;               // spiral-of-death guard
 
-let world, car, scene, camera, renderer, eventQueue, skid, fx, trailer;
+let world, car, scene, camera, renderer, eventQueue, skid, fx, trailer, fire;
 let last = performance.now() / 1000;
 let acc = 0;
 const keys = {};
@@ -80,6 +81,10 @@ function physicsStep() {
     }
     if (mag > 400000) cam.shakeAmt = Math.max(cam.shakeAmt || 0, Math.min(1, mag / 1800000));  // crash shake
     if (mag > 450000) audio.crash(mag / 2200000);   // VIOLENT crash sound on hard hits
+    // FIRE: catastrophic hits can rupture the fuel system — chance scales with
+    // violence; a cooked radiator (D3 overheat pegged) ignites on its own below
+    if (fire && mag > 2400000 && Math.random() < 0.4)
+      fire.ignite(point && point.z > car.body.translation().z ? "front" : "rear", 0.35);
     if (replay.auto && mag > 2200000 && !replay.active && replay.cooldown <= 0) {
       replay.pending = 1.3;               // monster crash → slow-mo crash cam (opt-in; [V] anytime)
       replay.cooldown = 25;
@@ -304,6 +309,7 @@ async function main() {
   scene.add(car.mesh);
   skid = new SkidTrails(scene);
   fx = new VehicleFX(scene);
+  fire = new CarFire(scene, car);          // Erik's fire system — stage 1: the car burns
   audio.onPop = (d) => fx.exhaustFlame(car, d);   // fire out the pipes on every backfire
   trailer = new Trailer(world, RAPIER, { pos: [5, 0.5, -5] });   // spawn at ride height, no drop
   scene.add(trailer.mesh);
@@ -318,6 +324,7 @@ async function main() {
     replay, recordFrame, startReplay, stopReplay, updateReplay, trailer, toggleHitch, drag, updateDragTimer,
     fireBall, dropWeight, gadgets, updateGadgets,
     get dummy() { return dummy; }, updateDummy, updateDummyFixed,
+    get fire() { return fire; },
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -347,9 +354,10 @@ async function main() {
   addEventListener("resize", onResize);
   addEventListener("keydown", (e) => {
     keys[e.code] = true;
-    if (e.code === "KeyR") car.reset();
+    if (e.code === "KeyR") { car.reset(); fire?.douse(); }
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
-    if (e.code === "KeyP") car.repair();    // un-dent the body
+    if (e.code === "KeyP") { car.repair(); fire?.douse(); }   // un-dent + put out
+    if (e.code === "Digit6") fire?.ignite("front", 0.5);      // torch it (test)
     if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
@@ -950,6 +958,12 @@ function frame() {
   updateDummy(dt);                      // the little guy wanders… and flies
   skid.update(car);                     // lay tyre skid marks where wheels slide/spin
   fx.update(dt, car);                   // tyre smoke + sparks
+  // engine cooked past the limp floor for a while → it catches
+  if (fire) {
+    if (car.overheat >= 1 && car.heatMul <= 0.41 && !fire.burning && Math.random() < 0.15 * dt)
+      fire.ignite("front", 0.25);
+    fire.update(dt);
+  }
   audio.update(dt, car);                // procedural engine + tyre squeal
   cluster.update(audio.rpm, car.speedKmh);   // tach + speedo
 
