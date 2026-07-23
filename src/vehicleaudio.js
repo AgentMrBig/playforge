@@ -65,6 +65,9 @@ export class VehicleAudio {
     // suspension clunk on hard bumps (kerbs, landings, potholes)
     if (car.bumpPulse > 0) { this._thud(Math.min(1, car.bumpPulse)); car.bumpPulse = 0; }
 
+    // D3: battered transmission dropout → backfire BANG + flame out the pipes
+    if (car.transPop) { car.transPop = 0; this._pop(0); if (this.onPop) this.onPop(0); }
+
     // exhaust backfire: lift off suddenly at high revs → 1-3 sharp pops
     const th = Math.max(0, car.throttle || 0);
     if ((this._prevTh || 0) > 0.65 && th < 0.15 && this.engine && this.engine.rpm > this.engine.redline * 0.45) {

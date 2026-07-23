@@ -291,6 +291,25 @@ export class Car {
       this._steerBias = 0.055 * (this.wheels[1].bend - this.wheels[0].bend);
     } else this._steerBias = 0;
 
+    // D3 MECHANICAL STATES — the drivetrain takes damage, not just the body:
+    // • smashed front end (< 40%) cooks the radiator: engine torque fades
+    //   ~1.5%/s down to a 40% limp, hood smoke ramps (vehiclefx reads overheat)
+    if (zh && zh.front < 0.4) {
+      this.overheat = Math.min(1, (this.overheat || 0) + dt * 0.3);
+      this.heatMul = Math.max(0.4, (this.heatMul ?? 1) - 0.015 * dt);
+    } else this.overheat = Math.max(0, (this.overheat || 0) - dt * 0.5);
+    // • battered transmission: past ~4MN of lifetime hits, random brief torque
+    //   dropouts with a backfire BANG (audio + exhaust flame read transPop)
+    if (this._dropT > 0) this._dropT -= dt;
+    else if ((this._accumMag || 0) > 4e6 && Math.abs(this.throttle) > 0.3) {
+      this._dropCd = (this._dropCd ?? 0) - dt;
+      if (this._dropCd <= 0) {
+        this._dropT = 0.12 + Math.random() * 0.2;      // the dropout
+        this._dropCd = 2.5 + Math.random() * 5;        // until the next one
+        this.transPop = 1;                             // one-shot bang flag
+      }
+    }
+
     // smooth the steer angle toward the input target (no snap)
     const steerGoal = this.steerTarget * this.maxSteer + this._steerBias;
     this.steer += (steerGoal - this.steer) * Math.min(1, this.steerRate * dt);
@@ -391,7 +410,8 @@ export class Car {
 
           // longitudinal: engine + brake + rolling resistance
           // gear-shift latency: torque cut synced to the audio gearbox's shift dip
-          const driveMul = this._boost * (this.shiftCut ? 0.15 : 1);
+          const driveMul = this._boost * (this.shiftCut ? 0.15 : 1)
+            * (this.heatMul ?? 1) * (this._dropT > 0 ? 0.05 : 1);   // D3: overheat fade + trans dropout
           if (w.driven) fLong += this.throttle * this.engineForce * driveMul;
           // burnout: brake the FRONTS (hold the car); drift: brake the rears
           // in burnout mode ALL braking goes to the FRONTS (hold the car) — the rears
@@ -744,6 +764,7 @@ export class Car {
    * nearest wheel (with a real handling consequence) or break off a body chunk.
    */
   impact(worldPoint, mag, worldDir) {
+    this._accumMag = (this._accumMag || 0) + mag;          // lifetime beating (D3 transmission)
     const zone = this.deform(worldPoint, mag, worldDir);   // crumple (also syncs mesh pose)
     // D1: dock the hit panel's health — feeds frame bend (D2) + mechanical states (D3)
     if (zone && this.zoneHealth) {
@@ -978,6 +999,8 @@ export class Car {
     }
     // panels good as new
     if (this.zoneHealth) for (const k in this.zoneHealth) this.zoneHealth[k] = 1;
+    // D3: fresh radiator + transmission
+    this.heatMul = 1; this.overheat = 0; this._accumMag = 0; this._dropT = 0; this._dropCd = 0;
     // un-shatter the glass
     if (this.glassBroken) {
       for (const m of this.glassMats) { m.visible = true; m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }

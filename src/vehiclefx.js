@@ -59,6 +59,24 @@ export class VehicleFX {
         for (let k = 0; k < n; k++) this._spark(w.cx, w.cy ?? 0.1, w.cz);
       }
     }
+    // ---- D3: overheating engine — smoke curls off the hood, thicker as it cooks ----
+    if ((car.overheat || 0) > 0.05) {
+      const oh = car.overheat, cook = 1.5 - (car.heatMul ?? 1);   // darker/thicker as power fades
+      this._hoodAcc = (this._hoodAcc || 0) + (3 + 16 * oh) * dt;
+      const m = car.mesh;
+      while (this._hoodAcc >= 1) {
+        this._hoodAcc -= 1;
+        _p.set((Math.random() - 0.5) * 0.7, 0.95, 1.3 + Math.random() * 0.5)
+          .applyQuaternion(m.quaternion).add(m.position);
+        const gray = 0.85 - cook * 0.35 + Math.random() * 0.08;   // steam → oily smoke
+        this.smoke.spawn({
+          x: _p.x, y: _p.y, z: _p.z,
+          vx: (Math.random() - 0.5) * 0.7, vy: 0.5 + Math.random() * 0.5, vz: (Math.random() - 0.5) * 0.7,
+          size: 0.25 + oh * 0.3, grow: 1.6 + oh * 1.4, r: gray, g: gray, b: gray,
+          a: 0.12 + oh * 0.2, life: 1.6 + Math.random() * 1.4, drag: 1.2, gravity: -0.12,
+        });
+      }
+    }
     this._carAvoid(car);       // smoke flows AROUND the body, not through it
     this.smoke.update(dt);
     this.sparks.update(dt);
