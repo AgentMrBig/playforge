@@ -51,8 +51,13 @@ function physicsStep() {
   const stepEvs = [];     // D5: this step's chassis impacts, for the opposing-pair test
   eventQueue.drainContactForceEvents((e) => {
     const c1 = e.collider1(), c2 = e.collider2();
-    // D4: the chassis is 5 sub-colliders now — accept a hit on ANY of them
-    if (!car.colliderHandles.has(c1) && !car.colliderHandles.has(c2)) return;
+    // D4: chassis = 5 sub-colliders; DERBY: AI cars deform too — a car-vs-car
+    // hit crumples BOTH sides from the same event
+    const carOf = (h) => car.colliderHandles.has(h) ? car
+      : aiCars.find((a) => a.colliderHandles.has(h)) || null;
+    const carA = carOf(c1), carB = carOf(c2);
+    if (!carA && !carB) return;
+    const isPlayer = carA === car || carB === car;
     const mag = e.totalForceMagnitude();
     const dir = e.maxForceDirection();
     let point = null;
@@ -65,8 +70,10 @@ function physicsStep() {
       });
     } catch (err) { /* no manifold → deform falls back to the force direction */ }
     const glassWas = car.glassBroken;
-    car.impact(point, mag, dir);
+    if (carA) carA.impact(point, mag, dir);
+    if (carB && carB !== carA) carB.impact(point, mag, dir);
     if (fx) fx.onImpact(point, mag);      // spark burst on hard hits
+    if (!isPlayer) return;                // everything below is player feedback
     // log the damage event on the replay timeline (with the pose it happened at)
     if (point && mag >= car.dentThreshold) {
       const t = car.body.translation(), r = car.body.rotation();
@@ -325,6 +332,7 @@ async function main() {
     fireBall, dropWeight, gadgets, updateGadgets,
     get dummy() { return dummy; }, updateDummy, updateDummyFixed,
     get fire() { return fire; },
+    aiCars, updateAI,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -403,7 +411,63 @@ async function main() {
   loadVehicle(spec.file, { targetLength: spec.len, ...spec.opts })
     .then((rig) => { rig.name = pick; car.attachModel(rig); window.__garage.modelLoaded = pick; })
     .catch((e) => console.warn("[garage] model load failed, keeping box:", e));
+
+  spawnDerby();                             // Erik #1: AI cars to hunt
 }
+
+// ------------------------------------------------------ AI TRAFFIC / DERBY ----
+// A few full Car instances (same physics, same deform/zones/wheels-off — car-vs-
+// car crashes crumple BOTH sides) with a dumb-but-fun driver: cruise waypoints,
+// re-target when reached or stuck, brief reverse to unstick. Hunt them down.
+const aiCars = [];
+function spawnDerby() {
+  const picks = [["sedan", [60, -60]], ["suv", [-70, 70]], ["lowcar", [-50, -90]]];
+  for (const [key, [x, z]] of picks) {
+    const spec2 = CARS[key];
+    const ai = new Car(world, RAPIER, { pos: [x, 2, z] });
+    scene.add(ai.mesh);
+    ai._ai = { tgt: new THREE.Vector3(Math.random() * 300 - 150, 0, Math.random() * 300 - 150),
+      stuckT: 0, revT: 0 };
+    loadVehicle(spec2.file, { targetLength: spec2.len, ...spec2.opts })
+      .then((rig) => { rig.name = key; ai.attachModel(rig); })
+      .catch(() => {});
+    aiCars.push(ai);
+  }
+}
+const _aiTo = new THREE.Vector3();
+function updateAI() {
+  for (const ai of aiCars) {
+    const A = ai._ai, t = ai.body.translation();
+    _aiTo.set(A.tgt.x - t.x, 0, A.tgt.z - t.z);
+    const dist = _aiTo.length();
+    if (dist < 8) A.tgt.set(Math.random() * 400 - 200, 0, Math.random() * 400 - 200);
+    // heading error → steer (P-control), speed capped for cruising
+    const r = ai.body.rotation();
+    _q2ai.set(r.x, r.y, r.z, r.w);
+    _aiFwd.set(0, 0, 1).applyQuaternion(_q2ai);
+    const want = Math.atan2(_aiTo.x, _aiTo.z);
+    const have = Math.atan2(_aiFwd.x, _aiFwd.z);
+    let err = want - have;
+    if (err > Math.PI) err -= 2 * Math.PI; else if (err < -Math.PI) err += 2 * Math.PI;
+    const spd = Math.abs(ai.speedKmh);
+    // stuck? (pushed into a wall / wrecked into a corner) → back out for a bit
+    if (spd < 2 && A.revT <= 0) A.stuckT += FIXED; else if (spd > 4) A.stuckT = 0;
+    if (A.stuckT > 1.6) { A.revT = 1.2; A.stuckT = 0; }
+    if (A.revT > 0) {
+      A.revT -= FIXED;
+      ai.setInput({ throttle: -0.6, steer: -Math.sign(err) });
+    } else {
+      ai.setInput({
+        throttle: spd > 55 ? 0 : 0.55,
+        steer: THREE.MathUtils.clamp(err * 1.4, -1, 1),
+        brake: Math.abs(err) > 2 && spd > 25 ? 0.6 : 0,
+      });
+    }
+    ai.fixedUpdate(FIXED);
+  }
+}
+const _q2ai = new THREE.Quaternion();
+const _aiFwd = new THREE.Vector3();
 
 /** angled ramp box: pos = base center [x,0,z], rotX in radians (tilt) */
 /** smooth ramp: right-triangular prism, thin edge FLUSH with the ground (no lip).
@@ -934,11 +998,14 @@ function frame() {
   while (acc >= FIXED && steps < MAX_SUBSTEPS) {
     car.snapshotPrev();
     trailer.snapshotPrev();
+    for (const ai of aiCars) ai.snapshotPrev();
     car.fixedUpdate(FIXED);     // suspension + tire forces BEFORE the solve
     trailer.fixedUpdate(FIXED);
+    updateAI();                 // derby drivers (steer + their own fixedUpdate)
     physicsStep();
     car.snapshotCurr();
     trailer.snapshotCurr();
+    for (const ai of aiCars) ai.snapshotCurr();
     recordFrame();              // 60Hz ring buffer for the replay / crash cam
     updateDragTimer();          // fixed-step-accurate quarter-mile timing
     updateSweeper();            // spin the ball-sweeper (kinematic)
@@ -953,6 +1020,7 @@ function frame() {
   handlePadExtras(dt);                  // gamepad one-shots + right-stick camera
   car.interpolate(alpha);
   trailer.interpolate(alpha);
+  for (const ai of aiCars) { ai.interpolate(alpha); ai.updateDebris(dt); }
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   updateGadgets(dt);                    // sync + expire thrown/dropped test objects
   updateDummy(dt);                      // the little guy wanders… and flies
