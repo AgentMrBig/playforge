@@ -345,6 +345,7 @@ async function main() {
     get dummy() { return dummy; }, updateDummy, updateDummyFixed,
     get fire() { return fire; },
     aiCars, updateAI, updateDerbyScore,
+    get turret() { return turret; }, updateTurret, fireCannon,
     render() { car.interpolate(1); updateCamera(0.016); renderer.render(scene, camera); },
     step(n = 1) { for (let i = 0; i < n; i++) { car.snapshotPrev(); trailer.snapshotPrev(); car.fixedUpdate(FIXED); trailer.fixedUpdate(FIXED); physicsStep(); car.snapshotCurr(); trailer.snapshotCurr(); } return car.height; },
     wheels() { return car.wheels.map((w) => ({ n: w.name, grounded: w.grounded, comp: +w.comp.toFixed(3), dist: +w.dist.toFixed(3) })); },
@@ -378,6 +379,7 @@ async function main() {
     if (e.code === "KeyT") car.reset(12);   // big drop — hard-landing settle test
     if (e.code === "KeyP") { car.repair(); fire?.douse(); }   // un-dent + put out
     if (e.code === "Digit6") fire?.ignite("front", 0.5);      // torch it (test)
+    if (e.code === "KeyF" && turret) fireCannon();            // TANK cannon
     if (e.code === "KeyC") toggleFreeCam(); // chase ⇄ free cam
     if (e.code === "KeyK") skid.clear();    // wipe skid marks
     if (e.code === "KeyV") replay.active ? stopReplay() : startReplay();   // slow-mo replay
@@ -421,10 +423,97 @@ async function main() {
   const pick = new URLSearchParams(location.search).get("car") || "lowcar";
   const spec = CARS[pick] || CARS.lowcar;
   loadVehicle(spec.file, { targetLength: spec.len, ...spec.opts })
-    .then((rig) => { rig.name = pick; car.attachModel(rig); window.__garage.modelLoaded = pick; })
+    .then((rig) => {
+      rig.name = pick; car.attachModel(rig); window.__garage.modelLoaded = pick;
+      if (pick === "tank") setupTurret();     // wire up the turret bones for aiming + firing
+    })
     .catch((e) => console.warn("[garage] model load failed, keeping box:", e));
 
   spawnDerby();                             // Erik #1: AI cars to hunt
+}
+
+// ------------------------------------------------------------- TANK TURRET ----
+// The USA tank rig carries a Turret bone (yaws) + a Barrel bone (pitches). Aim
+// follows the camera; [Space] / left-click fires a cannon shell that shatters
+// whatever it hits and torches AI cars. Bone axes on this UE rig are unknown, so
+// we drive them by ABSOLUTE world orientation (bind captured once), not by
+// guessing a local axis — same discipline as the ragdoll/ik.
+let turret = null;
+const _tq = new THREE.Quaternion(), _tq2 = new THREE.Quaternion(), _tv = new THREE.Vector3(), _tv2 = new THREE.Vector3();
+function setupTurret() {
+  let tb = null, bb = null;
+  car.mesh.traverse((o) => {
+    if (!o.isBone) return;
+    if (/Turret_01$/i.test(o.name)) tb = o;
+    else if (/Turret_Barrel/i.test(o.name)) bb = o;
+  });
+  if (!tb) return;
+  car.mesh.updateWorldMatrix(true, true);
+  turret = { tbone: tb, bbone: bb, yaw: 0, pitch: 0, cd: 0,
+    tBindWorld: tb.getWorldQuaternion(new THREE.Quaternion()),
+    bBindWorld: bb ? bb.getWorldQuaternion(new THREE.Quaternion()) : null };
+}
+// set a bone to an absolute world-space delta (deltaQ * bindWorld), axis-agnostic
+function _aimBone(bone, bindWorld, deltaQ) {
+  bone.parent.updateWorldMatrix(true, false);
+  const pq = bone.parent.getWorldQuaternion(_tq2);
+  _tq.copy(deltaQ).multiply(bindWorld);                 // desired world orientation
+  bone.quaternion.copy(pq.invert().multiply(_tq));
+}
+function updateTurret(dt) {
+  if (!turret) return;
+  if (turret.cd > 0) turret.cd = Math.max(0, turret.cd - dt);
+  // desired aim from the camera direction, expressed in the tank's body frame
+  camera.getWorldDirection(_tv);
+  const cr = car.body.rotation(); _tq2.set(cr.x, cr.y, cr.z, cr.w).invert();
+  _tv2.copy(_tv).applyQuaternion(_tq2);                 // aim in body-local space
+  const wantYaw = Math.atan2(_tv2.x, _tv2.z);
+  const wantPitch = Math.max(-0.12, Math.min(0.35, Math.asin(Math.max(-1, Math.min(1, _tv2.y)))));
+  turret.yaw += (wantYaw - turret.yaw) * Math.min(1, 5 * dt);     // smooth traverse
+  turret.pitch += (wantPitch - turret.pitch) * Math.min(1, 5 * dt);
+  // turret yaws about the tank's UP, barrel pitches about the tank's RIGHT
+  _tv.set(0, 1, 0);
+  _aimBone(turret.tbone, turret.tBindWorld, new THREE.Quaternion().setFromAxisAngle(_tv, turret.yaw));
+  if (turret.bbone) {
+    _tv.set(1, 0, 0).applyQuaternion(new THREE.Quaternion().setFromAxisAngle(_tv2.set(0, 1, 0), turret.yaw));
+    _aimBone(turret.bbone, turret.bBindWorld,
+      new THREE.Quaternion().setFromAxisAngle(_tv, -turret.pitch)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(_tv2.set(0, 1, 0), turret.yaw)));
+  }
+}
+function fireCannon() {
+  if (!turret || turret.cd > 0) return;
+  turret.cd = 1.1;                          // reload
+  // muzzle at the barrel tip, shell along the camera aim (reliable regardless of
+  // exact bone visual); fast + heavy so it caves cars and knocks them flying
+  camera.getWorldDirection(_gdir);
+  // spawn just ahead of the barrel tip. Refresh the bone matrices first (they can
+  // be a frame stale) and sanity-check the muzzle sits near the tank — otherwise
+  // fall back to a point ahead of the camera (always where you're aiming).
+  car.mesh.updateWorldMatrix(true, true);
+  const muzzle = (turret.bbone || turret.tbone).getWorldPosition(new THREE.Vector3());
+  const ct = car.body.translation();
+  if (muzzle.distanceTo(_tv.set(ct.x, ct.y, ct.z)) > 8) muzzle.copy(camera.position);
+  muzzle.addScaledVector(_gdir, 2.6);
+  const sp = 120, r = 0.28, mass = 900;
+  const bd = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(muzzle.x, muzzle.y, muzzle.z)
+    .setLinvel(_gdir.x * sp, _gdir.y * sp, _gdir.z * sp).setCcdEnabled(true);
+  const body = world.createRigidBody(bd);
+  const density = mass / ((4 / 3) * Math.PI * r * r * r);
+  world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.4).setRestitution(0.1)
+    .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(200000)
+    .setCollisionGroups((0x0008 << 16) | 0xffff), body);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10),
+    new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.4, emissive: 0x331100 }));
+  mesh.castShadow = true;
+  _gadget(body, mesh, 5);
+  // muzzle flash + boom + recoil
+  cam.shakeAmt = Math.max(cam.shakeAmt || 0, 0.6);
+  if (fx) fx.onImpact({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, 800000);
+  audio.crash(0.5);
+  car.body.applyImpulse({ x: -_gdir.x * 9000, y: 0, z: -_gdir.z * 9000 }, true);   // kick back
+  turret._shell = body;                    // watch it for the explosion on contact
 }
 
 // ------------------------------------------------------ AI TRAFFIC / DERBY ----
@@ -1092,6 +1181,7 @@ function frame() {
   trailer.interpolate(alpha);
   for (const ai of aiCars) { ai.interpolate(alpha); ai.updateDebris(dt); ai._fire?.update(dt); }
   updateDerbyScore(dt);                 // wreck tally + fresh-meat respawn
+  updateTurret(dt);                     // tank turret aims at the camera
   car.updateDebris(dt);                 // tumble loose wheels/chunks (plain JS)
   updateGadgets(dt);                    // sync + expire thrown/dropped test objects
   updateDummy(dt);                      // the little guy wanders… and flies
