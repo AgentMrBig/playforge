@@ -176,19 +176,41 @@ export class Car {
       );
     this.body = world.createRigidBody(bodyDesc);
 
-    // collider carries the shape only (density 0) — mass comes from the props above
-    const colDesc = RAPIER.ColliderDesc.cuboid(hx, hy, hz)
-      .setDensity(0)
-      .setRestitution(restitution)
-      .setFriction(friction)
-      // the chassis floats on the suspension, so ANY chassis contact is a real
-      // impact — fire force events above the dent threshold to drive deformation
-      .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-      .setContactForceEventThreshold(dentThreshold)
-      // own group bit (0x0004) so soft things (the ragdoll dummy) can opt out of
-      // colliding with the chassis — his flailing limbs were denting the car
-      .setCollisionGroups((0x0004 << 16) | 0xffff);
-    this.collider = world.createCollider(colDesc, this.body);
+    // D4 COMPOUND COLLIDER: 5 density-0 sub-boxes (cabin core + nose/tail/side
+    // faces) instead of one cuboid. Heavy zone damage shifts that face INWARD
+    // (setTranslationWrtParent) so a caved nose COLLIDES caved — push a wreck
+    // against a wall and the crushed metal, not phantom pristine bumper, touches.
+    // All faces fire contact-force events; mass still comes from the body props.
+    const mkSub = (sx, sy, sz, px, py, pz) => world.createCollider(
+      RAPIER.ColliderDesc.cuboid(sx, sy, sz)
+        .setDensity(0)
+        .setRestitution(restitution)
+        .setFriction(friction)
+        // the chassis floats on the suspension, so ANY chassis contact is a real
+        // impact — fire force events above the dent threshold to drive deformation
+        .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
+        .setContactForceEventThreshold(dentThreshold)
+        // own group bit (0x0004) so soft things (the ragdoll dummy) can opt out of
+        // colliding with the chassis — his flailing limbs were denting the car
+        .setCollisionGroups((0x0004 << 16) | 0xffff)
+        .setTranslation(px, py, pz),
+      this.body);
+    this.collider = mkSub(hx * 0.72, hy, hz * 0.55, 0, 0, 0);              // cabin core
+    this._subBase = {
+      front: { x: 0, y: -hy * 0.05, z: hz * 0.76 },
+      rear:  { x: 0, y: -hy * 0.05, z: -hz * 0.76 },
+      left:  { x: hx * 0.84, y: -hy * 0.1, z: 0 },    // zone x labels are MESH-mirrored
+      right: { x: -hx * 0.84, y: -hy * 0.1, z: 0 },   // vs physics x (see D2 note)
+    };
+    this.subCols = {
+      front: mkSub(hx * 0.9, hy * 0.8, hz * 0.24, 0, -hy * 0.05, hz * 0.76),
+      rear:  mkSub(hx * 0.9, hy * 0.8, hz * 0.24, 0, -hy * 0.05, -hz * 0.76),
+      left:  mkSub(hx * 0.16, hy * 0.75, hz * 0.5, hx * 0.84, -hy * 0.1, 0),
+      right: mkSub(hx * 0.16, hy * 0.75, hz * 0.5, -hx * 0.84, -hy * 0.1, 0),
+    };
+    this._crushMax = { front: hz * 0.5, rear: hz * 0.5, left: hx * 0.6, right: hx * 0.6 };
+    this.colliderHandles = new Set([this.collider.handle,
+      ...Object.values(this.subCols).map((c) => c.handle)]);
 
     // ---- visual (placeholder box + nose marker for orientation) ---------
     this.mesh = new THREE.Group();
@@ -759,6 +781,22 @@ export class Car {
     this.modelName = rig.name || "car";
   }
 
+  /** D4: shift each face sub-collider inward by its zone's damage — the physics
+   *  shape follows the crush (per hit, never per frame; no shape rebuilds). */
+  _refitDamageColliders() {
+    const zh = this.zoneHealth;
+    if (!zh || !this.subCols) return;
+    for (const k in this.subCols) {
+      const b = this._subBase[k], crush = (1 - zh[k]) * this._crushMax[k] * 0.8;
+      const p = { x: b.x, y: b.y, z: b.z };
+      if (k === "front") p.z -= crush;
+      else if (k === "rear") p.z += crush;
+      else if (k === "left") p.x -= crush;
+      else p.x += crush;
+      this.subCols[k].setTranslationWrtParent(p);
+    }
+  }
+
   /**
    * A hard hit landed: crumple the body, and above bigger thresholds tear off the
    * nearest wheel (with a real handling consequence) or break off a body chunk.
@@ -770,6 +808,7 @@ export class Car {
     if (zone && this.zoneHealth) {
       const sev = Math.min(1, (mag - this.dentThreshold) / this.dentFullForce);
       this.zoneHealth[zone] = Math.max(0, this.zoneHealth[zone] - (0.1 + sev * 0.3));
+      this._refitDamageColliders();      // D4: the caved face collides caved
     }
     if (!worldPoint) return;
     this.mesh.updateWorldMatrix(true, true);     // refresh WHEEL matrices for the distance test
@@ -930,6 +969,16 @@ export class Car {
       df.mesh.geometry.computeVertexNormals();
     }
     this.dents = 0;
+    // panels good as new
+    if (this.zoneHealth) for (const k in this.zoneHealth) this.zoneHealth[k] = 1;
+    // D3: fresh radiator + transmission
+    this.heatMul = 1; this.overheat = 0; this._accumMag = 0; this._dropT = 0; this._dropCd = 0;
+    this._refitDamageColliders();       // D4: faces back to factory positions
+    // un-shatter the glass
+    if (this.glassBroken) {
+      for (const m of this.glassMats) { m.visible = true; m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
+      this.glassBroken = false;
+    }
   }
 
   /** live CoG height (offset from chassis center: − = low/stable, + = high/tippy) */
@@ -997,19 +1046,13 @@ export class Car {
         w._rfit = false;
       }
     }
-    // panels good as new
-    if (this.zoneHealth) for (const k in this.zoneHealth) this.zoneHealth[k] = 1;
-    // D3: fresh radiator + transmission
-    this.heatMul = 1; this.overheat = 0; this._accumMag = 0; this._dropT = 0; this._dropCd = 0;
-    // un-shatter the glass
-    if (this.glassBroken) {
-      for (const m of this.glassMats) { m.visible = true; m.opacity = m.userData._op ?? 0.5; m.needsUpdate = true; }
-      this.glassBroken = false;
-    }
   }
 
   // live-tunable setters (wired to the Garage HUD sliders)
   setLinearDamping(v) { this.body.setLinearDamping(v); }
   setAngularDamping(v) { this.body.setAngularDamping(v); }
-  setRestitution(v) { this.collider.setRestitution(v); }
+  setRestitution(v) {
+    this.collider.setRestitution(v);
+    if (this.subCols) for (const k in this.subCols) this.subCols[k].setRestitution(v);
+  }
 }

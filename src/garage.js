@@ -46,9 +46,9 @@ let lastInput = { throttle: 0, steer: 0, brake: 0, handbrake: false };
 function physicsStep() {
   world.step(eventQueue);
   eventQueue.drainContactForceEvents((e) => {
-    const ch = car.collider.handle;
     const c1 = e.collider1(), c2 = e.collider2();
-    if (c1 !== ch && c2 !== ch) return;
+    // D4: the chassis is 5 sub-colliders now — accept a hit on ANY of them
+    if (!car.colliderHandles.has(c1) && !car.colliderHandles.has(c2)) return;
     const mag = e.totalForceMagnitude();
     const dir = e.maxForceDirection();
     let point = null;
