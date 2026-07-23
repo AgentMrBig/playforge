@@ -184,7 +184,10 @@ export class Car {
       // the chassis floats on the suspension, so ANY chassis contact is a real
       // impact — fire force events above the dent threshold to drive deformation
       .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-      .setContactForceEventThreshold(dentThreshold);
+      .setContactForceEventThreshold(dentThreshold)
+      // own group bit (0x0004) so soft things (the ragdoll dummy) can opt out of
+      // colliding with the chassis — his flailing limbs were denting the car
+      .setCollisionGroups((0x0004 << 16) | 0xffff);
     this.collider = world.createCollider(colDesc, this.body);
 
     // ---- visual (placeholder box + nose marker for orientation) ---------

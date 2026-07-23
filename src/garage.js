@@ -598,7 +598,10 @@ function buildDummy() {
     scene.add(ch.visual);
     // the REAL ragdoll tech: jointed capsule skeleton + PD muscles + reflexes,
     // simulating in this world — same system as the main game's death ragdoll
-    const rag = new Ragdoll(ch.bones, { world }, {});
+    // ragdoll collides with ground/walls/sweeper but NOT the car (filter out its
+    // 0x0004 bit) — the car plows through him like the main game's pedestrians;
+    // his limbs were wedging in the bodywork and racking up dents (Erik lol)
+    const rag = new Ragdoll(ch.bones, { world }, { collisionGroups: (0x0002 << 16) | (0xffff & ~0x0004) });
     dummy = { mesh: ch.visual, animator: ch.animator, rag,
       pos: new THREE.Vector3(12, 0, 18), tgt: new THREE.Vector3(12, 0, 18),
       flying: false, downT: 0 };
