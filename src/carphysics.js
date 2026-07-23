@@ -272,8 +272,27 @@ export class Car {
     body.resetForces(false);       // clear last step's suspension force + its torque
     body.resetTorques(false);
 
+    // D2 FRAME BEND: corner damage bends the frame — that corner's spring sags
+    // and softens, and a beat-up front end knocks the alignment out so the car
+    // pulls. All driven by zoneHealth (the panels the deform system tracks).
+    const zh = this.zoneHealth;
+    if (zh) {
+      for (const w of this.wheels) {
+        // NOTE: zone left/right labels live in MESH-local x, which the Synty rig
+        // mirrors vs the physics frame — verified empirically (probe 07-23)
+        const side = w.mount.x < 0 ? zh.right : zh.left;
+        const end = w.front ? zh.front : zh.rear;
+        // blend, don't min: a head-on sags BOTH fronts evenly (no fake pull);
+        // the pull appears only when one SIDE is chewed up too
+        w.bend = (1 - end) * 0.55 + (1 - side) * 0.45;
+      }
+      // crooked steering: alignment pulled toward the more-damaged front corner
+      // (sign verified by headless straight-line probe — pulls INTO the damage)
+      this._steerBias = 0.055 * (this.wheels[1].bend - this.wheels[0].bend);
+    } else this._steerBias = 0;
+
     // smooth the steer angle toward the input target (no snap)
-    const steerGoal = this.steerTarget * this.maxSteer;
+    const steerGoal = this.steerTarget * this.maxSteer + this._steerBias;
     this.steer += (steerGoal - this.steer) * Math.min(1, this.steerRate * dt);
 
     // hold Space at low speed + floor it = line-lock burnout (rears spin, fronts
@@ -313,7 +332,7 @@ export class Car {
     for (const w of this.wheels) {
       // a torn-off corner rides the bare hub: shorter rest (sits lower), heavier
       // damping (no pogo), and no tyre grip below — so it DRAGS, not springs/flips.
-      const restLen = w.detached ? 0.22 : this.suspRest;
+      const restLen = w.detached ? 0.22 : this.suspRest * (1 - 0.16 * (w.bend || 0));   // bent corner SAGS
       const reach = restLen + this.wheelRadius;         // ray length: rest + tyre
       // mount in world space = chassis pos + rotated local mount
       _wpos.copy(w.mount).applyQuaternion(_q).add(_tpos.set(t.x, t.y, t.z));
@@ -336,7 +355,8 @@ export class Car {
         // spring - damper, along chassis up; clamp >= 0 (no catapult/suction). A
         // torn-off corner gets heavy damping so it settles + drags without pogo.
         const damp = w.detached ? this.suspDamp * 2.5 : this.suspDamp;
-        let load = this.suspStiff * w.comp - damp * springVel;
+        // bent corner: crushed spring holds less rate (rides soggy over bumps)
+        let load = this.suspStiff * (1 - 0.18 * (w.bend || 0)) * w.comp - damp * springVel;
         if (load < 0) load = 0;
         w.force = load;
 
