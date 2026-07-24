@@ -70,18 +70,19 @@ export async function loadVehicle(url, {
   textureDir = null,        // rebind material maps from here (fixes broken FBX refs)
   textureMap = null,        // {materialKeyword: filename} override
   textureFlipY = false,     // per-pack UV convention (sedan pack false, Assetsville true)
-  preYaw = 0,               // rotate the model about Y before measuring/baking —
-                            // the Synty tank's long axis is X, so preYaw=π/2 faces it forward
+  preYaw = 0,               // rotate the model about Y before measuring/baking
+  preRotX = 0,              // rotate about X first — Z-up models (Synty tank) need
+                            // preRotX=-π/2 to lay flat (Z-up → Y-up) before yaw
 } = {}) {
   const ext = url.split(".").pop().toLowerCase();
   const loaderFn = LOADERS[ext];
   if (!loaderFn) throw new Error("loadVehicle: unsupported " + ext);
   const loaded = await loaderFn().loadAsync(url);
   const root = loaded.scene ?? loaded;               // GLTF wraps in .scene
-  // orientation fix: rotate the model about Y before any measuring/baking so the
-  // corrected forward axis flows through bbox → scale → convex hull (the Synty
-  // tank's long axis is X; preYaw=π/2 turns it to face forward on +Z)
-  if (preYaw) { root.rotation.y = preYaw; root.updateMatrixWorld(true); }
+  // orientation fix: pitch (X) THEN yaw (Y) before any measuring/baking so the
+  // corrected axes flow through bbox → scale → convex hull. A Z-up export lays
+  // flat with preRotX=-π/2; preYaw then points its length down +Z.
+  if (preRotX || preYaw) { root.rotation.set(preRotX, preYaw, 0, "YXZ"); root.updateMatrixWorld(true); }
 
   // ---- rebind textures: FBX often references the wrong folder/filename ----
   if (textureDir) {

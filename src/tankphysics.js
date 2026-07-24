@@ -99,9 +99,23 @@ export class Tank {
     // preYaw −90°: native long-axis X → forward +Z, left/right consistent
     const rig = await loadVehicle("models/military/SK_Veh_Tank_USA_01.FBX", {
       targetLength: 6.8, textureDir: "models/military", textureFlipY: true,
-      textureMap: { material: "T_PolygonMilitary_01_A.PNG" }, preYaw: -Math.PI / 2,
+      textureMap: { material: "T_PolygonMilitary_01_A.PNG" }, preRotX: -Math.PI / 2, preYaw: Math.PI / 2,
     });
     this.visual = rig.visual;
+    // FIX BLACK + MANGLED SHAPE: this Synty tank is a SkinnedMesh whose bone chain
+    // renders it as a black exploded slab. For a vehicle we don't want skinning —
+    // (1) delete the all-zeros vertex-color attribute that multiplies to black,
+    // (2) reset the skeleton to its bind pose so the mesh holds its true shape.
+    this.visual.traverse((o) => {
+      if (!(o.isMesh || o.isSkinnedMesh)) return;
+      if (o.geometry?.attributes?.color) o.geometry.deleteAttribute("color");
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+        if (!m) return;
+        m.vertexColors = false;
+        if (m.color) m.color.setHex(0xffffff);
+        m.needsUpdate = true;
+      });
+    });
     // drop the model so its tracks sit at the wheel-contact line, not floating at
     // the body center (tuned empirically against the settled ride height)
     this.visual.position.y = -0.9;

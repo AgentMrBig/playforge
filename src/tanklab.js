@@ -74,19 +74,43 @@ async function main() {
       `speed   ${(Math.abs(tank.speedKmh) * 0.621371).toFixed(0)} mph\n` +
       `tracks  L ${tank.leftDrive.toFixed(2)}  R ${tank.rightDrive.toFixed(2)}\n` +
       `wheels  ${tank.grounded || 0}/${tank.wheels.length} grounded\n` +
-      `W/S drive · A/D skid-steer (hold both tracks to pivot) · R reset\n` +
+      `W/S drive · A/D skid-steer (pivot in place) · R reset\n` +
+      `drag to orbit · wheel to zoom · [C] free-orbit\n` +
       `build ${typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev"}`;
   };
 
-  addEventListener("keydown", (e) => { keys[e.code] = true; if (e.code === "KeyR") tank.reset(); });
+  addEventListener("keydown", (e) => { keys[e.code] = true; if (e.code === "KeyR") tank.reset(); if (e.code === "KeyC") orbit.on = !orbit.on; });
   addEventListener("keyup", (e) => { keys[e.code] = false; });
+
+  // ---- ORBIT CAMERA (Erik: "zero camera control") — drag to rotate, wheel to
+  // zoom. Chase cam follows the tank; drag offsets the orbit around it. [C] can
+  // detach into a free orbit that stays put.
+  const orbit = { yaw: Math.PI, pitch: 0.42, dist: 14, on: false, drag: false, px: 0, py: 0 };
+  const dom = renderer.domElement;
+  dom.addEventListener("mousedown", (e) => { orbit.drag = true; orbit.px = e.clientX; orbit.py = e.clientY; });
+  addEventListener("mouseup", () => { orbit.drag = false; });
+  addEventListener("mousemove", (e) => {
+    if (!orbit.drag) return;
+    orbit.yaw -= (e.clientX - orbit.px) * 0.006;
+    orbit.pitch = Math.max(-0.2, Math.min(1.35, orbit.pitch + (e.clientY - orbit.py) * 0.006));
+    orbit.px = e.clientX; orbit.py = e.clientY;
+  });
+  dom.addEventListener("wheel", (e) => { e.preventDefault(); orbit.dist = Math.max(5, Math.min(60, orbit.dist + e.deltaY * 0.02)); }, { passive: false });
+  // touch drag/pinch for mobile inspection
+  let pinchD = 0;
+  dom.addEventListener("touchstart", (e) => { if (e.touches.length === 1) { orbit.drag = true; orbit.px = e.touches[0].clientX; orbit.py = e.touches[0].clientY; } else if (e.touches.length === 2) { const dx = e.touches[0].clientX - e.touches[1].clientX, dy = e.touches[0].clientY - e.touches[1].clientY; pinchD = Math.hypot(dx, dy); } }, { passive: true });
+  dom.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 1 && orbit.drag) { orbit.yaw -= (e.touches[0].clientX - orbit.px) * 0.008; orbit.pitch = Math.max(-0.2, Math.min(1.35, orbit.pitch + (e.touches[0].clientY - orbit.py) * 0.008)); orbit.px = e.touches[0].clientX; orbit.py = e.touches[0].clientY; }
+    else if (e.touches.length === 2) { const dx = e.touches[0].clientX - e.touches[1].clientX, dy = e.touches[0].clientY - e.touches[1].clientY; const d = Math.hypot(dx, dy); if (pinchD) orbit.dist = Math.max(5, Math.min(60, orbit.dist * (pinchD / d))); pinchD = d; }
+  }, { passive: true });
+  addEventListener("touchend", () => { orbit.drag = false; pinchD = 0; });
   addEventListener("resize", () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   });
 
   window.__tank = {
-    world, tank, scene, camera, RAPIER, renderer,
+    world, tank, scene, camera, RAPIER, renderer, orbit,
     step(n = 1) { for (let i = 0; i < n; i++) { tank.snapshotPrev(); tank.fixedUpdate(FIXED); world.step(); tank.snapshotCurr(); } return tank.height; },
     render() { tank.interpolate(1); renderer.render(scene, camera); },
     state() { const t = tank.body.translation(), v = tank.body.linvel(), a = tank.body.angvel();
@@ -113,12 +137,22 @@ async function main() {
     // crate visual sync
     scene.traverse((o) => { if (o.userData.body) { const t = o.userData.body.translation(), r = o.userData.body.rotation();
       o.position.set(t.x, t.y, t.z); o.quaternion.set(r.x, r.y, r.z, r.w); } });
-    // chase cam BEHIND the tank (−Z local), level
+    // orbit cam around the tank: yaw follows the tank's heading unless the user
+    // is dragging or has toggled free-orbit [C]; drag/wheel always work
     const bp = tank.mesh.position, bq = tank.mesh.quaternion;
-    const back = new THREE.Vector3(0, 4.5, -11).applyQuaternion(bq);
-    const des = bp.clone().add(new THREE.Vector3(back.x, Math.max(2.5, back.y), back.z));
-    camera.position.lerp(des, 1 - Math.exp(-6 * dt));
-    camera.lookAt(bp.x, bp.y + 1.2, bp.z);
+    if (!orbit.on && !orbit.drag) {
+      // relax the orbit yaw toward "behind the tank" so it chases while driving
+      const heading = Math.atan2(2 * (bq.w * bq.y + bq.x * bq.z), 1 - 2 * (bq.y * bq.y + bq.x * bq.x));
+      let want = heading + Math.PI, d = (want - orbit.yaw) % (Math.PI * 2);
+      if (d > Math.PI) d -= Math.PI * 2; else if (d < -Math.PI) d += Math.PI * 2;
+      orbit.yaw += d * (1 - Math.exp(-3 * dt));
+    }
+    const cp = Math.cos(orbit.pitch), des = new THREE.Vector3(
+      bp.x + Math.sin(orbit.yaw) * orbit.dist * cp,
+      bp.y + 1 + Math.sin(orbit.pitch) * orbit.dist,
+      bp.z + Math.cos(orbit.yaw) * orbit.dist * cp);
+    camera.position.lerp(des, orbit.drag ? 1 : 1 - Math.exp(-8 * dt));
+    camera.lookAt(bp.x, bp.y + 1, bp.z);
     updateHUD();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
