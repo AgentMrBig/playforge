@@ -20,6 +20,7 @@ export default defineConfig({
         character: resolve(__dirname, "character.html"),
         proving: resolve(__dirname, "proving.html"),   // vehicle-physics sandbox
         bike: resolve(__dirname, "bike.html"),         // motorcycle sandbox
+        tank: resolve(__dirname, "tank.html"),         // tracked-vehicle sandbox
       },
     },
   },
