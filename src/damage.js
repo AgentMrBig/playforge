@@ -246,6 +246,18 @@ export class CarCollisions {
       if (now - last < this.debounceMs) continue;
       this._lastHit.set(me, now);
 
+      // New Car system (carphysics) owns mesh crumple via Car.impact — skip the
+      // legacy vert-push so we don't double-dent. Sparks + damage tally still run.
+      if (isCar && vb.car) {
+        const pt = point ? this._rel.set(point.x, point.y, point.z) : this._rel.copy(me.position);
+        pt.y += 0.1;
+        this._sparks?.burst(Math.round(12 + Math.min(2, severity) * 60), pt);
+        me.damage = (me.damage ?? 0) + severity;
+        me.smokeDmg = (me.smokeDmg ?? 0) + severity;
+        me.onCarHit?.(severity, normal ? this._tmpA.set(normal.x, normal.y, normal.z) : undefined);
+        continue;
+      }
+
       // raw crumple axis from the contact normal (fall back to car→other, or
       // travel dir into static geometry, if no manifold normal).
       const dir = this._tmpA;

@@ -11,6 +11,8 @@ export { tween, after, every, Tweens, Ease } from "./tween.js";
 export { Heightfield } from "./terrain.js";
 export { VehicleBody, PlayerVehicleControls } from "./vehicle.js";
 export { initRapier, Physics, RapierVehicle, CharacterBody } from "./phys.js";
+export { Car } from "./carphysics.js";
+export { CarVehicle } from "./carvehicle.js";
 export { Ragdoll } from "./ragdoll.js";
 export { EngineSound } from "./enginesound.js";
 export { Animator, buildHumanoid } from "./animation.js";

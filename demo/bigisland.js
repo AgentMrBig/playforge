@@ -5,8 +5,8 @@
 import {
   Engine, World, ThirdPersonRig, Audio, Collider, StreamedTerrain,
   PlayerVehicleControls, EngineSound, SkidMarks, Animator,
-  loadVehicle, VehicleRig, loadCharacter, CarCollisions,
-  initRapier, Physics, RapierVehicle, CharacterBody, Ragdoll,
+  loadVehicle, loadCharacter, CarCollisions,
+  initRapier, Physics, CarVehicle, CharacterBody, Ragdoll,
   fbm, ridged, mulberry, THREE, HUD, Minimap, RoadNetwork, generateRoads, TouchControls,
   CombatSystem, CombatHUD, loadProp, CharacterAim, TestMode, VehicleTestMode, BlendController, FootPlant, DayNight, BehaviorPlayer, BehaviorTriggers, MotionRecorder,
   spawnPedestrians, TrajectoryLean, FlightHUD,
@@ -600,6 +600,10 @@ spawnPedestrians(world, {
 // back to models/fabpack/SK_citizen_male_28.fbx to flip.
 loadCharacter("models/character/humanoid_male.fbx", {
   targetHeight: 1.8,
+  // FBX RelativeFilename points at a missing .fbm folder — rebind like character.html
+  // or the mesh loads untextured/near-black and reads as "never showed up" on Pages.
+  textureDir: "models/character",
+  texture: "base_texture.png",
   animations: [
     { name: "idle", url: "models/character/anims/idle.fbx" },
     { name: "walk", url: "models/character/anims/walking.fbx" },
@@ -991,23 +995,28 @@ const FLEET = [
 // TEST MODE (Erik): only spawn a truck + a sports car — 18 cars slow the reload.
 // Full fleet back with ?cars=all (each spec stays intact above).
 const wantCars = new URLSearchParams(location.search).get("cars");
-const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) => s.name === "GW_LowCar" || s.name === "GW_LowCar2" || s.name === "GW_Van");
+const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) =>
+  s.name === "Muscle" || s.name === "GW_LowCar" || s.name === "GW_LowCar2" || s.name === "GW_Van");
 const cars = [];
 for (const spec of SPAWN) {
   Promise.all([physReady, loadVehicle(spec.file, spec.opts)])
     .then(([, rig]) => {
       if (spec.paint) rig.setPaint(spec.paint);
-      const e = world.spawn("drivable").mesh(rig.visual)
+      // New Car system (same stack as proving.html?car=muscle) — car.mesh is
+      // added to the scene by CarVehicle; don't parent the rig on the entity.
+      const e = world.spawn("drivable")
         .at(RUN.x0 + 10, RUN.h + 0.4, RUN.z + spec.dz);
       e.rotation.y = Math.PI / 2;                       // face down the runway (+X)
-      e.add(new RapierVehicle({
-        suspension: rig.suspension, wheelRadius: rig.wheelRadius,
+      const cv = new CarVehicle({
         enginePower: spec.ep, topSpeed: spec.top,
-        ...(spec.mass ? { mass: spec.mass } : {}),      // trucks weigh like trucks
-      }))
-        .add(new VehicleRig(rig, { sirenHz: spec.siren }))
+        mass: spec.mass || 1200,
+        wheelRadius: rig.wheelRadius,
+        suspension: rig.suspension,
+      });
+      e.add(cv)
         .add(new EngineSound(audio, { hp: spec.hp }))
         .add(new SkidMarks());
+      cv.attachModel(rig);
       const self = e;
       e.add(new PlayerVehicleControls({ enabled: () => drivingCar === self }));
       e.specName = spec.name; e.rig = rig;
@@ -1219,6 +1228,12 @@ window.addEventListener("keydown", (e) => {
   }
   const target = drivingCar ?? (() => { let b = null, d = 5; for (const c of cars) { const dd = c.position.distanceTo(player.position); if (dd < d) { b = c; d = dd; } } return b; })();
   if (e.code === "KeyF" && target) target.components.find((c) => c.rb)?.recover(target, world);
+  // Paint still works off loadVehicle rig (CarVehicle doesn't wrap VehicleRig).
+  if (e.code === "KeyC" && target?.rig?.setPaint) {
+    const pal = [0xcc2222, 0x2255cc, 0x111418, 0xe0e0e0, 0x1f9d55, 0xe0a020];
+    target._pi = ((target._pi ?? -1) + 1) % pal.length;
+    target.rig.setPaint(pal[target._pi]);
+  }
   const vr = target?.components.find((c) => c.openAll);
   if (!vr) return;
   if (e.code === "KeyO") vr.rig.openParts.some((p) => p.target > 0.5) ? vr.closeAll() : vr.openAll();
@@ -1232,8 +1247,8 @@ window.addEventListener("keydown", (e) => {
 world.spawn("hud").add({ update() {
   const el = document.getElementById("stats"); if (!el) return;
   el.textContent = drivingCar
-    ? `${drivingCar.specName} · ${Math.round(drivingCar.components.find((c) => c.rb)?.kmh ?? 0)} km/h · [O]panels [C]paint [L]lights [F]recover`
-    : `${cars.length}/3 cars · tiles ${terrain.tileCount} · runway → brick wall dead ahead · [E] near a car to drive`;
+    ? `${drivingCar.specName} · ${Math.round(drivingCar.components.find((c) => c.rb)?.kmh ?? 0)} km/h · [C]paint [F]recover`
+    : `${cars.length} cars · tiles ${terrain.tileCount} · runway → brick wall · [E] near a car to drive`;
 } });
 
 // SPEEDOMETER (General, #179 HUD lane): analog gauge, visible only while driving.
