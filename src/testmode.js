@@ -717,9 +717,25 @@ export class TestMode {
     const el = this.panel?.querySelector(".pf-musc-val"); if (el) el.textContent = v.toFixed(1);
   }
   shoveTest(mag = 7) {
-    const rag = window.__rag; if (!rag || !rag.muscle) return;
+    const rag = window.__rag; if (!rag || !rag.active) return;
     const a = Math.random() * Math.PI * 2;
     rag.shove({ x: Math.cos(a), y: 0.2, z: Math.sin(a) }, mag);
+  }
+  /** fight-move probes — trip / clothesline work in muscle OR full ragdoll */
+  fightTest(kind = "trip") {
+    const rag = window.__rag; if (!rag) return;
+    if (!rag.active) {
+      rag.enter();
+      this._muscleOn = false;
+      // drop the walk capsule so it doesn't fight the jointed body
+      const body = this.player?.components?.find?.((c) => c.ctrl && c.velocity);
+      body?.setEnabled?.(false);
+    }
+    const a = Math.random() * Math.PI * 2;
+    const dir = { x: Math.cos(a), y: 0, z: Math.sin(a) };
+    if (kind === "clothesline") rag.clothesline(dir, 9);
+    else if (kind === "trip") rag.trip(dir, 5.5, Math.random() < 0.5 ? "L" : "R");
+    else rag.shove(dir, 8);
   }
 
   // ═══ 🎥 MOMENT CAPTURE + TIME CONTROL (Erik) ═══
@@ -927,12 +943,18 @@ export class TestMode {
             <input type="range" class="pf-musc-slider" min="0" max="12" step="0.5" value="2.5" style="flex:1">
             <b class="pf-musc-val" style="flex:0 0 26px; cursor:default">2.5</b></div>
           <button data-act="shove">👊 shove</button>
-          <div class="pf-test-hint" style="margin-top:4px">high tone = tracks the clip &amp; recovers · low = goes limp. our Euphoria, layer 1.</div>
+          <button data-act="trip" title="soften legs + sweep a shin">🦶 trip</button>
+          <button data-act="clothesline" title="high chest/neck strike with lift">➖ clothesline</button>
+          <div class="pf-test-hint" style="margin-top:4px">high tone = tracks the clip &amp; recovers · low = goes limp. trip/clothesline = fight layer.</div>
         </div>
       </div>
       <div class="pf-grp pf-collapsed" data-grp="physics">
         <div class="pf-grp-h">💥 Physics</div>
-        <div class="pf-grp-b"><button data-act="ragdoll">💥 ragdoll (B)</button></div>
+        <div class="pf-grp-b">
+          <button data-act="ragdoll">💥 ragdoll (B)</button>
+          <button data-act="trip2">🦶 trip</button>
+          <button data-act="clothesline2">➖ clothesline</button>
+        </div>
       </div>
       <div class="pf-test-hint">🖱️ LMB = orbit · RMB = pan · MMB = orbit<br>wheel = zoom<br>pose: pick a limb, then LEFT-drag —<br>the 🟠 ball is the limb's target<br>grip: 1cm / 5° per tap · T = exit</div>`;
     document.body.appendChild(this.panel);
@@ -966,6 +988,10 @@ export class TestMode {
     this.panel.querySelector(".pf-mom-speed").addEventListener("input", (e) => { this._momentSpeed = +e.target.value; const el = this.panel.querySelector(".pf-mom-spd"); if (el) el.textContent = this._momentSpeed.toFixed(2).replace(/0$/, "") + "×"; });
     this.panel.querySelector('[data-act="muscle"]').addEventListener("click", () => this.toggleMuscle());
     this.panel.querySelector('[data-act="shove"]').addEventListener("click", () => this.shoveTest());
+    this.panel.querySelector('[data-act="trip"]')?.addEventListener("click", () => this.fightTest("trip"));
+    this.panel.querySelector('[data-act="clothesline"]')?.addEventListener("click", () => this.fightTest("clothesline"));
+    this.panel.querySelector('[data-act="trip2"]')?.addEventListener("click", () => this.fightTest("trip"));
+    this.panel.querySelector('[data-act="clothesline2"]')?.addEventListener("click", () => this.fightTest("clothesline"));
     this.panel.querySelector(".pf-musc-slider").addEventListener("input", (e) => this.setMuscleTone(+e.target.value));
     this.panel.querySelector('[data-act="lock"]').addEventListener("click", () => {
       if (!this.limb) return;

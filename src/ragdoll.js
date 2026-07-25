@@ -1,75 +1,97 @@
 import * as THREE from "three";
-import { R, Physics } from "./phys.js";
+import { R } from "./phys.js";
 
 /**
  * Active ragdoll — the character as a jointed PHYSICS skeleton with muscles.
  *
- * ~11 capsule rigid bodies (pelvis, chest, head, upper/lower arms, thighs,
- * shins) built from the character's real Mixamo bones, connected by spherical
- * joints at the anatomical pivots. Each fixed step a PD controller applies
- * muscle torque steering every segment toward the pose the Animator is
- * playing — so the body TRIES to hold its animation while physics throws it
- * around. Muscle tone is a dial:
+ * Capsule rigid bodies built from Mixamo bones, connected by Multibody joints
+ * (reduced-coordinate — no soft stretch under load, the big "jenky" fix).
+ * Each fixed step a PD controller applies muscle torque toward the Animator
+ * pose. Muscle tone is a dial:
  *   tone 0   = unconscious noodle
  *   tone ~1  = stunned, flailing toward the pose
  *   tone 3+  = fights hard to hold the mocap pose
  *
- * Usage:
- *   const rag = new Ragdoll(ch.bones, phys, { scaleRoot: ch.visual });
- *   rag.enter(worldPos, velocity);      // switch bones to physics control
- *   rag.update()                        // per-frame: physics pose → bones
- *   rag.fixedUpdate(dt)                 // per-step: PD muscle torques
- *   if (rag.settled()) rag.exit();      // calm → hand back to the Animator
+ * Interactions (Half Sword / fight layer):
+ *   rag.grab("handL", otherBody, worldPoint)  // pull / clinch
+ *   rag.hit(point, impulse)                   // localized strike
+ *   rag.trip(dir) / rag.clothesline(dir)      // fight moves
+ *   rag.release() / rag.releaseAll()
  *
- * Everything here is real dynamics — no scripted flailing, no canned poses.
+ * Usage:
+ *   const rag = new Ragdoll(ch.bones, phys, { tone: 1.9 });
+ *   rag.enter(velocity, impulse, impulsePoint);
+ *   rag.update(); rag.fixedUpdate(dt);
+ *   if (rag.settled()) rag.exit();
  */
 const SEGMENTS = [
-  // name        bone           child end        radius  is-root
-  ["pelvis",    "Hips",         "Spine1",        0.14],
-  ["chest",     "Spine1",       "Neck",          0.13],
-  ["head",      "Head",         null,            0.10],
-  ["upperArmL", "LeftArm",      "LeftForeArm",   0.05],
-  ["forearmL",  "LeftForeArm",  "LeftHand",      0.045],
-  ["upperArmR", "RightArm",     "RightForeArm",  0.05],
-  ["forearmR",  "RightForeArm", "RightHand",     0.045],
-  ["thighL",    "LeftUpLeg",    "LeftLeg",       0.07],
-  ["shinL",     "LeftLeg",      "LeftFoot",      0.06],
-  ["thighR",    "RightUpLeg",   "RightLeg",      0.07],
-  ["shinR",     "RightLeg",     "RightFoot",     0.06],
+  // name        bone           child end          radius
+  ["pelvis",    "Hips",         "Spine1",          0.14],
+  ["chest",     "Spine1",       "Neck",            0.13],
+  ["head",      "Head",         null,              0.10],
+  ["upperArmL", "LeftArm",      "LeftForeArm",     0.05],
+  ["forearmL",  "LeftForeArm",  "LeftHand",        0.045],
+  ["handL",     "LeftHand",     "LeftHand",        0.04],
+  ["upperArmR", "RightArm",     "RightForeArm",    0.05],
+  ["forearmR",  "RightForeArm", "RightHand",       0.045],
+  ["handR",     "RightHand",    "RightHand",       0.04],
+  ["thighL",    "LeftUpLeg",    "LeftLeg",         0.07],
+  ["shinL",     "LeftLeg",      "LeftFoot",        0.06],
+  ["footL",     "LeftFoot",     "LeftToeBase",     0.045],
+  ["thighR",    "RightUpLeg",   "RightLeg",        0.07],
+  ["shinR",     "RightLeg",     "RightFoot",       0.06],
+  ["footR",     "RightFoot",    "RightToeBase",    0.045],
 ];
+
+// Joint tree (parent → child). Multibody requires a tree; order is parent-first.
+// type: spherical (ball) | revolute (hinge). Revolute uses hard Rapier limits.
+// limit = soft cone ROM for spherical (rad from bind). hinge = [min,max] for revolute.
 const JOINTS = [
-  // parent      child        at-bone            limit (rad from bind pose —
-  //                                             anatomical range; Erik: "limit
-  //                                             the damage so they wont go all
-  //                                             weird")
-  // tightened 2026-07-19: Erik read the wide ranges as "floppy" — these are
-  // closer to true human ROM measured from a standing bind
-  ["pelvis",    "chest",     "Spine1",        0.38],
-  ["chest",     "head",      "Head",          0.6],
-  ["chest",     "upperArmL", "LeftArm",       1.2],
-  ["upperArmL", "forearmL",  "LeftForeArm",   1.3],
-  ["chest",     "upperArmR", "RightArm",      1.2],
-  ["upperArmR", "forearmR",  "RightForeArm",  1.3],
-  ["pelvis",    "thighL",    "LeftUpLeg",     1.0],
-  ["thighL",    "shinL",     "LeftLeg",       1.25],
-  ["pelvis",    "thighR",    "RightUpLeg",    1.0],
-  ["thighR",    "shinR",     "RightLeg",      1.25],
+  ["pelvis",    "chest",     "Spine1",       { type: "spherical", limit: 0.35 }],
+  ["chest",     "head",      "Head",         { type: "spherical", limit: 0.55 }],
+  ["chest",     "upperArmL", "LeftArm",      { type: "spherical", limit: 1.15 }],
+  ["upperArmL", "forearmL",  "LeftForeArm",  { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
+  ["forearmL",  "handL",     "LeftHand",     { type: "spherical", limit: 0.7 }],
+  ["chest",     "upperArmR", "RightArm",     { type: "spherical", limit: 1.15 }],
+  ["upperArmR", "forearmR",  "RightForeArm", { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
+  ["forearmR",  "handR",     "RightHand",    { type: "spherical", limit: 0.7 }],
+  ["pelvis",    "thighL",    "LeftUpLeg",    { type: "spherical", limit: 0.95 }],
+  ["thighL",    "shinL",     "LeftLeg",      { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
+  ["shinL",     "footL",     "LeftFoot",     { type: "spherical", limit: 0.55 }],
+  ["pelvis",    "thighR",    "RightUpLeg",   { type: "spherical", limit: 0.95 }],
+  ["thighR",    "shinR",     "RightLeg",     { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
+  ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.55 }],
 ];
+
+const MASS_FRAC = {
+  pelvis: 0.22, chest: 0.24, head: 0.07,
+  upperArmL: 0.035, forearmL: 0.025, handL: 0.015,
+  upperArmR: 0.035, forearmR: 0.025, handR: 0.015,
+  thighL: 0.09, shinL: 0.05, footL: 0.02,
+  thighR: 0.09, shinR: 0.05, footR: 0.02,
+};
+
 // ragdoll parts collide with everything INCLUDING each other — limbs must
 // not pass through limbs (Erik). Adjacent jointed segments don't fight
 // because each joint disables contacts between its own pair.
 const RAGDOLL_GROUPS = (0x0002 << 16) | 0xffff;
 
+let _grabId = 1;
+
 export class Ragdoll {
-  constructor(bones, phys, { totalMass = 75, tone = 1.9, collisionGroups = null } = {}) {   // 1.2 flailed (Erik: too floppy); 1.9 holds its pose more, still ragdolls. Live-dial __rag.tone
+  constructor(bones, phys, { totalMass = 75, tone = 1.9, collisionGroups = null, assist = 0.85 } = {}) {
     this.bones = bones;
     this.phys = phys;
     this.tone = tone;
-    this.collisionGroups = collisionGroups;   // NPC ragdolls pass NPC_COLLISION → cars plow through, don't wedge
+    this.assist = assist;                 // gravity-compensation dial (muscle mode)
+    this.collisionGroups = collisionGroups;
     this.active = false;
-    this.segments = [];               // {name, bone, body, col, len, radius, boneQuatOff}
+    this.muscle = false;
+    this.segments = [];
     this._joints = [];
+    this._grabs = [];                     // cross-body impulse/spring joints
     this._byName = {};
+    this._anchorSeg = null;
     this._tmp = {
       v1: new THREE.Vector3(), v2: new THREE.Vector3(), v3: new THREE.Vector3(),
       q1: new THREE.Quaternion(), q2: new THREE.Quaternion(), q3: new THREE.Quaternion(),
@@ -78,96 +100,148 @@ export class Ragdoll {
     };
     this.totalMass = totalMass;
 
-    // ═══ 3-TIER MUSCLE STACK (Erik's RDR2 §2A) ═══
-    // Every PD joint target = TIER 1 base (the animation pose, what we track today)
-    // ⊗ TIER 2 procedural (micro-adjust deltas: lean, look-at, hill-compensation)
-    // ⊗ TIER 3 reflex (behavior-brain overrides: fall-brace, stumble-catch). Deltas are
-    // world-space quaternions applied per-segment with a 0..1 weight. With NO layers set
-    // this is byte-identical to the old single-tier PD — the death ragdoll + get-up are
-    // untouched by default. `useLayers=false` is a hard A/B kill switch. Live at __rag.
+    // ═══ 3-TIER MUSCLE STACK ═══
     this.layers = { procedural: Object.create(null), reflex: Object.create(null) };
     this.useLayers = true;
-    this._hasLayers = false;          // fast gate: skip composition entirely when empty
+    this._hasLayers = false;
 
-    // Tier-3 autonomous reflexes (fall-brace, §2B). ON by default now (Erik: "didn't
-    // notice any behaviors") — verified it clears on landing so the resting pose is
-    // unchanged. `__rag.reflexesEnabled=false` opts out; `__rag.braceParams` tunes feel.
     this.reflexesEnabled = true;
     this._bracing = false;
     this.braceParams = { fallVy: -3.5, reach: 1.1, armStiff: 1.8, softStiff: 0.55, axis: "z" };
+    this._settleT = 0;
   }
 
   /** build bodies + joints at the skeleton's CURRENT world pose */
   _build() {
-    const P = this.phys, T = this._tmp;
-    const massFor = { pelvis: 0.26, chest: 0.28, head: 0.08, upperArmL: 0.05, forearmL: 0.04,
-      upperArmR: 0.05, forearmR: 0.04, thighL: 0.1, shinL: 0.07, thighR: 0.1, shinR: 0.07 };
+    const P = this.phys;
     for (const [name, boneName, endName, radius] of SEGMENTS) {
       const bone = this.bones[boneName];
       if (!bone) continue;
       bone.updateWorldMatrix(true, false);
       const a = bone.getWorldPosition(new THREE.Vector3());
       let b;
-      if (endName && this.bones[endName]) b = this.bones[endName].getWorldPosition(new THREE.Vector3());
-      else b = a.clone().add(new THREE.Vector3(0, radius * 1.8, 0));   // head stub
+      const boneQ = bone.getWorldQuaternion(new THREE.Quaternion());
+      if (endName === boneName || (endName && !this.bones[endName] && /hand|foot/.test(name))) {
+        // hand/foot stub when no child bone — short capsule along the limb tip
+        const tip = name.startsWith("foot")
+          ? new THREE.Vector3(0, 0, radius * 2.2)   // toes forward (Mixamo +Z)
+          : new THREE.Vector3(0, -radius * 1.6, 0);
+        b = a.clone().add(tip.applyQuaternion(boneQ));
+      } else if (endName && this.bones[endName]) {
+        b = this.bones[endName].getWorldPosition(new THREE.Vector3());
+      } else {
+        b = a.clone().add(new THREE.Vector3(0, radius * 1.8, 0));
+      }
       const mid = a.clone().add(b).multiplyScalar(0.5);
       const dir = b.clone().sub(a);
       const len = Math.max(dir.length(), radius * 1.6);
-      // capsule axis is local +Y — orient it along the bone direction
       const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      // extremities settle faster; core keeps a bit more life for readable tumbles
+      const isTip = /hand|foot|head/.test(name);
+      const linDamp = isTip ? 0.55 : 0.35;
+      const angDamp = isTip ? 2.4 : 1.7;
       const rb = P.world.createRigidBody(
         R.RigidBodyDesc.dynamic()
           .setTranslation(mid.x, mid.y, mid.z)
           .setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w })
-          .setLinearDamping(0.4).setAngularDamping(1.9).setCcdEnabled(true));  // heavy damping kills the jello wobble — measured: settles ~3x faster (Erik)
+          .setLinearDamping(linDamp).setAngularDamping(angDamp).setCcdEnabled(true));
+      const segMass = this.totalMass * (MASS_FRAC[name] ?? 0.03);
       const col = P.world.createCollider(
-        R.ColliderDesc.capsule(Math.max(0.02, len / 2 - radius), radius)
-          .setMass(this.totalMass * (massFor[name] ?? 0.05))
-          .setFriction(0.8).setRestitution(0.1)
+        R.ColliderDesc.capsule(Math.max(0.015, len / 2 - radius), radius)
+          .setMass(segMass)
+          .setFriction(0.9).setRestitution(0.05)
           .setCollisionGroups(this.collisionGroups ?? RAGDOLL_GROUPS), rb);
-      // bone-in-body offsets so physics can drive the bone later
       const boneWorldQ = bone.getWorldQuaternion(new THREE.Quaternion());
-      const segMass = this.totalMass * (massFor[name] ?? 0.05);
       const seg = {
         name, bone, body: rb, col, radius, len,
-        // capsule angular inertia — muscle torques MUST scale by this, not
-        // mass (mass-scaled torques spun segments ~70 rad/s per step and
-        // blew up the solver)
         inertia: segMass * (3 * radius * radius + len * len) / 12,
-        stiffMul: 1,                  // per-segment PD stiffness scale (reflexes dial this)
-        // orientation offset: body → bone
+        stiffMul: 1,
         qOff: quat.clone().invert().multiply(boneWorldQ),
-        // bone pivot in body-local space
         pOff: a.clone().sub(mid).applyQuaternion(quat.clone().invert()),
         targetQ: boneWorldQ.clone(),
-        // bone LOCAL rest position — update() overwrites bone positions while
-        // ragdolling, and the clips are quaternion-only so nothing puts them
-        // back. Without this restore every ragdoll left the skeleton a bit
-        // more displaced until it was "liquid poured out" (Erik) and the
-        // next enter() built bodies from the corrupted pose.
         restPos: bone.position.clone(),
       };
       this.segments.push(seg);
       this._byName[name] = seg;
     }
-    for (const [pn, cn, pivotBone, limit] of JOINTS) {
+
+    for (const [pn, cn, pivotBone, conf] of JOINTS) {
       const p = this._byName[pn], c = this._byName[cn];
       const bone = this.bones[pivotBone];
       if (!p || !c || !bone) continue;
       const pivot = bone.getWorldPosition(new THREE.Vector3());
       const a1 = this._worldToBody(p, pivot), a2 = this._worldToBody(c, pivot);
-      const j = P.world.createImpulseJoint(
-        R.JointData.spherical({ x: a1.x, y: a1.y, z: a1.z }, { x: a2.x, y: a2.y, z: a2.z }),
-        p.body, c.body, true);
-      // connected pair: joint holds them, contacts would only fight it —
-      // but NON-adjacent limbs now collide for real (groups include self)
+      const type = conf.type || "spherical";
+      let params;
+      if (type === "revolute") {
+        const axis = this._hingeAxisLocal(p, c);
+        params = R.JointData.revolute(
+          { x: a1.x, y: a1.y, z: a1.z },
+          { x: a2.x, y: a2.y, z: a2.z },
+          axis);
+      } else {
+        params = R.JointData.spherical(
+          { x: a1.x, y: a1.y, z: a1.z },
+          { x: a2.x, y: a2.y, z: a2.z });
+      }
+      // Multibody = reduced-coordinate tree: joints don't stretch under impact
+      // (impulse joints were the main "rubber-band / jenky" feel).
+      const j = P.world.createMultibodyJoint(params, p.body, c.body, true);
       j.setContactsEnabled?.(false);
-      // bind-pose relative orientation — the ligament limit is measured from here
+      let softHinge = false;
+      if (type === "revolute" && conf.hinge && typeof j.setLimits === "function") {
+        j.setLimits(conf.hinge[0], conf.hinge[1]);
+      } else if (type === "revolute" && conf.hinge) {
+        // Multibody revolute may not expose setLimits in this Rapier build —
+        // soft ligament uses the hinge range as a cone proxy.
+        softHinge = true;
+      }
       const qp = p.body.rotation(), qc = c.body.rotation();
       const rel0 = new THREE.Quaternion(qp.x, qp.y, qp.z, qp.w).invert()
         .multiply(new THREE.Quaternion(qc.x, qc.y, qc.z, qc.w));
-      this._joints.push({ j, p, c, limit: limit ?? 1.5, rel0 });
+      this._joints.push({
+        j, p, c, type,
+        limit: softHinge && conf.hinge
+          ? Math.max(Math.abs(conf.hinge[0]), Math.abs(conf.hinge[1]))
+          : (conf.limit ?? 1.2),
+        hinge: conf.hinge || null,
+        softHinge,
+        rel0, multibody: true,
+      });
     }
+  }
+
+  /** hinge axis in a shared local frame (parent body). Prefer bone-plane normal. */
+  _hingeAxisLocal(parentSeg, childSeg) {
+    const T = this._tmp;
+    const pq = parentSeg.body.rotation();
+    const parentQ = T.q1.set(pq.x, pq.y, pq.z, pq.w);
+    // capsule +Y = bone direction in world
+    const pDir = T.v1.set(0, 1, 0).applyQuaternion(parentQ);
+    const cq = childSeg.body.rotation();
+    const childQ = T.q2.set(cq.x, cq.y, cq.z, cq.w);
+    const cDir = T.v2.set(0, 1, 0).applyQuaternion(childQ);
+    let axisW = T.v3.copy(pDir).cross(cDir);
+    if (axisW.lengthSq() < 1e-8) {
+      // nearly straight limb — use hips lateral as reference
+      const hips = this.bones.Hips;
+      if (hips) {
+        hips.updateWorldMatrix(true, false);
+        const right = T.v1.set(1, 0, 0).applyQuaternion(hips.getWorldQuaternion(T.q3));
+        axisW.copy(pDir).cross(right);
+        if (axisW.lengthSq() < 1e-8) axisW.set(1, 0, 0);
+        else axisW.cross(pDir);
+      } else {
+        axisW.set(1, 0, 0);
+      }
+    }
+    axisW.normalize();
+    // Rapier JS revolute takes one axis vector applied in both local frames.
+    // With co-axial capsules at bind (straight knee/elbow) parent≈child quat
+    // around the bone, so parent-local ≈ child-local for an axis ⊥ bone.
+    const axisL = axisW.applyQuaternion(parentQ.clone().invert());
+    const len = axisL.length() || 1;
+    return { x: axisL.x / len, y: axisL.y / len, z: axisL.z / len };
   }
 
   _worldToBody(seg, worldPos) {
@@ -186,26 +260,7 @@ export class Ragdoll {
       if (velocity) s.body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
       s.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
-    if (impulse && impulsePoint) {
-      // hit the nearest segment so the body SPINS from the contact point.
-      // Clamp to ~16 m/s of delta-v on that segment — the inherited velocity
-      // already carries the momentum; an unclamped hit (51 m/s on one 20kg
-      // part) whiplashed the joint solver and shredded the throw entirely.
-      let best = null, d = 1e9;
-      for (const s of this.segments) {
-        const t = s.body.translation();
-        const dd = impulsePoint.distanceToSquared(new THREE.Vector3(t.x, t.y, t.z));
-        if (dd < d) { d = dd; best = s; }
-      }
-      if (best) {
-        const mag = Math.hypot(impulse.x, impulse.y, impulse.z);
-        const cap = best.body.mass() * 16;
-        const k = mag > cap ? cap / mag : 1;
-        best.body.applyImpulseAtPoint(
-          { x: impulse.x * k, y: impulse.y * k, z: impulse.z * k },
-          { x: impulsePoint.x, y: impulsePoint.y, z: impulsePoint.z }, true);
-      }
-    }
+    if (impulse && impulsePoint) this.hit(impulsePoint, impulse);
     this.active = true;
     this._settleT = 0;
   }
@@ -225,30 +280,24 @@ export class Ragdoll {
     }
   }
 
-  /** ═══ MUSCLE MODE (our Euphoria, Layer 3) ═══
-   * The same active-ragdoll physics + PD muscles, but a LIVE authoring layer instead of a
-   * death state: the pelvis is anchored to the animated body (puppet-strings) so it stays
-   * upright, while every other segment simulates and PD-tracks the animation. Shove it and
-   * the limbs deflect then spring back — physically-reactive animation. tone = muscle tension
-   * (high → tracks the clip and recovers; low → limp). Additive over enter/exit/fixedUpdate. */
+  /** ═══ MUSCLE MODE — hips anchored, limbs physically track the clip ═══ */
   enterMuscle(tone = this.tone) {
     this.tone = tone;
-    this.enter();                                   // build + activate at the current pose
+    this.enter();
     this.muscle = true;
-    // Anchor the pelvis to the animated body (kinematic) so he's held upright while the
-    // jitter-fixed muscles hold the limb poses (feet reach down, arms hold). NOTE: true
-    // stand-on-your-feet balance (dynamic pelvis + foot support) is the next Euphoria
-    // behavior — a real balance controller, tuned by eye. This pass = stable + smooth.
     const root = this._byName.pelvis || this._byName.chest;
-    if (root) { root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true); this._anchorSeg = root; }
+    if (root) {
+      root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true);
+      this._anchorSeg = root;
+    }
     return true;
   }
   exitMuscle() {
     if (this._anchorSeg) this._anchorSeg.body.setBodyType?.(R.RigidBodyType.Dynamic, true);
     this.muscle = false; this._anchorSeg = null;
+    this.releaseAll();
     this.exit();
   }
-  /** pin the anchored pelvis body to the animated bone each fixed step (kinematic follow) */
   _anchorStep() {
     const s = this._anchorSeg; if (!s) return;
     s.bone.updateWorldMatrix(true, false);
@@ -257,12 +306,21 @@ export class Ragdoll {
     s.body.setNextKinematicTranslation({ x: mid.x, y: mid.y, z: mid.z });
     s.body.setNextKinematicRotation({ x: bodyQ.x, y: bodyQ.y, z: bodyQ.z, w: bodyQ.w });
   }
-  /** BALANCE ASSIST via GRAVITY COMPENSATION: cancel (a tone-scaled fraction of) gravity
-   * on every dynamic segment, so the muscle PD holds the standing pose without the body
-   * sagging into a crouch — and with NO positional spring to oscillate. High tone → full
-   * support (stands on its planted feet); low tone → gravity wins (sags, goes limp). The
-   * spectrum (animated ↔ ragdoll) survives; a shove still perturbs and the muscles recover. */
-  /** 👊 shove a segment (default chest) with an impulse in a world direction — the test poke */
+
+  /** cancel a tone-scaled fraction of gravity so muscle PD can hold a stand without sag. */
+  _gravityAssist() {
+    if (!this.muscle || this.assist <= 0) return;
+    const g = this.phys.world.gravity;
+    const k = this.assist * Math.min(1, this.tone / 2.5);
+    for (const s of this.segments) {
+      if (s === this._anchorSeg) continue;
+      if (typeof s.body.isEnabled === "function" && !s.body.isEnabled()) continue;
+      const m = s.body.mass();
+      s.body.addForce({ x: -g.x * m * k, y: -g.y * m * k, z: -g.z * m * k }, true);
+    }
+  }
+
+  /** shove a segment (default chest) — test poke / knockback */
   shove(dir, mag = 6, segName = "chest") {
     const s = this._byName[segName] || this._byName.chest; if (!s || !this.active) return;
     const n = new THREE.Vector3(dir.x || 0, dir.y || 0, dir.z || 0);
@@ -271,13 +329,166 @@ export class Ragdoll {
     s.body.applyImpulse({ x: n.x, y: n.y, z: n.z }, true);
   }
 
-  /** ═══ 3-TIER MUSCLE STACK API ═══
-   * Set a per-segment target adjustment. `deltaQ` is a WORLD-space rotation applied on
-   * top of the animation pose; `weight` 0..1 scales it (slerp from identity). Pass a
-   * falsy deltaQ or weight<=0 to clear that segment's layer.
-   *   TIER 2 — procedural: rag.setProcedural("chest", qLeanDelta, 0.6)
-   *   TIER 3 — reflex:     rag.setReflex("upperArmL", qBraceDelta, 1.0)
-   * Segment names: pelvis, chest, head, upperArm[L/R], forearm[L/R], thigh[L/R], shin[L/R]. */
+  // ═══ FIGHT INTERACTIONS ═══
+
+  /**
+   * Localized hit: impulse at a world point on the nearest segment.
+   * Clamped so one strike can't shred the solver (car-hit path uses this too).
+   */
+  hit(impulsePoint, impulse, { maxDeltaV = 16, soften = null } = {}) {
+    if (!this.active && !this.segments.length) return null;
+    if (!this.segments.length) this._build();
+    let best = null, d = 1e9;
+    const px = impulsePoint.x, py = impulsePoint.y, pz = impulsePoint.z;
+    for (const s of this.segments) {
+      const t = s.body.translation();
+      const dd = (t.x - px) ** 2 + (t.y - py) ** 2 + (t.z - pz) ** 2;
+      if (dd < d) { d = dd; best = s; }
+    }
+    if (!best) return null;
+    const mag = Math.hypot(impulse.x, impulse.y, impulse.z);
+    const cap = best.body.mass() * maxDeltaV;
+    const k = mag > cap ? cap / mag : 1;
+    best.body.applyImpulseAtPoint(
+      { x: impulse.x * k, y: impulse.y * k, z: impulse.z * k },
+      { x: px, y: py, z: pz }, true);
+    // optional: briefly soften the hit region so it "gives" like flesh
+    if (soften != null) {
+      best.stiffMul = Math.min(best.stiffMul, soften);
+      // restore after a short window
+      const restore = best;
+      const prev = 1;
+      setTimeout(() => { if (restore) restore.stiffMul = prev; }, 280);
+    }
+    return best.name;
+  }
+
+  /** leg sweep / trip — soften legs + kick a shin so the body topples believably */
+  trip(dir = { x: 1, y: 0, z: 0 }, mag = 5, side = "L") {
+    if (!this.active) this.enter();
+    const shin = this._byName[`shin${side}`] || this._byName.shinL || this._byName.shinR;
+    const thigh = this._byName[`thigh${side}`] || this._byName.thighL;
+    this._setStiff({
+      thighL: 0.25, thighR: 0.25, shinL: 0.2, shinR: 0.2, footL: 0.2, footR: 0.2,
+      pelvis: 0.55, chest: 0.7,
+    });
+    if (shin) {
+      const n = new THREE.Vector3(dir.x || 0, dir.y || 0, dir.z || 0);
+      if (n.lengthSq()) n.normalize(); else n.set(1, 0, 0);
+      n.multiplyScalar(mag * shin.body.mass());
+      const t = shin.body.translation();
+      shin.body.applyImpulseAtPoint(
+        { x: n.x, y: n.y + shin.body.mass() * 0.8, z: n.z },
+        { x: t.x, y: t.y, z: t.z }, true);
+    }
+    if (thigh) thigh.stiffMul = 0.2;
+    // clear soft legs after the tumble starts
+    setTimeout(() => { if (this.active) this._setStiff(null); }, 650);
+  }
+
+  /** clothesline — high strike across chest/neck with a slight lift */
+  clothesline(dir = { x: 1, y: 0, z: 0 }, mag = 9) {
+    if (!this.active) this.enter();
+    const chest = this._byName.chest || this._byName.pelvis;
+    if (!chest) return;
+    const t = chest.body.translation();
+    const head = this._byName.head?.body.translation();
+    const point = head
+      ? { x: (t.x + head.x) * 0.5, y: (t.y + head.y) * 0.5, z: (t.z + head.z) * 0.5 }
+      : { x: t.x, y: t.y + 0.25, z: t.z };
+    const n = new THREE.Vector3(dir.x || 0, dir.y || 0, dir.z || 0);
+    if (n.lengthSq()) n.normalize(); else n.set(1, 0, 0);
+    n.y += 0.25; n.normalize();
+    n.multiplyScalar(mag * chest.body.mass());
+    this.hit(point, n, { maxDeltaV: 18, soften: 0.35 });
+    // whip the head a bit more for the snap
+    if (this._byName.head) {
+      this._byName.head.body.applyImpulse(
+        { x: n.x * 0.25, y: n.y * 0.15, z: n.z * 0.25 }, true);
+    }
+  }
+
+  /**
+   * Grab / pull — spring joint from one of our segments to another rigid body
+   * (another ragdoll segment, a weapon, a ledge). Returns a handle for release().
+   *   rag.grab("handL", otherRag._byName.forearmR.body, worldPoint)
+   *   rag.grab("handR", { body, point })
+   */
+  grab(segName, target, worldPoint = null, {
+    stiffness = 800, damping = 40, restLength = 0.02, mode = "spring",
+  } = {}) {
+    if (!this.active && !this.segments.length) this._build();
+    if (!this.active) this.enter();
+    const seg = this._byName[segName] || this._byName.handL || this._byName.forearmL;
+    if (!seg) return null;
+
+    let otherBody = null, otherPoint = null;
+    if (target?.body) {
+      otherBody = target.body;
+      otherPoint = target.point || worldPoint;
+    } else if (target?.translation || typeof target?.mass === "function") {
+      otherBody = target;
+      otherPoint = worldPoint;
+    } else if (target instanceof Ragdoll) {
+      const ts = target._byName.forearmR || target._byName.chest;
+      if (!ts) return null;
+      otherBody = ts.body;
+      otherPoint = worldPoint;
+    }
+    if (!otherBody) return null;
+
+    const wp = worldPoint
+      ? new THREE.Vector3(worldPoint.x, worldPoint.y, worldPoint.z)
+      : (() => { const t = seg.body.translation(); return new THREE.Vector3(t.x, t.y, t.z); })();
+    const a1 = this._worldToBody(seg, wp);
+    // other body local anchor
+    const ot = otherBody.translation(), oq = otherBody.rotation();
+    const a2 = wp.clone().sub(new THREE.Vector3(ot.x, ot.y, ot.z))
+      .applyQuaternion(new THREE.Quaternion(oq.x, oq.y, oq.z, oq.w).invert());
+
+    let params;
+    if (mode === "spherical") {
+      params = R.JointData.spherical(
+        { x: a1.x, y: a1.y, z: a1.z },
+        { x: a2.x, y: a2.y, z: a2.z });
+    } else {
+      params = R.JointData.spring(
+        restLength, stiffness, damping,
+        { x: a1.x, y: a1.y, z: a1.z },
+        { x: a2.x, y: a2.y, z: a2.z });
+    }
+    // Cross-tree attachments MUST be impulse joints (multibody is a single tree).
+    const j = this.phys.world.createImpulseJoint(params, seg.body, otherBody, true);
+    j.setContactsEnabled?.(false);
+    const id = _grabId++;
+    const grab = { id, j, seg, otherBody, impulse: true };
+    this._grabs.push(grab);
+    // stiffen the grabbing arm so the pull reads through the shoulder chain
+    if (/hand|forearm|upperArm/.test(seg.name)) {
+      const side = seg.name.endsWith("L") ? "L" : "R";
+      const arm = [`hand${side}`, `forearm${side}`, `upperArm${side}`];
+      for (const n of arm) if (this._byName[n]) this._byName[n].stiffMul = Math.max(this._byName[n].stiffMul, 1.6);
+    }
+    return id;
+  }
+
+  release(id = null) {
+    if (id == null) return this.releaseAll();
+    const i = this._grabs.findIndex((g) => g.id === id);
+    if (i < 0) return false;
+    const g = this._grabs[i];
+    try { this.phys.world.removeImpulseJoint(g.j, true); } catch (_) { /* already gone */ }
+    this._grabs.splice(i, 1);
+    return true;
+  }
+  releaseAll() {
+    for (const g of this._grabs) {
+      try { this.phys.world.removeImpulseJoint(g.j, true); } catch (_) { /* */ }
+    }
+    this._grabs.length = 0;
+  }
+
+  // ═══ 3-TIER MUSCLE STACK API ═══
   setProcedural(segName, deltaQ, weight = 1) { this._setLayer("procedural", segName, deltaQ, weight); }
   setReflex(segName, deltaQ, weight = 1) { this._setLayer("reflex", segName, deltaQ, weight); }
   clearProcedural(segName) { if (segName) delete this.layers.procedural[segName]; else this.layers.procedural = Object.create(null); this._refreshHasLayers(); }
@@ -295,28 +506,21 @@ export class Ragdoll {
     this._hasLayers = Object.keys(this.layers.procedural).length > 0 || Object.keys(this.layers.reflex).length > 0;
   }
 
-  /** compose the 3 tiers into a world-space target for one segment (mutates + returns baseW).
-   * reflex is applied outermost so it dominates the procedural nudge, which dominates base. */
   _composeTarget(segName, baseW) {
     const T = this._tmp;
     const p = this.layers.procedural[segName];
-    if (p && p.weight > 0) baseW.premultiply(T.qA.identity().slerp(p.q, p.weight));   // ⊗ procedural
+    if (p && p.weight > 0) baseW.premultiply(T.qA.identity().slerp(p.q, p.weight));
     const r = this.layers.reflex[segName];
-    if (r && r.weight > 0) baseW.premultiply(T.qB.identity().slerp(r.q, r.weight));   // ⊗ reflex
+    if (r && r.weight > 0) baseW.premultiply(T.qB.identity().slerp(r.q, r.weight));
     return baseW;
   }
 
-  /** ═══ AUTONOMOUS REFLEXES (Tier 3, §2B) ═══
-   * FALL-BRACE: when a segment is falling fast, throw the arms out (reflex target) and
-   * stiffen them while softening the spine + legs, so the body physically braces for
-   * impact instead of tracking the idle pose into the ground. Fully opt-in + self-clears
-   * on landing, so the default death ragdoll is unchanged. Feel (axis/reach) = live params. */
+  /** FALL-BRACE reflex when falling hard */
   _updateReflexes() {
     if (!this.reflexesEnabled || !this.active) return;
     const chest = this._byName.chest || this._byName.pelvis;
     if (!chest) return;
     const lv = chest.body.linvel();
-    // bracing while falling hard AND not yet settled (settle timer resets on impact)
     const brace = lv.y < this.braceParams.fallVy && (this._settleT ?? 0) < 0.06;
     if (brace && !this._bracing) this._enterBrace();
     else if (!brace && this._bracing) this._exitBrace();
@@ -326,10 +530,15 @@ export class Ragdoll {
     const T = this._tmp, Q = T.q1.constructor, V = T.v1.constructor, P = this.braceParams;
     const ax = P.axis;
     const mk = (sign) => new Q().setFromAxisAngle(new V(ax === "x" ? sign : 0, ax === "y" ? sign : 0, ax === "z" ? sign : 0).normalize(), P.reach);
-    this.setReflex("upperArmL", mk(1), 0.9);        // throw arms out to break the fall
+    this.setReflex("upperArmL", mk(1), 0.9);
     this.setReflex("upperArmR", mk(-1), 0.9);
-    this._setStiff({ upperArmL: P.armStiff, upperArmR: P.armStiff, forearmL: P.armStiff * 0.9, forearmR: P.armStiff * 0.9,
-      chest: P.softStiff, pelvis: P.softStiff, thighL: P.softStiff, thighR: P.softStiff, shinL: P.softStiff, shinR: P.softStiff });
+    this._setStiff({
+      upperArmL: P.armStiff, upperArmR: P.armStiff,
+      forearmL: P.armStiff * 0.9, forearmR: P.armStiff * 0.9,
+      handL: P.armStiff * 0.7, handR: P.armStiff * 0.7,
+      chest: P.softStiff, pelvis: P.softStiff,
+      thighL: P.softStiff, thighR: P.softStiff, shinL: P.softStiff, shinR: P.softStiff,
+    });
   }
   _exitBrace() {
     this._bracing = false;
@@ -342,13 +551,13 @@ export class Ragdoll {
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
     this._updateReflexes();
-    if (this.muscle) this._anchorStep();
+    if (this.muscle) {
+      this._anchorStep();
+      this._gravityAssist();
+    }
     const T = this._tmp;
     for (const s of this.segments) {
-      // TIER 1 base: where the ANIMATION wants this bone (the Animator keeps
-      // playing underneath; its pose is the muscle target). Then compose the
-      // procedural + reflex tiers on top (skipped entirely when no layers set,
-      // so the default death-ragdoll path is byte-identical).
+      if (s === this._anchorSeg) continue;
       s.bone.updateWorldMatrix(true, false);
       let worldTarget = s.bone.getWorldQuaternion(T.q1);
       if (this.useLayers && this._hasLayers) worldTarget = this._composeTarget(s.name, worldTarget);
@@ -356,7 +565,6 @@ export class Ragdoll {
       const q = s.body.rotation();
       const cur = T.q2.set(q.x, q.y, q.z, q.w);
       const err = T.q3.copy(s.targetQ).multiply(cur.clone().invert());
-      // shortest arc
       if (err.w < 0) { err.x *= -1; err.y *= -1; err.z *= -1; err.w *= -1; }
       const angle = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
       if (angle > 1e-3) {
@@ -366,29 +574,19 @@ export class Ragdoll {
         const kp = 42 * this.tone * (s.stiffMul ?? 1), kd = 6 * Math.sqrt(Math.max(0.1, this.tone));
         const torque = axis.multiplyScalar(kp * angle)
           .sub(T.v2.set(av.x, av.y, av.z).multiplyScalar(kd));
-        const k = s.inertia * dt;                    // inertia-scaled → stable
+        const k = s.inertia * dt;
         s.body.applyTorqueImpulse({ x: torque.x * k, y: torque.y * k, z: torque.z * k }, true);
       }
     }
-    // ligaments: past the anatomical limit, a stiff equal-and-opposite torque
-    // pair shoves the joint back inside its range (elbows/knees no longer fold
-    // backward). Same inertia-scaled discipline as the muscles.
+    // ligaments / soft ROM — skip hard-limited revolutes (Rapier enforces those)
     for (const L of this._joints) {
-      if (!L.limit) continue;
-      // TENDON DAMPING — always on, not just past the limit. Real joints
-      // resist rotation RATE everywhere (passive muscle, tendons, skin);
-      // without it every joint is a free pendulum = "waaaay too floppy"
-      // (Erik). Pure dissipation, capped per step, so it cannot blow up.
-      {
-        const wp0 = L.p.body.angvel(), wc0 = L.c.body.angvel();
-        const rx = wc0.x - wp0.x, ry = wc0.y - wp0.y, rz = wc0.z - wp0.z;
-        const rl = Math.hypot(rx, ry, rz);
-        if (rl > 0.5) {
-          const dmag = Math.min(14 * rl, 500) * L.c.inertia * dt / rl;
-          L.c.body.applyTorqueImpulse({ x: -rx * dmag, y: -ry * dmag, z: -rz * dmag }, true);
-          L.p.body.applyTorqueImpulse({ x: rx * dmag, y: ry * dmag, z: rz * dmag }, true);
-        }
+      if (L.type === "revolute" && !L.softHinge) {
+        // tendon damping only on hinges
+        this._tendonDamp(L, dt);
+        continue;
       }
+      this._tendonDamp(L, dt);
+      if (!L.limit) continue;
       const qp = L.p.body.rotation(), qc = L.c.body.rotation();
       const parentQ = T.q1.set(qp.x, qp.y, qp.z, qp.w);
       const rel = T.q2.copy(parentQ).invert().multiply(T.q3.set(qc.x, qc.y, qc.z, qc.w));
@@ -398,34 +596,50 @@ export class Ragdoll {
       const over = ang - L.limit;
       if (over > 0) {
         const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
-        // err = rel0⁻¹·δ·rel0 — the axis lives in the CHILD-BIND frame, so
-        // world = parentQ·rel0·axis (parentQ alone pushed sideways and FED
-        // energy in: joints blew past π and the body never settled)
         const bindW = T.q2.copy(parentQ).multiply(L.rel0);
         const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3).applyQuaternion(bindW);
         const wp = L.p.body.angvel(), wc = L.c.body.angvel();
         const relW = T.v2.set(wc.x - wp.x, wc.y - wp.y, wc.z - wp.z).dot(axis);
-        // gains in Δω terms: ~28·relW ≈ critically damped once both bodies
-        // take their share; hard cap keeps one step from ever injecting more
-        // than ~12 rad/s (420/45 uncapped chattered at 60Hz, hit 106 rad/s,
-        // and the sanity clamp then bled ALL momentum — body plopped in place)
-        const mag = Math.min(140 * over + 28 * Math.max(0, relW), 750);
+        const mag = Math.min(160 * over + 32 * Math.max(0, relW), 850);
         const k = L.c.inertia * dt * mag;
         L.c.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
         L.p.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
       }
     }
-    // settle tracking + hard sanity clamps (a bad tune must never feed the
-    // solver runaway energy — that froze the page once)
+    // soft sanity clamps — scale down runaway, never hard-zero (that was the
+    // unpredictable "teleport stop" feel)
     let maxV = 0;
     for (const s of this.segments) {
       const v = s.body.linvel(), w = s.body.angvel();
-      const vl = Math.hypot(v.x, v.y, v.z), wl = Math.hypot(w.x, w.y, w.z);
-      if (!isFinite(vl) || vl > 70) s.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      if (!isFinite(wl) || wl > 45) s.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      maxV = Math.max(maxV, isFinite(vl) ? vl : 0);
+      let vl = Math.hypot(v.x, v.y, v.z), wl = Math.hypot(w.x, w.y, w.z);
+      if (!isFinite(vl) || !isFinite(wl)) {
+        s.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        s.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        continue;
+      }
+      if (vl > 55) {
+        const scl = 55 / vl;
+        s.body.setLinvel({ x: v.x * scl, y: v.y * scl, z: v.z * scl }, true);
+        vl = 55;
+      }
+      if (wl > 40) {
+        const scl = 40 / wl;
+        s.body.setAngvel({ x: w.x * scl, y: w.y * scl, z: w.z * scl }, true);
+      }
+      maxV = Math.max(maxV, vl);
     }
     this._settleT = maxV < 0.8 ? (this._settleT ?? 0) + dt : 0;
+  }
+
+  _tendonDamp(L, dt) {
+    const wp0 = L.p.body.angvel(), wc0 = L.c.body.angvel();
+    const rx = wc0.x - wp0.x, ry = wc0.y - wp0.y, rz = wc0.z - wp0.z;
+    const rl = Math.hypot(rx, ry, rz);
+    if (rl > 0.5) {
+      const dmag = Math.min(16 * rl, 520) * L.c.inertia * dt / rl;
+      L.c.body.applyTorqueImpulse({ x: -rx * dmag, y: -ry * dmag, z: -rz * dmag }, true);
+      L.p.body.applyTorqueImpulse({ x: rx * dmag, y: ry * dmag, z: rz * dmag }, true);
+    }
   }
 
   /** per frame: physics bodies → visual bones (world-space override) */
@@ -439,7 +653,6 @@ export class Ragdoll {
       const pivotWorld = T.v1.copy(s.pOff).applyQuaternion(bodyQ).add(T.v2.set(t.x, t.y, t.z));
       const parent = s.bone.parent;
       parent.updateWorldMatrix(true, false);
-      // world → local under the live parent
       const pq = parent.getWorldQuaternion(T.q3);
       s.bone.quaternion.copy(pq.clone().invert().multiply(boneWorldQ));
       const lp = parent.worldToLocal(pivotWorld.clone());
@@ -447,54 +660,59 @@ export class Ragdoll {
     }
   }
 
-  /** resting long enough to stand back up? */
   settled(after = 1.2) { return this.active && (this._settleT ?? 0) > after; }
 
-  /** orientation of the settled body — pick the get-up clip + which way to stand.
-   * faceUp = belly toward the sky (play the back get-up); yaw = the ground heading
-   * (head direction) to orient the stand toward. Signs are best-guess (Erik confirms). */
   groundOrientation() {
     const T = this._tmp;
     const get = (n) => this._byName[n]?.body.translation();
     const chest = get("chest"), pelvis = get("pelvis"), head = get("head");
     if (!chest || !pelvis) return { faceUp: true, yaw: 0 };
-    // long spine axis (pelvis→head if we have it, else →chest) = more stable direction
     const top = head || chest;
     const spine = T.v1.set(top.x - pelvis.x, top.y - pelvis.y, top.z - pelvis.z);
     const yaw = Math.atan2(spine.x, spine.z);
-    // VOTE the ventral (belly) normal from BOTH the shoulder axis AND the thigh axis —
-    // two independent samples, so one noisy limb at settle can't flip the pick (was 'iffy').
     let vote = 0, samples = 0;
     const cross = (rN, lN) => {
       const r = get(rN), l = get(lN); if (!r || !l) return;
-      const side = T.v2.set(r.x - l.x, r.y - l.y, r.z - l.z);           // left→right
-      vote += Math.sign(T.v3.copy(side).cross(spine).y);                // ventral up (+) / down (−)
+      const side = T.v2.set(r.x - l.x, r.y - l.y, r.z - l.z);
+      vote += Math.sign(T.v3.copy(side).cross(spine).y);
       samples++;
     };
     cross("upperArmR", "upperArmL");
     cross("thighR", "thighL");
-    const faceUp = samples ? vote >= 0 : spine.y > -0.15;               // majority up = face-up
+    const faceUp = samples ? vote >= 0 : spine.y > -0.15;
     return { faceUp, yaw };
   }
 
-  /** pelvis world position (respawn the capsule here) */
   pelvisPos() {
     const t = this._byName.pelvis?.body.translation();
     return t ? new THREE.Vector3(t.x, t.y, t.z) : new THREE.Vector3();
   }
 
-  /** hand the bones back to the Animator */
+  /** world position of a named segment (for grab/aim helpers) */
+  segPos(name) {
+    const t = this._byName[name]?.body.translation();
+    return t ? new THREE.Vector3(t.x, t.y, t.z) : null;
+  }
+
   exit() {
     this.active = false;
+    this.releaseAll();
     for (const s of this.segments) {
       s.body.setEnabled?.(false);
-      s.bone.position.copy(s.restPos);       // undo update()'s position writes
+      s.bone.position.copy(s.restPos);
+      s.stiffMul = 1;
     }
   }
 
   dispose() {
-    for (const L of this._joints) this.phys.world.removeImpulseJoint(L.j ?? L, true);
+    this.releaseAll();
+    for (const L of this._joints) {
+      try {
+        if (L.multibody) this.phys.world.removeMultibodyJoint(L.j, true);
+        else this.phys.world.removeImpulseJoint(L.j ?? L, true);
+      } catch (_) { /* */ }
+    }
     for (const s of this.segments) this.phys.world.removeRigidBody(s.body);
-    this.segments = []; this._joints = [];
+    this.segments = []; this._joints = []; this._byName = {};
   }
 }
