@@ -25,6 +25,7 @@ export default defineConfig({
         chareditor: resolve(__dirname, "character-editor.html"), // character + ragdoll editor
         map: resolve(__dirname, "map.html"),           // large-world streaming proving ground
         flora: resolve(__dirname, "flora.html"),       // procedural flora proving ground
+        stickman: resolve(__dirname, "stickman.html"), // shippable slice — tiny Verlet stickman (no Rapier)
       },
     },
   },
