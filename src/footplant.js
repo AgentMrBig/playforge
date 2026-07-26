@@ -60,20 +60,26 @@ export class FootPlant {
       const surf = this._groundY(_v.x, _v.z, _v.y);
       if (surf == null) { this.locks[limb] = null; continue; }
       const target = surf + this.footOffset;             // ankle height so the sole sits on the surface
-      // FOOT LOCK (standing + moving): a planted foot is pinned in world space so it can't
-      // slide; it releases the moment the clip lifts it to swing. Now that clip playback is
-      // speed-matched to ground speed, the feet lift on time so the lock releases cleanly
-      // (no drag) — the lock just cancels the small residual slide. Over-reach-clamped so
-      // an outrun foot slides to the reach limit instead of splaying into a split.
-      const planted = _v.y - target < this.plantBand;    // foot down → stance
-      if (!planted) { this.locks[limb] = null; continue; } // swinging → clip owns it
-      let lock = this.locks[limb];
-      if (!lock) lock = this.locks[limb] = _v.clone();
-      chain.root.getWorldPosition(_hip);
-      const dx = lock.x - _hip.x, dz = lock.z - _hip.z, r = Math.hypot(dx, dz);
-      if (r > this.maxReach) { const s = this.maxReach / r; lock.x = _hip.x + dx * s; lock.z = _hip.z + dz * s; }
-      lock.y = target;
-      this._solveFoot(chain, lock);
+      if (standing) {
+        // IDLE: conform to the surface HEIGHT only — NO horizontal lock, so the idle clip
+        // freely settles the feet TOGETHER when he stops (the lock used to freeze him in a
+        // mid-stride stance). He's stationary, so there's no ground motion to slide anyway.
+        this.locks[limb] = null;
+        if (_v.y - target < this.plantBand) { _t.copy(_v); _t.y = target; this._solveFoot(chain, _t); }
+      } else {
+        // MOVING: LOCK the planted foot in world space (anti-slide); releases when the clip
+        // lifts it to swing. Clip playback is speed-matched so it releases on time (no drag);
+        // over-reach-clamped so an outrun foot slides to the reach limit, never a split.
+        const planted = _v.y - target < this.plantBand;
+        if (!planted) { this.locks[limb] = null; continue; }
+        let lock = this.locks[limb];
+        if (!lock) lock = this.locks[limb] = _v.clone();
+        chain.root.getWorldPosition(_hip);
+        const dx = lock.x - _hip.x, dz = lock.z - _hip.z, r = Math.hypot(dx, dz);
+        if (r > this.maxReach) { const s = this.maxReach / r; lock.x = _hip.x + dx * s; lock.z = _hip.z + dz * s; }
+        lock.y = target;
+        this._solveFoot(chain, lock);
+      }
     }
   }
 
