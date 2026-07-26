@@ -77,6 +77,8 @@ function buildObstacles() {
   // scattered low trip-boxes near spawn (feet conform / stumble)
   const trips = [[2.5, 0.15, 2], [-2, 0.12, 3], [3, 0.18, -1.5], [-3, 0.15, -3], [1.5, 0.1, 4.5]];
   for (const [x, h, z] of trips) box(0.9, h, 0.9, x, h / 2, z, matTrip);
+  // a tall WALL to walk into — the hands-up-on-the-wall test
+  box(5, 2.6, 0.4, 0, 1.3, -9, matStep);
 }
 
 initRapier().then(() => {

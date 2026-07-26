@@ -5,6 +5,7 @@ import { Ragdoll } from "./ragdoll.js";
 import { loadCharacter } from "./character.js";
 import { TrajectoryLean } from "./charlean.js";
 import { FootPlant } from "./footplant.js";
+import { solveTwoBone, limbChain } from "./ik.js";
 
 /**
  * createCharacterController — THE reusable main character controller (the character
@@ -69,7 +70,7 @@ export function createCharacterController(world, {
   // fight — the roll-our-own move, same lesson as the car's raycast suspension.
   body.flying = true;
   const GRAVITY = 20;
-  let grounded = true, freeFly = false, airT = 0, smoothVisY = null;
+  let grounded = true, freeFly = false, airT = 0, smoothVisY = null, bobPhase = 0;
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
@@ -174,11 +175,51 @@ export function createCharacterController(world, {
       if (smoothVisY == null) smoothVisY = gY;
       smoothVisY += (gY - smoothVisY) * (1 - Math.exp(-9 * dt));
       if (Math.abs(gY - smoothVisY) < 0.006) smoothVisY = gY;
-      if (body._ipCurr) { body._ipCurr.y = smoothVisY; if (body._ipPrev) body._ipPrev.y = smoothVisY; }
+      // procedural GAIT BOB — a run/walk oscillates the CoM vertically, but the ground-pin
+      // above flattens the clip's bob. Add it back: a stride-synced sinusoid (one cycle per
+      // ~1.8m step, dip at footfall), amplitude scaling with speed. Feet stay planted (foot
+      // IK) so the legs compress/extend to make the bob = a real gait, not a floating slide.
+      const hsp = Math.hypot(body.velocity.x, body.velocity.z);
+      bobPhase += (hsp * dt / 1.8) * Math.PI * 2;    // ~one bob per 1.8m step → realistic run cadence
+      const bob = -Math.cos(bobPhase) * 0.06 * Math.min(1, hsp / runSpeed);
+      if (body._ipCurr) { body._ipCurr.y = smoothVisY + bob; if (body._ipPrev) body._ipPrev.y = smoothVisY + bob; }
     } else {
       smoothVisY = entity.position.y;   // airborne (jump/fall): visual tracks physics exactly
     }
     body.onGround = grounded;
+  }
+
+  // ── WALL TOUCH — walking into a wall, bring the hands up onto it instead of pressing
+  // face-first. Forward ray from the chest; when close + pushing toward it, IK both hands
+  // onto the wall surface, blended in/out by wallW. Runs per render frame (after the anim).
+  let wallW = 0;
+  const _wray = R ? new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }) : null;
+  const _wfwd = new THREE.Vector3(), _wlat = new THREE.Vector3(), _wpt = new THREE.Vector3();
+  const _wtgt = new THREE.Vector3(), _whand = new THREE.Vector3(), _wpole = new THREE.Vector3(), _wanchor = new THREE.Vector3();
+  function updateWallTouch(dt) {
+    if (!_wray || !phys?.world || !bones || !body.rb || state !== "anim" || freeFly) { wallW = Math.max(0, wallW - dt * 6); return; }
+    _wfwd.set(Math.sin(entity.rotation.y), 0, Math.cos(entity.rotation.y));
+    _wray.origin.x = entity.position.x; _wray.origin.y = entity.position.y + 1.3; _wray.origin.z = entity.position.z;
+    _wray.dir.x = _wfwd.x; _wray.dir.y = 0; _wray.dir.z = _wfwd.z;
+    const reach = 0.8;
+    const hit = phys.world.castRay(_wray, reach, true, undefined, undefined, undefined, body.rb);
+    const pressing = grounded && Math.hypot(body.velocity.x, body.velocity.z) > 1.0;   // trying to walk forward
+    const want = (hit && pressing) ? 1 : 0;
+    wallW += (want - wallW) * (1 - Math.exp(-8 * dt));
+    if (wallW < 0.02) return;
+    const toi = hit ? (hit.timeOfImpact ?? hit.toi) : reach;
+    _wpt.copy(_wfwd).multiplyScalar(Math.max(0.2, toi - 0.05)).add(_wray.origin);   // just off the wall
+    _wlat.set(_wfwd.z, 0, -_wfwd.x);                                                 // lateral (right)
+    for (const [limb, side] of [["handL", -1], ["handR", 1]]) {
+      const chain = limbChain(visual, limb);
+      if (!chain) continue;
+      chain.eff.getWorldPosition(_whand);
+      _wtgt.copy(_wpt).addScaledVector(_wlat, side * 0.2); _wtgt.y = entity.position.y + 1.35;
+      _wtgt.lerpVectors(_whand, _wtgt, wallW);                                       // blend current hand → wall
+      chain.root.getWorldPosition(_wanchor);
+      _wpole.copy(_wanchor).addScaledVector(_wfwd, -0.4); _wpole.y -= 0.4;           // elbow down/back
+      solveTwoBone({ ...chain, target: _wtgt, pole: _wpole, iterations: 2 });
+    }
   }
 
   // ── natural get-up: settle → snap to where he lies → play a get-up clip ──
@@ -237,6 +278,7 @@ export function createCharacterController(world, {
         const sp = Math.hypot(body.velocity.x, body.velocity.z);
         footIK.update(body.onGround && sp <= 0.6, body.onGround && sp > 0.6);
       }
+      updateWallTouch(dt);                             // hands come up onto a wall he walks into
       if (rag && rag.active) rag.update();             // physics bodies → visual bones
     },
   };
