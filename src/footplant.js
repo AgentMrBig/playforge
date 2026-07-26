@@ -11,7 +11,8 @@
 import * as THREE from "three";
 import { solveTwoBone, limbChain } from "./ik.js";
 
-const _v = new THREE.Vector3();
+const _v = new THREE.Vector3(), _t = new THREE.Vector3();
+const _anchor = new THREE.Vector3(), _fwd = new THREE.Vector3(), _pole = new THREE.Vector3();
 
 export class FootPlant {
   /**
@@ -31,6 +32,7 @@ export class FootPlant {
     this.footOffset = footOffset;
     this.enabled = true;
     this.releaseDist = 0.22;      // clip moved the foot this far → real step, re-plant
+    this.plantBand = 0.14;        // a foot within this of the surface = STANCE (plant it); higher = SWING (leave to clip)
     this.locks = { footL: null, footR: null };   // world Vector3 targets
     if (typeof window !== "undefined") window.__footPlant = this;
   }
@@ -46,44 +48,34 @@ export class FootPlant {
    * (Erik: "automatic feet touch the ground and react"). */
   update(standing, moving = false) {
     if (!this.enabled || (!standing && !moving)) { this.locks.footL = this.locks.footR = null; return; }
-    if (!standing && moving) {
-      this.locks.footL = this.locks.footR = null;
-      if (!this.heightAt && !this.rayGround) return;
-      // locomotion ground-conform: if the clip puts a foot BELOW the surface (slopes,
-      // steps, obstacles), IK it up onto it; above-surface swing is the clip's business
-      for (const limb of ["footL", "footR"]) {
-        const chain = limbChain(this.playerObj, limb);
-        if (!chain) continue;
-        chain.eff.getWorldPosition(_v);
-        const g = this._groundY(_v.x, _v.z, _v.y);
-        if (g == null) continue;
-        const ground = g + this.footOffset;
-        if (_v.y < ground - 0.015) {
-          const target = _v.clone(); target.y = ground;
-          const anchor = chain.root.getWorldPosition(new THREE.Vector3());
-          const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
-          const pole = anchor.clone().addScaledVector(fwd, 0.8).add(new THREE.Vector3(0, 0.4, 0));
-          solveTwoBone({ ...chain, target, pole, iterations: 2 });
-        }
-      }
-      return;
-    }
+    if (!this.heightAt && !this.rayGround) return;
     for (const limb of ["footL", "footR"]) {
       const chain = limbChain(this.playerObj, limb);
       if (!chain) continue;
       chain.eff.getWorldPosition(_v);
-      let lock = this.locks[limb];
-      if (!lock || _v.distanceTo(lock) > this.releaseDist) {
-        // (re)plant where the clip has the foot now, snapped to the real surface
-        lock = this.locks[limb] = _v.clone();
-        const g = this._groundY(lock.x, lock.z, _v.y);
-        if (g != null) lock.y = g + this.footOffset;
+      const surf = this._groundY(_v.x, _v.z, _v.y);
+      if (surf == null) { this.locks[limb] = null; continue; }
+      const target = surf + this.footOffset;      // where the ANKLE goes so the sole sits on the surface
+      if (standing) {
+        // idle: LOCK the foot in place (anti-slide while the clip sways), pinned to the surface
+        let lock = this.locks[limb];
+        if (!lock || _v.distanceTo(lock) > this.releaseDist) lock = this.locks[limb] = _v.clone();
+        lock.y = target;
+        this._solveFoot(chain, lock);
+      } else {
+        // walking: plant the STANCE foot (near/at/below whatever's under it → adapts to
+        // steps, blocks, slopes) and leave the SWING foot (lifted well above) to the clip.
+        this.locks[limb] = null;
+        if (_v.y - target < this.plantBand) { _t.copy(_v); _t.y = target; this._solveFoot(chain, _t); }
       }
-      // knee-forward pole from the character's facing
-      const anchor = chain.root.getWorldPosition(new THREE.Vector3());
-      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
-      const pole = anchor.clone().addScaledVector(fwd, 0.8).add(new THREE.Vector3(0, 0.4, 0));
-      solveTwoBone({ ...chain, target: lock, pole, iterations: 2 });
     }
+  }
+
+  /** two-bone IK the leg onto `target`, knee poled forward from the character's facing */
+  _solveFoot(chain, target) {
+    chain.root.getWorldPosition(_anchor);
+    _fwd.set(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
+    _pole.copy(_anchor).addScaledVector(_fwd, 0.8); _pole.y += 0.4;
+    solveTwoBone({ ...chain, target, pole: _pole, iterations: 2 });
   }
 }

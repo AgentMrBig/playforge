@@ -152,22 +152,23 @@ export function createCharacterController(world, {
   function footProbe(x, z, footY) { return probeGround(x, z, footY, 0.6, 1.6); }
   // runs AFTER the capsule's horizontal move: catch any residual sink and keep the
   // render-interpolation Y in sync so the body doesn't visibly jitter up/down.
-  function groundClamp() {
+  function groundClamp(dt = 1 / 60) {
     if (!groundRay || state !== "anim" || freeFly) return;
     const px = entity.position.x, pz = entity.position.z;
     const gY = probeGround(px, pz, entity.position.y);
     if (gY == null) { grounded = false; body.onGround = false; return; }
-    // PLANT: within the landing band (or sunk below) and not rising → snap the feet
-    // EXACTLY onto the surface. Only preventing sink left him floating a few cm; this
-    // puts the feet on the ground (and rides him up onto steps as he crosses them).
     grounded = entity.position.y <= gY + 0.14 && body.velocity.y <= 0.02;
     if (grounded) {
-      entity.position.y = gY;
-      body.rb.setTranslation({ x: px, y: gY + height / 2, z: pz }, true);
-      body.rb.setNextKinematicTranslation({ x: px, y: gY + height / 2, z: pz });
+      // EASE up onto steps/blocks instead of popping (a step-up used to snap the whole
+      // body instantly); small changes + settling down snap. Feet adapt via FootPlant.
+      const dy = gY - entity.position.y;
+      const ny = dy > 0.03 ? entity.position.y + Math.min(dy, dy * Math.min(1, 10 * dt) + 0.02) : gY;
+      entity.position.y = ny;
+      body.rb.setTranslation({ x: px, y: ny + height / 2, z: pz }, true);
+      body.rb.setNextKinematicTranslation({ x: px, y: ny + height / 2, z: pz });
       body._lastSynced.copy(entity.position);
       if (body.velocity.y < 0) body.velocity.y = 0;
-      if (body._ipCurr) { body._ipCurr.y = gY; if (body._ipPrev) body._ipPrev.y = gY; }   // pin visual Y (no jitter)
+      if (body._ipCurr) { body._ipCurr.y = ny; if (body._ipPrev) body._ipPrev.y = ny; }   // pin visual Y (no jitter)
     }
     body.onGround = grounded;
   }
