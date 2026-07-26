@@ -164,8 +164,12 @@ export function createCharacterController(world, {
     // SPEED-MATCH clip playback to ground speed so the clip's own feet don't slide
     // (measured: walk clip 1.78 m/s, run clip 3.34 m/s at 1x). He moves much faster than
     // the clips were built for, so play them proportionally faster.
-    else if (spd01 > 2.6) animator.play("run", { fade: 0.2, speed: Math.max(0.6, Math.min(3.0, spd01 / 3.34)) });
-    else if (spd01 > 0.4) animator.play("walk", { fade: 0.2, speed: Math.max(0.6, Math.min(3.0, spd01 / 1.78)) });
+    // playback biased ~12% FASTER than the pure match (÷3.0/1.57 not 3.34/1.78) so the
+    // clip cadence slightly leads ground speed — the planted foot lifts BEFORE it can
+    // over-reach, so the lock holds the whole stance with no clamp-drag (removes the last
+    // bit of foot slide).
+    else if (spd01 > 2.6) animator.play("run", { fade: 0.2, speed: Math.max(0.6, Math.min(3.2, spd01 / 3.0)) });
+    else if (spd01 > 0.4) animator.play("walk", { fade: 0.2, speed: Math.max(0.6, Math.min(3.2, spd01 / 1.57)) });
     else animator.play("idle", { fade: 0.3 });
   }
 
