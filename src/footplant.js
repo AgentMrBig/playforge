@@ -44,8 +44,11 @@ export class FootPlant {
   }
 
   /** call once per frame, after the animator + aim layers.
-   * standing: idle → feet LOCK in place. moving: feet CONFORM — never sink into terrain
-   * (Erik: "automatic feet touch the ground and react"). */
+   * FOOT LOCKING: whenever a foot is planted (near the surface = stance) its WORLD
+   * position is LOCKED and the leg IK holds it there while the body moves over it — so
+   * it doesn't slide even if the clip's stride cadence doesn't match ground speed. The
+   * lock releases the instant the clip lifts the foot to swing; it re-plants where the
+   * foot next comes down. Works for both standing and walking/running. */
   update(standing, moving = false) {
     if (!this.enabled || (!standing && !moving)) { this.locks.footL = this.locks.footR = null; return; }
     if (!this.heightAt && !this.rayGround) return;
@@ -55,19 +58,13 @@ export class FootPlant {
       chain.eff.getWorldPosition(_v);
       const surf = this._groundY(_v.x, _v.z, _v.y);
       if (surf == null) { this.locks[limb] = null; continue; }
-      const target = surf + this.footOffset;      // where the ANKLE goes so the sole sits on the surface
-      if (standing) {
-        // idle: LOCK the foot in place (anti-slide while the clip sways), pinned to the surface
-        let lock = this.locks[limb];
-        if (!lock || _v.distanceTo(lock) > this.releaseDist) lock = this.locks[limb] = _v.clone();
-        lock.y = target;
-        this._solveFoot(chain, lock);
-      } else {
-        // walking: plant the STANCE foot (near/at/below whatever's under it → adapts to
-        // steps, blocks, slopes) and leave the SWING foot (lifted well above) to the clip.
-        this.locks[limb] = null;
-        if (_v.y - target < this.plantBand) { _t.copy(_v); _t.y = target; this._solveFoot(chain, _t); }
-      }
+      const target = surf + this.footOffset;             // ankle height so the sole sits on the surface
+      const planted = _v.y - target < this.plantBand;    // foot is down → stance
+      if (!planted) { this.locks[limb] = null; continue; } // swinging → the clip owns it (it's in the air)
+      let lock = this.locks[limb];
+      if (!lock) lock = this.locks[limb] = _v.clone();    // just planted → LOCK this world spot
+      lock.y = target;                                    // keep it on the surface (slopes/steps)
+      this._solveFoot(chain, lock);                       // hold the planted foot still → no slide
     }
   }
 
@@ -76,6 +73,6 @@ export class FootPlant {
     chain.root.getWorldPosition(_anchor);
     _fwd.set(0, 0, 1).applyQuaternion(this.player.object3d.quaternion);
     _pole.copy(_anchor).addScaledVector(_fwd, 0.8); _pole.y += 0.4;
-    solveTwoBone({ ...chain, target, pole: _pole, iterations: 2 });
+    solveTwoBone({ ...chain, target, pole: _pole, iterations: 4 });   // converge tight so the lock holds (no residual slide)
   }
 }
