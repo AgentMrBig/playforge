@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { R } from "./phys.js";
 
+const _E = new THREE.Euler(), _Q = new THREE.Quaternion();   // scratch for the upright-anchor calc
+
 /**
  * Active ragdoll — the character as a jointed PHYSICS skeleton with muscles.
  *
@@ -83,7 +85,7 @@ const CORE_SEG = new Set(["pelvis", "chest"]);
 
 // POSTURAL joints (child names) — spine/neck/hips. Muscle mode stiffens these extra
 // so the torso stays UPRIGHT instead of folding forward at the waist (the "slump").
-const CORE_POST = new Set(["chest", "head", "thighL", "thighR"]);
+const CORE_POST = new Set(["chest", "head", "thighL", "thighR", "shinL", "shinR"]);
 
 const MASS_FRAC = {
   pelvis: 0.22, chest: 0.24, head: 0.07,
@@ -431,8 +433,13 @@ export class Ragdoll {
       // reactions in a real body (solver-managed) → the momentum-conserving PD stays
       // stable, exactly like the free ragdoll.
       const t = root.body.translation(), q = root.body.rotation();
+      // anchor the pelvis UPRIGHT (keep only its yaw) so muscle mode holds him STANDING
+      // straight — pinning whatever leaning/crouched rotation he entered in was the
+      // "hunched slump." Combined with the firm leg hold (CORE_POST), he stands tall.
+      const _e = _E.setFromQuaternion(_Q.set(q.x, q.y, q.z, q.w), "YXZ");
+      const upq = _Q.setFromEuler(_E.set(0, _e.y, 0));
       const stat = this.phys.world.createRigidBody(
-        R.RigidBodyDesc.fixed().setTranslation(t.x, t.y, t.z).setRotation(q));
+        R.RigidBodyDesc.fixed().setTranslation(t.x, t.y, t.z).setRotation({ x: upq.x, y: upq.y, z: upq.z, w: upq.w }));
       const I = { x: 0, y: 0, z: 0, w: 1 }, O = { x: 0, y: 0, z: 0 };
       this._anchorJoint = this.phys.world.createImpulseJoint(
         R.JointData.fixed(O, I, O, I), stat, root.body, true);

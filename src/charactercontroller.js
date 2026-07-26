@@ -110,7 +110,7 @@ export function createCharacterController(world, {
       // into the floor — that down-then-clamp each frame was the up/down jitter).
       // planted → velocity.y = 0; airborne → our gravity; grounded + Space → jump.
       const gY = probeGround(entity.position.x, entity.position.z, entity.position.y);
-      const near = gY != null && entity.position.y <= gY + 0.12;
+      const near = gY != null && entity.position.y <= gY + 0.3;   // step band (matches groundClamp) — small ups/downs stay grounded + ease
       if (near && input.pressed("Space")) { body.velocity.y = jumpSpeed; grounded = false; }
       else if (near && body.velocity.y <= 0) { body.velocity.y = 0; grounded = true; }
       else { body.velocity.y -= GRAVITY * dt; grounded = false; }
@@ -159,12 +159,14 @@ export function createCharacterController(world, {
     const px = entity.position.x, pz = entity.position.z;
     const gY = probeGround(px, pz, entity.position.y);
     if (gY == null) { grounded = false; body.onGround = false; return; }
-    grounded = entity.position.y <= gY + 0.14 && body.velocity.y <= 0.02;
+    grounded = entity.position.y <= gY + 0.3 && body.velocity.y <= 0.02;
     if (grounded) {
-      // EASE up onto steps/blocks instead of popping (a step-up used to snap the whole
-      // body instantly); small changes + settling down snap. Feet adapt via FootPlant.
+      // Ease the body toward the surface SLOWLY + continuously (both up and down) so
+      // climbing/descending steps is a smooth ramp, NOT a pop per step. The foot IK
+      // keeps each foot planted during the lag, so the LEGS visibly do the work
+      // (bend/extend) while the pelvis glides. Tiny gaps snap.
       const dy = gY - entity.position.y;
-      const ny = dy > 0.03 ? entity.position.y + Math.min(dy, dy * Math.min(1, 10 * dt) + 0.02) : gY;
+      const ny = Math.abs(dy) < 0.006 ? gY : entity.position.y + dy * (1 - Math.exp(-7 * dt));
       entity.position.y = ny;
       body.rb.setTranslation({ x: px, y: ny + height / 2, z: pz }, true);
       body.rb.setNextKinematicTranslation({ x: px, y: ny + height / 2, z: pz });
