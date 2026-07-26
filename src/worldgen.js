@@ -140,6 +140,112 @@ export function makeIslandTerrain({
 }
 
 /**
+ * Load a REAL-WORLD heightmap from AWS "Terrarium" elevation tiles (public SRTM
+ * data, no key). Tiles are RGB-encoded: metres = R*256 + G + B/256 − 32768.
+ * Stitches an NxN-tile grid on a canvas and decodes to a metres grid.
+ * @param dir    same-origin folder holding `${x}_${y}.png` tiles
+ * @param tiles  [{x,y}, ...]  span×span tile coords
+ * @param span   tiles per side
+ */
+export async function loadTerrarium({ dir, tiles, span }) {
+  const TP = 256, N = span * TP;
+  const cv = document.createElement("canvas"); cv.width = N; cv.height = N;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  const x0 = Math.min(...tiles.map((t) => t.x)), y0 = Math.min(...tiles.map((t) => t.y));
+  await Promise.all(tiles.map((t) => new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img, (t.x - x0) * TP, (t.y - y0) * TP); res(); };
+    img.onerror = () => rej(new Error("tile " + t.x + "_" + t.y));
+    img.src = `${dir}/${t.x}_${t.y}.png`;
+  })));
+  const px = ctx.getImageData(0, 0, N, N).data;
+  const grid = new Float32Array(N * N);
+  let minH = Infinity, maxH = -Infinity;
+  for (let i = 0; i < N * N; i++) {
+    const h = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+    grid[i] = h; if (h < minH) minH = h; if (h > maxH) maxH = h;
+  }
+  return { grid, N, minH, maxH };
+}
+
+/**
+ * Terrain from a real heightmap grid (macro) + procedural micro-detail — same
+ * "heightmap AND procedural" hybrid, but the macro is REAL terrain. The DEM
+ * already contains real erosion, so no erosion pass; the lowest point is rebased
+ * to 0 and colours key off the DEM's own height range.
+ */
+export function makeHeightmapTerrain({ grid, N, worldExtent, seed = 1, detail = true, waterLevel = null } = {}) {
+  const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  const smooth = (t) => { t = clamp01(t); return t * t * (3 - 2 * t); };
+  let minH = Infinity, maxH = -Infinity;
+  for (let i = 0; i < grid.length; i++) { const h = grid[i]; if (h < minH) minH = h; if (h > maxH) maxH = h; }
+  const range = Math.max(1, maxH - minH);
+  const half = worldExtent / 2, cell = worldExtent / (N - 1);
+  const sea = waterLevel == null ? -1e5 : waterLevel;
+
+  function sample(x, z) {
+    let fx = (x + half) / cell, fz = (z + half) / cell;
+    fx = fx < 0 ? 0 : fx > N - 1.001 ? N - 1.001 : fx;
+    fz = fz < 0 ? 0 : fz > N - 1.001 ? N - 1.001 : fz;
+    const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, o = j * N + i;
+    const a = grid[o], b = grid[o + 1], c = grid[o + N], e = grid[o + N + 1];
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + e * u) * v - minH;   // rebase min → 0
+  }
+  function heightAt(x, z) {
+    const m = sample(x, z);
+    if (!detail) return m;
+    const dt = fbm(x * 0.05 + 70, z * 0.05 + 70, { octaves: 3, seed: seed + 80 }) * 3.0;
+    return m + dt;                                     // crisp detail below the DEM's cell size
+  }
+  const C = {
+    low: new THREE.Color(0x4f8f47), lush: new THREE.Color(0x2f6b39), dry: new THREE.Color(0x8a9a52),
+    rock: new THREE.Color(0x776f66), scree: new THREE.Color(0x928a80), snow: new THREE.Color(0xf3f5f8),
+  };
+  function colorAt(x, z, h, slope, out) {
+    const t = h / range;
+    if (slope > 1.2) { out.copy(C.rock); return; }
+    if (t > 0.6) { out.copy(C.snow); return; }
+    if (t > 0.42) { out.copy(C.scree); return; }
+    const moist = fbm(x * 0.004 + 90, z * 0.004 + 90, { octaves: 2, seed: seed + 55 }) * 0.5 + 0.5;
+    out.copy(C.low).lerp(C.lush, clamp01(moist * 1.3 - 0.15)).lerp(C.dry, clamp01(0.35 - moist) * 1.6);
+    if (t > 0.28) out.lerp(C.scree, smooth((t - 0.28) / 0.14) * 0.7);
+  }
+  function waterMesh(size = worldExtent * 3) {
+    if (waterLevel == null) return null;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+      new THREE.MeshStandardMaterial({ color: 0x2b6d90, transparent: true, opacity: 0.82, roughness: 0.25 }));
+    m.rotation.x = -Math.PI / 2; m.position.y = sea - minH;
+    return m;
+  }
+  function backdropMesh(res = 384, drop = 1) {
+    const N2 = res + 1, step = worldExtent / res, hf = worldExtent / 2;
+    const pos = new Float32Array(N2 * N2 * 3), col = new Float32Array(N2 * N2 * 3), nrm = new Float32Array(N2 * N2 * 3);
+    const c = new THREE.Color();
+    for (let j = 0; j < N2; j++) for (let i = 0; i < N2; i++) {
+      const wx = -hf + i * step, wz = -hf + j * step, o = (j * N2 + i) * 3;
+      const h = heightAt(wx, wz);
+      pos[o] = wx; pos[o + 1] = h - drop; pos[o + 2] = wz;
+      const dhdx = (heightAt(wx + step, wz) - heightAt(wx - step, wz)) / (2 * step);
+      const dhdz = (heightAt(wx, wz + step) - heightAt(wx, wz - step)) / (2 * step);
+      const inv = 1 / Math.hypot(dhdx, 1, dhdz);
+      nrm[o] = -dhdx * inv; nrm[o + 1] = inv; nrm[o + 2] = -dhdz * inv;
+      colorAt(wx, wz, h, Math.max(Math.abs(dhdx), Math.abs(dhdz)), c);
+      col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
+    }
+    const idx = [];
+    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) { const a = j * N2 + i, b = a + 1, d = a + N2, e = d + 1; idx.push(a, d, b, b, d, e); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96 }));
+    mesh.receiveShadow = true; return mesh;
+  }
+  return { heightAt, colorAt, waterMesh, backdropMesh, extent: worldExtent, sea: sea - minH, PEAK: range, minH, maxH };
+}
+
+/**
  * Droplet hydraulic erosion (Beyer / Lague model). Each droplet runs downhill
  * carrying water + sediment: it picks up soil on steep descents (up to a
  * speed/water-scaled capacity) and drops it when it slows or climbs, cutting

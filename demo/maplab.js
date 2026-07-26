@@ -16,7 +16,8 @@
 // Own fixed-step loop (like garage) for exact frametime control. The Car drives
 // via the phys _pre/_post hooks, same as CarVehicle.
 import {
-  Engine, World, Physics, initRapier, Car, StreamedTerrain, makeIslandTerrain, THREE,
+  Engine, World, Physics, initRapier, Car, StreamedTerrain,
+  makeIslandTerrain, makeHeightmapTerrain, loadTerrarium, THREE,
 } from "../src/index.js";
 import RAPIER from "@dimforge/rapier3d-compat";   // deduped — same singleton phys.js uses
 
@@ -49,12 +50,13 @@ engine.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // ---- realistic procedural island (worldgen.js): domain-warped ridged ranges,
 // carved valleys, wandering coastline, moisture biomes. Iterate it here, then
 // swap into Big Island. ?seed=N for a different island. -------------------------
+// Terrain is either a procedural island (worldgen) or a REAL heightmap
+// (?real=alps → AWS Terrarium DEM tiles). The DEM loads async, so gen/heightAt
+// resolve in boot() below, not synchronously here.
 const SEED = +(qs.get("seed") || 1337);
 const ISLAND_R = +(qs.get("islandR") || 1500);
-const gen = makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0, erosion: qs.get("erode") !== "0" });
-const heightAt = gen.heightAt, colorAt = gen.colorAt;
-scene.add(gen.waterMesh(42000));                              // ocean to the horizon
-scene.add(gen.backdropMesh(320));                            // whole-island backdrop (seen from altitude; near tiles overlay it)
+const REAL = qs.get("real");
+let gen = null, heightAt = null, colorAt = null;
 
 // ---- physics ----------------------------------------------------------------
 const phys = new Physics({ gravity: -20 });
@@ -64,21 +66,10 @@ const phys = new Physics({ gravity: -20 });
 const freeCam = { on: false, pos: new THREE.Vector3(), yaw: 0, pitch: -0.25, speed: 70 };
 const _ORIGIN = new THREE.Vector3();
 
-// ---- streamed terrain + per-tile collider (the thing under test) ------------
-const terrain = new StreamedTerrain({
-  heightAt, colorAt,
-  tileSize: 128,
-  rings: [[1, 96], [2, 40], [5, 14]],                 // near 1.33m cells (was 2.67m) — 2× sharper + more view distance
-  anchor: () => freeCam.on ? freeCam.pos : (car ? car.mesh.position : _ORIGIN),
-});
+// ---- streamed terrain + per-tile collider (built in boot() once heightAt exists) --
+let terrain = null;
 let tilesBuilt = 0, colliderBuildMs = 0;   // telemetry
 const pendingTiles = [];
-terrain.onTile = (tile) => {
-  tilesBuilt++;
-  if (COL_MODE === "none") return;
-  if (!phys.world) { pendingTiles.push(tile); return; }
-  attachTileCollider(tile);
-};
 function attachTileCollider(tile) {
   if (tile.dead) return;
   const t0 = performance.now();
@@ -150,7 +141,7 @@ function findSpawn() {
     }
   return { x: 0, z: 0, h: heightAt(0, 0) };
 }
-const spawn = findSpawn();
+let spawn = null;
 function resetCar() {
   if (!car) return;
   const y = heightAt(spawn.x, spawn.z) + 2;
@@ -190,19 +181,44 @@ function updateCamera(dt) {
   cam.lookAt(camTmp);
 }
 
-// ---- boot -------------------------------------------------------------------
-initRapier().then(() => {
+// ---- boot (async: real DEM tiles load over the network) ---------------------
+async function buildGen() {
+  if (REAL === "alps") {
+    const tiles = [];
+    for (const y of [1455, 1456, 1457]) for (const x of [2134, 2135, 2136]) tiles.push({ x, y });
+    const hm = await loadTerrarium({ dir: "heightmaps/alps", tiles, span: 3 });
+    return makeHeightmapTerrain({ grid: hm.grid, N: hm.N, worldExtent: 20400, seed: SEED }); // ~20km of real Alps
+  }
+  return makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0, erosion: qs.get("erode") !== "0" });
+}
+(async () => {
+  setStatus(REAL ? "loading real terrain…" : "generating terrain…");
+  gen = await buildGen();
+  heightAt = gen.heightAt; colorAt = gen.colorAt;
+  const w = gen.waterMesh(REAL ? 60000 : 42000); if (w) scene.add(w);
+  scene.add(gen.backdropMesh(REAL ? 400 : 320));
+  terrain = new StreamedTerrain({
+    heightAt, colorAt, tileSize: 128, rings: [[1, 96], [2, 40], [5, 14]],
+    anchor: () => freeCam.on ? freeCam.pos : (car ? car.mesh.position : _ORIGIN),
+  });
+  terrain.onTile = (tile) => {
+    tilesBuilt++;
+    if (COL_MODE === "none") return;
+    if (!phys.world) { pendingTiles.push(tile); return; }
+    attachTileCollider(tile);
+  };
+  spawn = findSpawn();
+  await initRapier();
   world.spawn("physics").add(phys);
   for (const t of pendingTiles) attachTileCollider(t);
   pendingTiles.length = 0;
   car = new Car(phys.world, RAPIER, { pos: [spawn.x, heightAt(spawn.x, spawn.z) + 2, spawn.z] });
   scene.add(car.mesh);
   world.spawn("terrain").add(terrain);
-  // drive the car inside the physics step (suspension before world.step)
   phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
   phys._post.push(() => car.snapshotCurr());
-  setStatus("driving (autopilot) — press F for free-fly cam to explore");
-}).catch((e) => setStatus("BOOT FAILED: " + e.message));
+  setStatus(REAL ? `real terrain: Alps · ${Math.round(gen.maxH - gen.minH)}m relief — F to fly` : "driving (autopilot) — press F for free-fly cam to explore");
+})().catch((e) => setStatus("BOOT FAILED: " + e.message));
 
 // ---- fixed-step loop + frametime capture ------------------------------------
 const FT = new Float32Array(180); let ftI = 0;      // rolling frametime ring (ms)
@@ -268,15 +284,15 @@ function updateHUD() {
     line("worst 2s", worst2s.toFixed(1) + "ms") +
     line("hitches >20ms", hitches) +
     line("last collider build", colliderBuildMs.toFixed(1) + "ms") +
-    line("tiles loaded", terrain.tileCount) +
+    line("tiles loaded", terrain ? terrain.tileCount : 0) +
     line("tiles built", tilesBuilt) +
     line("car", spd.toFixed(0) + " km/h");
 }
 
 // ---- headless verification handle ------------------------------------------
 window.__map = {
-  engine, world, phys, terrain, get car() { return car; }, heightAt, freeCam,
-  updateCamera,
+  engine, world, phys, get terrain() { return terrain; }, get car() { return car; },
+  get heightAt() { return heightAt; }, freeCam, updateCamera,
   frametimes: FT, get hitches() { return hitches; }, get worst2s() { return worst2s; },
   get tilesBuilt() { return tilesBuilt; }, setAuto: (v) => { auto.on = v; },
   // measure a single collider build cost for the current mode at (x0,z0)
