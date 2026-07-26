@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>PLAYFORGE — Map Lab</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb9dc; }
+  canvas#game { width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: fixed; left: 12px; top: 10px; color: #fff; font: 13px/1.5 system-ui, sans-serif;
+         user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #hud b { color: #ffd75e; }
+  #panel { position: fixed; right: 12px; top: 10px; z-index: 20; width: 210px;
+           font: 12px/1.4 ui-monospace, monospace; color: #cfe; user-select: none; }
+  #readouts { background: rgba(10,14,18,.82); border: 1px solid #2c3a48; border-radius: 8px 8px 0 0; padding: 8px 10px; }
+  #readouts div { display: flex; justify-content: space-between; }
+  #readouts b { color: #ffd479; }
+  #ftgraph { display: block; width: 210px; height: 90px; border: 1px solid #2c3a48; border-top: 0; border-radius: 0 0 8px 8px; }
+</style>
+  <script type="module" crossorigin src="./assets/map-DXkXlQu_.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/BufferGeometryUtils-Tmsg8VnN.js">
+  <link rel="modulepreload" crossorigin href="./assets/vehicletest-DrPbX6Jx.js">
+  <link rel="modulepreload" crossorigin href="./assets/rapier-CKC5f6tm.js">
+  <link rel="modulepreload" crossorigin href="./assets/phys-bKZoRyCp.js">
+  <link rel="modulepreload" crossorigin href="./assets/carphysics-DtYoOnAj.js">
+  <link rel="modulepreload" crossorigin href="./assets/noise-B0QhFQ_u.js">
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><b>PLAYFORGE — Map Lab</b> · large-world streaming proving ground<br>
+Space autopilot on/off · WASD drive · R reset · <b>?col=</b>heightfield|trimesh|none · <b>?cell=</b>1.5<br>
+<span id="status">loading…</span></div>
+<div id="panel">
+  <div id="readouts"></div>
+  <canvas id="ftgraph" width="210" height="90"></canvas>
+</div>
+</body>
+</html>
