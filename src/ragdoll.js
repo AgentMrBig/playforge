@@ -55,20 +55,23 @@ const SEGMENTS = [
 // blocking impossible poses; the ugly backward-bend of knees/elbows is caught by
 // the hard revolute hinge limits below, not these cones.
 const JOINTS = [
-  ["pelvis",    "chest",     "Spine1",       { type: "spherical", limit: 0.9 }],   // lumbar
-  ["chest",     "head",      "Head",         { type: "spherical", limit: 1.0 }],   // neck
-  ["chest",     "upperArmL", "LeftArm",      { type: "spherical", limit: 2.2 }],   // shoulder (very mobile)
+  // cones are ANATOMICAL now (tighter than the old generous values) — firm tendons
+  // when UPRIGHT. Settle isn't broken because ROM enforcement is EASED while he's DOWN
+  // (romScale in fixedUpdate), so a fallen heap can still fold to rest + get up.
+  ["pelvis",    "chest",     "Spine1",       { type: "spherical", limit: 0.7 }],   // lumbar
+  ["chest",     "head",      "Head",         { type: "spherical", limit: 0.8 }],   // neck
+  ["chest",     "upperArmL", "LeftArm",      { type: "spherical", limit: 1.8 }],   // shoulder (very mobile)
   ["upperArmL", "forearmL",  "LeftForeArm",  { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
-  ["forearmL",  "handL",     "LeftHand",     { type: "spherical", limit: 1.0 }],   // wrist
-  ["chest",     "upperArmR", "RightArm",     { type: "spherical", limit: 2.2 }],
+  ["forearmL",  "handL",     "LeftHand",     { type: "spherical", limit: 0.8 }],   // wrist
+  ["chest",     "upperArmR", "RightArm",     { type: "spherical", limit: 1.8 }],
   ["upperArmR", "forearmR",  "RightForeArm", { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
-  ["forearmR",  "handR",     "RightHand",    { type: "spherical", limit: 1.0 }],
-  ["pelvis",    "thighL",    "LeftUpLeg",    { type: "spherical", limit: 2.0 }],   // hip (fetal flexion)
+  ["forearmR",  "handR",     "RightHand",    { type: "spherical", limit: 0.8 }],
+  ["pelvis",    "thighL",    "LeftUpLeg",    { type: "spherical", limit: 1.7 }],   // hip (fetal flexion)
   ["thighL",    "shinL",     "LeftLeg",      { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
-  ["shinL",     "footL",     "LeftFoot",     { type: "spherical", limit: 0.9 }],   // ankle
-  ["pelvis",    "thighR",    "RightUpLeg",   { type: "spherical", limit: 2.0 }],
+  ["shinL",     "footL",     "LeftFoot",     { type: "spherical", limit: 0.7 }],   // ankle
+  ["pelvis",    "thighR",    "RightUpLeg",   { type: "spherical", limit: 1.7 }],
   ["thighR",    "shinR",     "RightLeg",     { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
-  ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.9 }],
+  ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.7 }],
 ];
 
 // The "trunk" — pelvis + chest. Settle is judged on THESE alone: they carry the
@@ -103,14 +106,18 @@ export class Ragdoll {
                          //   underdamped and it blew up to the clamp at high tone).
     muscleMaxTorque = 500, // hard cap on PD torque per step — divergence-proof.
     // ── firm, stable soft ROM (spine/shoulder/hip have no native Rapier limits) ──
-    romMargin = 0.08,    // deadzone (rad) past the cone before the ligament engages.
-    romSpring = 60,      // restoring torque per rad of overshoot. Firm enough to
-                         //   visibly hold joint limits, but NOT so firm it rocks the
-                         //   trunk and blocks settle (140 held limits harder but the
-                         //   spine ligament kept pelvis+chest rocking → never settled).
-    romDamp = 14,        // one-sided damping of the OPENING rate (near-critical).
-    romMaxTorque = 380,  // cap on ligament torque.
+    romMargin = 0.06,    // deadzone (rad) past the cone before the ligament engages.
+    romSpring = 95,      // restoring torque per rad of overshoot. Firmer tendon than
+                         //   before (60) so joints visibly hold their limits; the trunk
+                         //   rocking/settle problem is now handled by relaxing the spring
+                         //   on the SPINE joints while the body is DOWN (romScale below).
+    romDamp = 16,        // one-sided damping of the OPENING rate (near-critical).
+    romMaxTorque = 520,  // cap on ligament SPRING torque.
     romHyper = 0.6,      // overshoot (rad) counting as EGREGIOUS (readout only).
+    romHardMargin = 0.4, // overshoot (rad) past the cone at which a HARD tendon WALL
+                         //   snaps the joint back to the limit + kills the opening
+                         //   velocity — stops hyperextension and limbs punching through
+                         //   the body on a big hit (the soft spring alone gets overpowered).
     settleLinV = 0.35,   // TRUNK (pelvis+chest) linear-still threshold …
     settleAngV = 1.1,    // … AND angular-still threshold, sustained → get-up.
     // ── tension / knockdown model (Erik: "TENSION, not a wet towel") ──
@@ -134,6 +141,7 @@ export class Ragdoll {
     this.romDamp = romDamp;
     this.romMaxTorque = romMaxTorque;
     this.romHyper = romHyper;
+    this.romHardMargin = romHardMargin;
     this._hyperROM = 0;
     this.settleLinV = settleLinV;
     this.settleAngV = settleAngV;
@@ -742,6 +750,12 @@ export class Ragdoll {
     // NOTHING, so normal settling is never disturbed (that was the writhe source).
     let overCount = 0, hyperCount = 0;
     const MARGIN = this.romMargin;
+    // ease the soft limits (and disable the HARD wall) while the body is DOWN, so a
+    // settled heap — whose natural folds sit past these generous cones — comes to rest
+    // instead of being jerked. Upright (mid-hit / staying up) the tendons are firm.
+    const pelR = this._byName.pelvis;
+    const prone = !!(pelR && pelR.body.translation().y < this.proneY);
+    const romScale = prone ? 0.45 : 1;
     for (const L of this._joints) {
       this._tendonDamp(L, dt);
       if (L.type === "revolute" && !L.softHinge) continue;   // native hard limits
@@ -765,8 +779,12 @@ export class Ragdoll {
       const wp = L.p.body.angvel(), wc = L.c.body.angvel();
       const relW = (wc.x - wp.x) * axis.x + (wc.y - wp.y) * axis.y + (wc.z - wp.z) * axis.z;
       const Ir = (L.c.inertia * L.p.inertia) / (L.c.inertia + L.p.inertia);
-      // spring back toward the limit + damp ONLY further opening (one-sided), capped.
-      const mag = Math.min(this.romSpring * (over - MARGIN) + this.romDamp * Math.max(0, relW), this.romMaxTorque);
+      // spring back toward the limit + damp ONLY further opening (one-sided). The cap
+      // ESCALATES past the hard margin: a joint shoved WAY past its cone (a big hit)
+      // gets driven back hard = a firm tendon, but WITHOUT the teleport-snap of a
+      // positional clamp (that jittered). Below the hard margin it's the gentle spring.
+      const cap = (!prone && over > this.romHardMargin) ? this.romMaxTorque * 5 : this.romMaxTorque;
+      const mag = Math.min((this.romSpring * (over - MARGIN) + this.romDamp * Math.max(0, relW)) * romScale, cap);
       const k = Ir * dt * mag;
       L.c.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
       L.p.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
