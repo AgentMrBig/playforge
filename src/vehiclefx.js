@@ -44,8 +44,10 @@ export class VehicleFX {
             st.acc -= 1;
             const gray = (0.74 - h * 0.34) + Math.random() * 0.1;   // darker as it heats
             this.smoke.spawn({
-              // HEAVY smoke: barely rises, hangs low and rolls (real burnout smoke)
-              x: w.cx + (Math.random() - 0.5) * 0.35, y: 0.12, z: w.cz + (Math.random() - 0.5) * 0.35,
+              // HEAVY smoke: barely rises, hangs low and rolls (real burnout smoke).
+              // y is the wheel's ground CONTACT height + a hair — NOT an absolute 0.12,
+              // which floated above the car anywhere the terrain dips below y=0.
+              x: w.cx + (Math.random() - 0.5) * 0.35, y: (w.cy ?? 0) + 0.12, z: w.cz + (Math.random() - 0.5) * 0.35,
               vx: (Math.random() - 0.5) * 1.6, vy: 0.12 + Math.random() * 0.3 + h * 0.25, vz: (Math.random() - 0.5) * 1.6,
               size: 0.5 + h * 0.5, grow: 2.8 + Math.random() * 1.6 + h * 2.2, r: gray, g: gray, b: gray,
               a: 0.1 + inten * 0.26 + h * 0.16, life: 2.2 + Math.random() * 1.8 + h * 1.4, drag: 1.35, gravity: 0.03,

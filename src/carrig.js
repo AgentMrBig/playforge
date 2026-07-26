@@ -4,6 +4,7 @@ import { Car } from "./carphysics.js";
 import { VehicleFX } from "./vehiclefx.js";
 import { VehicleAudio } from "./vehicleaudio.js";
 import { SkidTrails } from "./skidtrails.js";
+import { Cluster } from "./cluster.js";
 import { loadVehicle } from "./vehicledef.js";
 
 /**
@@ -38,16 +39,17 @@ const MODELS = {
 const AV = { textureDir: "models/fabpack", textureFlipY: true,
   textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" } };
 
-export function createCarRig({ scene, phys, camera, dom, model = "muscle", hp = 450, pos = [0, 3, 0], carOpts = {} } = {}) {
+export function createCarRig({ scene, phys, camera, dom, model = "muscle", hp = 450, pos = [0, 3, 0], carOpts = {}, gauges = true } = {}) {
   const world = phys.world;
   const FIXED = 1 / 60;
 
-  // ── car + FX + audio + skids (identical stack to garage.js) ──
+  // ── car + FX + audio + skids + gauge cluster (identical stack to garage.js) ──
   const car = new Car(world, RAPIER, { pos, ...carOpts });
   scene.add(car.mesh);
   const fx = new VehicleFX(scene);
   const audio = new VehicleAudio({ hp });
   const skid = new SkidTrails(scene);
+  const cluster = gauges ? new Cluster() : null;   // analog tach + speedo overlay
   audio.onPop = (d) => fx.exhaustFlame(car, d);   // fire out the pipes on every backfire
 
   const spec = typeof model === "string" ? (MODELS[model] || MODELS.muscle) : model;
@@ -201,7 +203,7 @@ export function createCarRig({ scene, phys, camera, dom, model = "muscle", hp = 
   phys._post.push(postHook);
 
   return {
-    car, fx, audio, skid, cam,
+    car, fx, audio, skid, cam, cluster,
     /** call once per RENDER frame, after the physics world has stepped */
     update(dt, alpha = 1) {
       handlePadExtras(dt);
@@ -210,6 +212,7 @@ export function createCarRig({ scene, phys, camera, dom, model = "muscle", hp = 
       audio.update(dt, car);
       car.interpolate(Math.min(1, Math.max(0, alpha)));
       updateCamera(dt);
+      if (cluster) cluster.update(audio.rpm || 0, car.speedKmh);   // tach + speedo
     },
     toggleCam,
     shake(a) { cam.shakeAmt = Math.max(cam.shakeAmt, a); },
@@ -219,6 +222,7 @@ export function createCarRig({ scene, phys, camera, dom, model = "muscle", hp = 
       phys._pre = phys._pre.filter((h) => h !== preHook);
       phys._post = phys._post.filter((h) => h !== postHook);
       removeEventListener("keydown", onKeyDown); removeEventListener("keyup", onKeyUp);
+      cluster?.canvas?.remove();
       car.mesh.parent?.remove(car.mesh);
     },
   };

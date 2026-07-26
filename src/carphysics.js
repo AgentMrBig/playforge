@@ -83,6 +83,7 @@ export class Car {
     tireGrip = 2.2,        // peak lateral grip as a multiple of vertical load
     rearGripMul = 1.0,     // <1 loosens the rear → drift (the Stage-4 knob)
     rollResist = 0.015,    // rolling resistance fraction of load
+    holdBrake = 3.5,       // low-speed AUTO-HOLD (parking brake / static friction): damper × load per m/s that clamps a coasting car to a real stop + keeps a parked/driverless car from rolling away. Fades out by ~3 m/s and the instant you touch the gas.
     dragLin = 380,         // N per (m/s) — dominant: makes throttle % ≈ speed % (linear feel)
     dragQuad = 2,          // N per (m/s)² — mild aero wall at the top (~180 km/h stock)
     wheelInertia = 6,      // lumped driven-wheel inertia (higher = spins up slower)
@@ -118,6 +119,7 @@ export class Car {
     this.tireGrip = tireGrip;
     this.rearGripMul = rearGripMul;
     this.rollResist = rollResist;
+    this.holdBrake = holdBrake;
     this.dragLin = dragLin;
     this.dragQuad = dragQuad;
     this.wheelInertia = wheelInertia;
@@ -453,6 +455,18 @@ export class Car {
             : this.brakeInput + (this.handbrake && !w.front ? 1 : 0);
           if (brake > 0) fLong -= Math.sign(vLong) * Math.min(brake, 1) * this.brakeForce;
           fLong -= vLong * this.rollResist * load * 0.02;   // gentle coast-down
+          // AUTO-HOLD (parking brake / static friction): the kinetic brake above uses
+          // sign(vLong), which is ZERO at a standstill — so a stopped car had NOTHING
+          // holding it and crept/rolled away on any grade (and a driverless fleet rolled
+          // off on spawn). Off the gas and nearly stopped, add a stiff velocity damper
+          // that clamps the wheel to zero roll: the car settles to a REAL stop and stays
+          // put. It's grip-limited by the friction circle below, so a hard shove or a
+          // steep enough hill can still move it. Fades out by ~3 m/s and the instant the
+          // throttle (or a burnout) is touched.
+          if (Math.abs(this.throttle) < 0.02) {   // brake-stands keep throttle high, so they're already excluded
+            const holdT = Math.max(0, 1 - (spdAbs / 3.6) / 3);   // 1 at rest → 0 by ~3 m/s
+            if (holdT > 0) fLong -= vLong * this.holdBrake * load * holdT;
+          }
 
           // lateral: Pacejka-ish slip curve — grips, peaks, then breaks away
           const slip = Math.atan2(vLat, Math.abs(vLong) + 0.6);
