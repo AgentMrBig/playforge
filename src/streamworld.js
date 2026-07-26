@@ -27,6 +27,10 @@ export class StreamedTerrain {
     rings = [[1, 48], [2, 24], [4, 12]],
     skirt = 12,
     anchor = null,                 // fn() → THREE.Vector3; defaults to camera
+    // ── Layer 2: pre-warm ahead of travel + per-frame build budget ──
+    lookahead = 0.8,               // seconds of anchor velocity to build ahead of
+    buildBudgetMs = 4,             // stop building once a frame has spent this long
+    maxBuildsPerFrame = 4,         // hard cap regardless of budget
   }) {
     this._fn = heightAt;
     this._colorAt = colorAt;
@@ -35,10 +39,16 @@ export class StreamedTerrain {
     this.rings = rings;
     this.skirt = skirt;
     this.anchorFn = anchor;
+    this.lookahead = lookahead;
+    this.buildBudgetMs = buildBudgetMs;
+    this.maxBuildsPerFrame = maxBuildsPerFrame;
     this.maxRing = rings[rings.length - 1][0];
     this._tiles = new Map();       // "ix,iz" → { res, group, building }
     this._queue = [];
+    this._prevA = null;            // last anchor pos (for velocity)
+    this._vel = { x: 0, z: 0 };    // smoothed anchor velocity (m/s)
     this.tileCount = 0;
+    this.builtLastFrame = 0;
   }
 
   heightAt(x, z) { return this._fn(x, z); }
@@ -52,7 +62,22 @@ export class StreamedTerrain {
     const a = this.anchorFn ? this.anchorFn() : world.camera.position;
     const cx = Math.floor(a.x / this.tileSize), cz = Math.floor(a.z / this.tileSize);
 
-    // wanted tiles + their LOD
+    // ── Layer 2: look-ahead focus point = where the anchor will be in `lookahead`
+    // seconds, so tiles get built AHEAD of travel (before you cross their seam)
+    // instead of just-in-time under the wheels. Velocity is smoothed + clamped so
+    // it can't overshoot the loaded ring on a sudden burst.
+    if (this._prevA && dt > 1e-4) {
+      const ivx = (a.x - this._prevA.x) / dt, ivz = (a.z - this._prevA.z) / dt;
+      const k = Math.min(1, dt * 5);
+      this._vel.x += (ivx - this._vel.x) * k;
+      this._vel.z += (ivz - this._vel.z) * k;
+    }
+    this._prevA = { x: a.x, z: a.z };
+    const cap = this.tileSize * (this.maxRing - 0.5);       // never focus past the loaded ring
+    const fx = a.x + Math.max(-cap, Math.min(cap, this._vel.x * this.lookahead));
+    const fz = a.z + Math.max(-cap, Math.min(cap, this._vel.z * this.lookahead));
+
+    // wanted tiles + their LOD (centered on the anchor — keep tiles around you)
     const wanted = new Map();
     for (let dz = -this.maxRing; dz <= this.maxRing; dz++)
       for (let dx = -this.maxRing; dx <= this.maxRing; dx++) {
@@ -71,17 +96,25 @@ export class StreamedTerrain {
       const t = this._tiles.get(key);
       if (!t || (t.res !== res && !t.building)) {
         const [ix, iz] = key.split(",").map(Number);
-        const d = Math.max(Math.abs(ix - cx), Math.abs(iz - cz));
+        // priority = distance from the LOOK-AHEAD focus, so what's in front builds first
+        const tcx = (ix + 0.5) * this.tileSize, tcz = (iz + 0.5) * this.tileSize;
+        const d = Math.hypot(tcx - fx, tcz - fz);
         this._queue.push({ key, ix, iz, res, d });
       }
     }
     this._queue.sort((p, q) => p.d - q.d);
 
-    // build ONE tile per frame — the no-hitch rule
-    if (this._queue.length) {
-      const job = this._queue.shift();
-      this._build(world, entity, job);
+    // build under a per-frame TIME budget: always make at least one tile of
+    // progress, then keep going only while the frame still has headroom (so it
+    // catches up when moving fast) but never stacks builds into a spike.
+    const start = performance.now();
+    let built = 0;
+    while (this._queue.length && built < this.maxBuildsPerFrame &&
+           (built === 0 || performance.now() - start < this.buildBudgetMs)) {
+      this._build(world, entity, this._queue.shift());
+      built++;
     }
+    this.builtLastFrame = built;
     this.tileCount = this._tiles.size;
   }
 
