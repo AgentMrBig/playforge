@@ -30,7 +30,7 @@ const engine = new Engine(document.getElementById("game"), { clearColor: 0x8fb9d
 const world = new World();
 engine.world = world;
 const scene = world.scene;
-scene.fog = new THREE.Fog(0x8fb9dc, 260, 780);
+scene.fog = new THREE.Fog(0x8fb9dc, 420, 1600);   // see far while flying the free cam
 
 // ---- lights -----------------------------------------------------------------
 scene.add(new THREE.HemisphereLight(0xcfe0f0, 0x40402e, 0.9));
@@ -54,12 +54,17 @@ scene.add(gen.waterMesh());                                    // sea plane at y
 // ---- physics ----------------------------------------------------------------
 const phys = new Physics({ gravity: -20 });
 
+// ---- free-fly camera (UE-style): F toggles; click to capture the mouse, WASD
+// flies, Space/Ctrl up/down, Shift boosts. Streaming follows wherever you fly. --
+const freeCam = { on: false, pos: new THREE.Vector3(), yaw: 0, pitch: -0.25, speed: 70 };
+const _ORIGIN = new THREE.Vector3();
+
 // ---- streamed terrain + per-tile collider (the thing under test) ------------
 const terrain = new StreamedTerrain({
   heightAt, colorAt,
   tileSize: 128,
-  rings: [[1, 48], [2, 24], [4, 12]],
-  anchor: () => car ? car.mesh.position : new THREE.Vector3(),
+  rings: [[1, 96], [2, 40], [5, 14]],                 // near 1.33m cells (was 2.67m) — 2× sharper + more view distance
+  anchor: () => freeCam.on ? freeCam.pos : (car ? car.mesh.position : _ORIGIN),
 });
 let tilesBuilt = 0, colliderBuildMs = 0;   // telemetry
 const pendingTiles = [];
@@ -101,11 +106,29 @@ let car = null;
 const keys = {};
 addEventListener("keydown", (e) => { keys[e.code] = true;
   if (e.code === "KeyR") resetCar();
-  if (e.code === "Space") auto.on = !auto.on;
+  if (e.code === "KeyF") toggleFreeCam();
+  if (e.code === "Space" && !freeCam.on) auto.on = !auto.on;   // in free cam Space = fly up
+  if (["Space", "KeyW", "KeyS", "KeyA", "KeyD"].includes(e.code) && freeCam.on) e.preventDefault();
 });
 addEventListener("keyup", (e) => { keys[e.code] = false; });
 const auto = { on: true, t: 0 };
+function toggleFreeCam() {
+  freeCam.on = !freeCam.on;
+  if (freeCam.on) {
+    freeCam.pos.copy(world.camera.position);
+    const d = new THREE.Vector3(); world.camera.getWorldDirection(d);
+    freeCam.yaw = Math.atan2(d.x, d.z); freeCam.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
+    engine.renderer.domElement.requestPointerLock?.();
+  } else document.exitPointerLock?.();
+}
+engine.renderer.domElement.addEventListener("click", () => { if (freeCam.on && !document.pointerLockElement) engine.renderer.domElement.requestPointerLock?.(); });
+addEventListener("mousemove", (e) => {
+  if (!freeCam.on || !document.pointerLockElement) return;
+  freeCam.yaw -= e.movementX * 0.0022;
+  freeCam.pitch = THREE.MathUtils.clamp(freeCam.pitch - e.movementY * 0.0022, -1.5, 1.5);
+});
 function carInput() {
+  if (freeCam.on) { auto.t += FIXED; return { throttle: 1, steer: 0.14 * Math.sin(auto.t * 0.12), brake: 0, handbrake: false }; } // car keeps cruising while you fly
   const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
   const left = keys.KeyA || keys.ArrowLeft, right = keys.KeyD || keys.ArrowRight;
   if (up || down || left || right) { auto.on = false; }
@@ -134,11 +157,26 @@ function resetCar() {
   auto.t = 0;
 }
 
-// ---- chase camera -----------------------------------------------------------
+// ---- cameras: chase (driving) or free-fly (exploring) -----------------------
 const camTmp = new THREE.Vector3(), camGoal = new THREE.Vector3(), fwd = new THREE.Vector3();
-function updateCamera(alpha) {
-  if (!car) return;
+const _fdir = new THREE.Vector3();
+function updateCamera(dt) {
   const cam = world.camera;
+  if (freeCam.on) {
+    const cy = Math.cos(freeCam.yaw), sy = Math.sin(freeCam.yaw), cp = Math.cos(freeCam.pitch), sp = Math.sin(freeCam.pitch);
+    _fdir.set(sy * cp, sp, cy * cp);                         // look direction from yaw/pitch
+    const spd = freeCam.speed * (keys.ShiftLeft || keys.ShiftRight ? 4 : 1) * dt;
+    if (keys.KeyW) freeCam.pos.addScaledVector(_fdir, spd);
+    if (keys.KeyS) freeCam.pos.addScaledVector(_fdir, -spd);
+    if (keys.KeyD) { freeCam.pos.x += cy * spd; freeCam.pos.z -= sy * spd; }   // strafe right
+    if (keys.KeyA) { freeCam.pos.x -= cy * spd; freeCam.pos.z += sy * spd; }
+    if (keys.Space) freeCam.pos.y += spd;
+    if (keys.ControlLeft || keys.KeyC) freeCam.pos.y -= spd;
+    cam.position.copy(freeCam.pos);
+    cam.lookAt(freeCam.pos.x + _fdir.x, freeCam.pos.y + _fdir.y, freeCam.pos.z + _fdir.z);
+    return;
+  }
+  if (!car) return;
   const p = car.mesh.position;
   fwd.set(0, 0, 1).applyQuaternion(car.mesh.quaternion);
   camGoal.set(p.x - fwd.x * 11, p.y + 5.5, p.z - fwd.z * 11);
@@ -158,7 +196,7 @@ initRapier().then(() => {
   // drive the car inside the physics step (suspension before world.step)
   phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
   phys._post.push(() => car.snapshotCurr());
-  setStatus("streaming — car on autopilot (Space toggles, WASD drives, R resets)");
+  setStatus("driving (autopilot) — press F for free-fly cam to explore");
 }).catch((e) => setStatus("BOOT FAILED: " + e.message));
 
 // ---- fixed-step loop + frametime capture ------------------------------------
@@ -184,7 +222,7 @@ function frame() {
   if (steps === MAX_SUBSTEPS) acc = 0;
   world._update(dt, engine);                 // terrain streaming + any components
   if (car) car.interpolate(Math.min(1, acc / FIXED));
-  updateCamera();
+  updateCamera(dt);
   drawGraph();
   updateHUD();
   engine.renderer.render(scene, world.camera);
@@ -219,6 +257,7 @@ function updateHUD() {
   const spd = car ? Math.hypot(car.body.linvel().x, car.body.linvel().y, car.body.linvel().z) * 3.6 : 0;
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   el.innerHTML =
+    line("mode", freeCam.on ? "FREE-FLY" : "drive") +
     line("collider", COL_MODE + (COL_MODE !== "none" ? ` @${COL_CELL}m` : "")) +
     line("fps", fpsAvg.toFixed(0)) +
     line("worst 2s", worst2s.toFixed(1) + "ms") +
@@ -231,7 +270,8 @@ function updateHUD() {
 
 // ---- headless verification handle ------------------------------------------
 window.__map = {
-  engine, world, phys, terrain, get car() { return car; }, heightAt,
+  engine, world, phys, terrain, get car() { return car; }, heightAt, freeCam,
+  updateCamera,
   frametimes: FT, get hitches() { return hitches; }, get worst2s() { return worst2s; },
   get tilesBuilt() { return tilesBuilt; }, setAuto: (v) => { auto.on = v; },
   // measure a single collider build cost for the current mode at (x0,z0)
