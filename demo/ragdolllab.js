@@ -18,6 +18,7 @@
 import {
   Engine, World, OrbitRig, Physics, initRapier, Ragdoll, loadCharacter, THREE,
 } from "../src/index.js";
+import { attachRagdollMouse } from "./ragdollmouse.js";
 
 const FIXED = 1 / 60;
 const MAX_SUBSTEPS = 5;
@@ -55,8 +56,9 @@ world.spawn("camera").add(cam);
 // ---- physics + character + ragdoll ------------------------------------------
 const phys = new Physics({ gravity: -20 });
 let rag = null, animator = null, bones = null, charVisual = null;
-let state = "anim";               // anim | ragdoll | getup
+let state = "anim";               // anim | ragdoll | getup | stagger
 let getupTimer = 0;
+let staggerTimer = 0;             // >0 while braced-staggering after a light hit
 const TONE0 = 1.9;
 
 const physReady = initRapier().then(() => {
@@ -80,6 +82,7 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
   ch.visual.position.set(0, 0, 0);
   animator.play("idle");
   rag = new Ragdoll(bones, phys, { tone: TONE0 });
+  rag.build();                      // pre-build capsules (disabled) so right-click can pick them
   // NB: __lab.rag is a live getter (returns the module `rag`) — do NOT assign to
   // it. Assigning to a getter-only property throws a TypeError in strict-mode ESM,
   // which used to abort the rest of this .then() BEFORE the ragctl entity below
@@ -93,6 +96,14 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
       if (state === "getup") {
         getupTimer -= dt;
         if (getupTimer <= 0) { state = "anim"; animator.play("idle", { fade: 0.3 }); }
+        return;
+      }
+      // STAGGER: a light hit put him in a braced muscle-hold — he sways but stays
+      // up, then recovers his footing (back to idle) after the window.
+      if (state === "stagger") {
+        rag.fixedUpdate(dt);
+        staggerTimer -= dt;
+        if (staggerTimer <= 0) { rag.exitMuscle(); state = "anim"; charVisual.position.set(0, 0, 0); charVisual.rotation.set(0, 0, 0); animator.play("idle", { fade: 0.25 }); }
         return;
       }
       if (state === "ragdoll" && rag.active) {
@@ -111,7 +122,37 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
     },
   });
 
-  setStatus("ready — press a trigger (or the buttons)");
+  // ---- direct mouse interaction: right-click punch / right-drag grab ---------
+  attachRagdollMouse({
+    canvas: engine.renderer.domElement,
+    getCamera: () => world.camera || engine.camera,
+    getRag: () => rag,
+    getPhys: () => phys,
+    ensureActive: () => {                              // grab needs a live free ragdoll
+      if (!rag) return null;
+      if (rag.muscle) rag.exitMuscle();
+      if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
+      return rag;
+    },
+    onPunch: (segName, point, impulse, power) => {
+      if (!rag) return;
+      if (power >= rag.knockdownImpulse) {             // hard hit → knockdown
+        if (rag.muscle) rag.exitMuscle();
+        if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
+        staggerTimer = 0;
+        rag.hit(point, impulse, { maxDeltaV: 16 });
+      } else {                                         // light hit → stagger, stay up
+        if (state !== "stagger") {
+          if (rag.active && !rag.muscle) rag.exit();
+          state = "stagger"; rag.enterMuscle(rag.tone);
+        }
+        rag.hit(point, impulse, { maxDeltaV: 12 });
+        staggerTimer = 1.0;
+      }
+    },
+  });
+
+  setStatus("ready — trigger, or RIGHT-CLICK to punch · SHIFT+right-click = hard · drag to grab");
 }).catch((e) => setStatus("LOAD FAILED: " + e.message));
 
 // ---- get-up: settle → snap character to where it lies → play a getup clip ----

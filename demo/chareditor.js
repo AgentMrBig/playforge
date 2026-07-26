@@ -24,6 +24,7 @@
 import {
   Engine, World, OrbitRig, Physics, initRapier, Ragdoll, loadCharacter, THREE,
 } from "../src/index.js";
+import { attachRagdollMouse } from "./ragdollmouse.js";
 
 const FIXED = 1 / 60;
 const MAX_SUBSTEPS = 5;
@@ -61,8 +62,9 @@ world.spawn("camera").add(cam);
 // ---- physics + character + ragdoll ------------------------------------------
 const phys = new Physics({ gravity: -20 });
 let rag = null, animator = null, bones = null, charVisual = null;
-let state = "anim";               // anim | ragdoll | getup | pose
+let state = "anim";               // anim | ragdoll | getup | pose | stagger
 let getupTimer = 0;
+let staggerTimer = 0;             // >0 while braced-staggering after a light hit
 let poseMode = false;             // freeze the animator and hand-pose bones
 const TONE0 = 1.9;
 
@@ -93,6 +95,7 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
   ch.visual.position.set(0, 0, 0);
   animator.play("idle");
   rag = new Ragdoll(bones, phys, { tone: TONE0 });
+  rag.build();                      // pre-build capsules (disabled) so right-click can pick them
 
   // the driver: physics ragdoll ⇄ animation, with a natural get-up on settle.
   // (Do NOT assign to __ed.rag — it's a live getter; assigning throws in strict
@@ -103,6 +106,12 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
       if (state === "getup") {
         getupTimer -= dt;
         if (getupTimer <= 0) { state = "anim"; animator.play("idle", { fade: 0.3 }); }
+        return;
+      }
+      if (state === "stagger") {                       // braced hit — sways, stays up, recovers
+        rag.fixedUpdate(dt);
+        staggerTimer -= dt;
+        if (staggerTimer <= 0) { rag.exitMuscle(); state = "anim"; charVisual.position.set(0, 0, 0); charVisual.rotation.set(0, 0, 0); animator.play("idle", { fade: 0.25 }); }
         return;
       }
       if (state === "ragdoll" && rag.active) {
@@ -123,7 +132,40 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
 
   buildBoneUI();
   refreshClipButtons();
-  setStatus("ready — browse clips, pose bones, or trigger the ragdoll");
+
+  // ---- direct mouse interaction: right-click punch / right-drag grab ---------
+  attachRagdollMouse({
+    canvas: engine.renderer.domElement,
+    getCamera: () => world.camera || engine.camera,
+    getRag: () => rag,
+    getPhys: () => phys,
+    ensureActive: () => {
+      if (!rag) return null;
+      poseMode = false;
+      if (rag.muscle) rag.exitMuscle();
+      if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
+      return rag;
+    },
+    onPunch: (segName, point, impulse, power) => {
+      if (!rag) return;
+      poseMode = false;
+      if (power >= rag.knockdownImpulse) {
+        if (rag.muscle) rag.exitMuscle();
+        if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
+        staggerTimer = 0;
+        rag.hit(point, impulse, { maxDeltaV: 16 });
+      } else {
+        if (state !== "stagger") {
+          if (rag.active && !rag.muscle) rag.exit();
+          state = "stagger"; rag.enterMuscle(rag.tone);
+        }
+        rag.hit(point, impulse, { maxDeltaV: 12 });
+        staggerTimer = 1.0;
+      }
+    },
+  });
+
+  setStatus("ready — RIGHT-CLICK to punch · SHIFT+right = hard · drag to grab · or use the panels");
 }).catch((e) => setStatus("LOAD FAILED: " + e.message));
 
 // ---- get-up: settle → snap character to where it lies → play a getup clip ----

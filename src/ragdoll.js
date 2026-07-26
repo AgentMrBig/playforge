@@ -119,7 +119,7 @@ export class Ragdoll {
     proneY = 0.75,       // pelvis height (m) below which the body is treated as DOWN.
     settleRelax = 0.08,  // once DOWN, muscle tone × this so a tense body can still
                          //   come to rest and get up (ROM/limbs stay firm regardless).
-    knockdownImpulse = 320, // hit impulse magnitude at/above which a strike KNOCKS
+    knockdownImpulse = 420, // hit impulse magnitude at/above which a strike KNOCKS
                          //   HIM DOWN; below it he staggers and stays up (used by labs).
   } = {}) {
     this.bones = bones;
@@ -313,6 +313,14 @@ export class Ragdoll {
     const t = seg.body.translation(), q = seg.body.rotation();
     return worldPos.clone().sub(new THREE.Vector3(t.x, t.y, t.z))
       .applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w).invert());
+  }
+
+  /** pre-build the capsule bodies (DISABLED) so tools can pick/raycast them before
+   *  the ragdoll is ever activated — e.g. mouse targeting from the idle pose. */
+  build() {
+    if (this.segments.length) return;
+    this._build();
+    for (const s of this.segments) s.body.setEnabled?.(false);
   }
 
   /** switch to physics control, optionally inheriting a velocity + impulse */
