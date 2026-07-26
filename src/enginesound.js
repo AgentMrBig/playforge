@@ -57,8 +57,8 @@ export const ENGINE_PRESETS = {
   //    even firing so almost no half-order lope, higher & brighter register.
   normal: {
     cylinders: 4, redline: 6200, idleRpm: 820, roughness: 0.5, mean: 0.24,
-    formantShift: 1.12, revRate: 1.0,
-    tune: { pitchScale: 0.9, growl: 0.35, rasp: 0.7, rumble: 0.5, noise: 0.6, formant: 0.7, volume: 0.9, crackle: 0, topEnd: 0.7 },
+    formantShift: 1.12,
+    tune: { pitchScale: 0.9, growl: 0.35, rasp: 0.7, rumble: 0.5, noise: 0.6, formant: 0.7, volume: 0.9, crackle: 0, topEnd: 0.7, revRate: 1.0 },
     orders: [
       [1.0, 0.14, 0.20, 0.15,  4, "lo"],   // crank rotation (subtle)
       [2.0, 0.55, 0.40, 0.18,  3, "mid"],  // FIRING (I4 = 2nd order) — dominant
@@ -73,8 +73,8 @@ export const ENGINE_PRESETS = {
   //    Erik approved). mean left undefined so it tracks hp (0.45 at 450 hp).
   muscle: {
     cylinders: 8, redline: 6800, idleRpm: 850, roughness: 1.0,
-    formantShift: 1.0, revRate: 1.0,
-    tune: { pitchScale: 0.72, growl: 1.0, rasp: 1.0, rumble: 1.0, noise: 1.0, formant: 1.0, volume: 1.0, crackle: 0, topEnd: 1.0 },
+    formantShift: 1.0,
+    tune: { pitchScale: 0.72, growl: 1.0, rasp: 1.0, rumble: 1.0, noise: 1.0, formant: 1.0, volume: 1.0, crackle: 0, topEnd: 1.0, revRate: 0.85 },
     orders: [
       [0.5,  0.16, 0.15, 0.05, -7, "lo"],  // deep cross-plane sub
       [1.0,  0.30, 0.25, 0.12,  5, "lo"],  // crank rotation
@@ -95,8 +95,8 @@ export const ENGINE_PRESETS = {
   //    idle, hard crackle/pop, screaming top end. mean forced to max (nasty).
   alcohol: {
     cylinders: 8, redline: 8600, idleRpm: 1500, roughness: 2.1, mean: 1.0,
-    formantShift: 0.85, revRate: 1.35,
-    tune: { pitchScale: 0.68, growl: 1.9, rasp: 1.5, rumble: 1.6, noise: 1.4, formant: 1.2, volume: 1.1, crackle: 2.6, topEnd: 1.5 },
+    formantShift: 0.85,
+    tune: { pitchScale: 0.68, growl: 1.9, rasp: 1.5, rumble: 1.6, noise: 1.4, formant: 1.2, volume: 1.1, crackle: 2.6, topEnd: 1.5, revRate: 1.3 },
     orders: [
       [0.5,  0.30, 0.15, 0.03, -9, "lo"],  // huge sub thump
       [1.0,  0.45, 0.20, 0.08,  7, "lo"],
@@ -118,8 +118,8 @@ export const ENGINE_PRESETS = {
   //    raspy, minimal low rumble, bright wail, quick throttle response.
   motorcycle: {
     cylinders: 4, redline: 14000, idleRpm: 1300, roughness: 0.7, mean: 0.55,
-    formantShift: 1.8, revRate: 1.9,
-    tune: { pitchScale: 1.05, growl: 0.7, rasp: 1.4, rumble: 0.35, noise: 0.9, formant: 1.3, volume: 0.95, crackle: 0.35, topEnd: 1.6 },
+    formantShift: 1.8,
+    tune: { pitchScale: 1.05, growl: 0.7, rasp: 1.4, rumble: 0.35, noise: 0.9, formant: 1.3, volume: 0.95, crackle: 0.35, topEnd: 1.6, revRate: 2.0 },
     orders: [
       [1.0,  0.10, 0.20, 0.20,  4, "lo"],
       [2.0,  0.45, 0.40, 0.20,  3, "mid"], // FIRING (I4 = 2nd order)
@@ -194,7 +194,6 @@ export class EngineSound {
     this.mean = p.mean ?? Math.min(1, Math.log10(this.hp / 40) / Math.log10(250));
     this.roughness = this._roughUrl ?? p.roughness ?? 1;
     this.formantShift = p.formantShift ?? 1;
-    this.revRate = p.revRate ?? 1;
     this._orderSpec = p.orders;
     // live-tunable dials (a copy so window edits don't mutate the preset table)
     const t = p.tune || {};
@@ -210,6 +209,10 @@ export class EngineSound {
       // topEnd: how aggressively the 4k→redline range opens up (bright + rasp +
       // snarl). Higher = a bigger, faster-sounding climb to the redline note.
       topEnd:  t.topEnd  ?? 1.0,
+      // revRate: engine "lightness" — scales free-rev inertia so a throttle blip
+      // ramps idle→redline in a realistic time (bike light/fast, V8 heavy/slow).
+      // ~1.0 → ~0.45s up / ~0.6s down; higher = snappier. Live-tunable per preset.
+      revRate: t.revRate ?? 1.0,
     };
     // clamp rpm into the new engine's range
     this.rpm = Math.max(this.idleRpm, Math.min(this.redline, this.rpm));
@@ -327,19 +330,49 @@ export class EngineSound {
     this._shiftT = Math.max(0, this._shiftT - dt);
     const inGear = Math.min(1.15, Math.max(0, (s - this._gear * band) / band));
     let wheelRpmN = 0.3 + inGear * 0.7;
-    if (body.wheelspin) wheelRpmN = Math.max(wheelRpmN, 0.93);   // burnout: revs flare free
     if (body.handbrake && s > 3) wheelRpmN *= 0.55;              // locked rears drag the clutch
     const idleN = this.idleRpm / this.redline;
-    let wantN = Math.max(idleN, this._shiftT > 0 ? wheelRpmN * 0.62 : wheelRpmN);
+    // GEARED target: what the driven wheels ask through the current gear (with a
+    // shift dip). Used when the clutch is engaged and the tyres are gripping.
+    const gearedN = Math.max(idleN, this._shiftT > 0 ? wheelRpmN * 0.62 : wheelRpmN);
+    // FREE-REV target: throttle position maps straight to a rev (full = limiter,
+    // closed = idle). Used when the drivetrain ISN'T loading the engine, so a
+    // blip revs the ENGINE — NOT the road speed, and NOT the spinning tyres.
+    const freeN = idleN + t0 * (1 - idleN);
+
+    // ---- ENGINE ROTATING-MASS INERTIA + THROTTLE RESPONSE --------------------
+    // Erik: (a) the rev climbed idle→redline INSTANTLY (even F1 can't), and
+    // (b) on release it STAYED at max for 1-2s. Both came from one bug: the rpm
+    // target was slaved to the wheels, and a stationary blip spins the tyres, so
+    // wheelspin pinned the target at ~0.93 redline — instantly on the way up, and
+    // it stuck there while the freed wheels kept spinning after lift. Both the
+    // gauge and the sound read this rpm, so both misbehaved.
+    // Fix: a real crank has inertia. When free-revving (stationary / neutral /
+    // wheelspin), rpm chases the THROTTLE target at a finite rate — fast but not
+    // instant up (~0.3-0.5s to redline), and it decays promptly on lift
+    // (~0.4-0.7s, engine braking). When engaged and GRIPPING at speed, the car's
+    // reflected inertia dwarfs the engine so rpm locks to the geared wheel speed
+    // (tracked fast — that keeps the "hits redline in every gear" pull intact).
+    const rolling = s >= 2.5;                     // above walking pace = clutch loaded
+    const freeRev = !rolling || body.wheelspin;   // stationary, neutral, or tyres spinning
+    let targetN;
+    if (!rolling) {
+      targetN = freeN;                            // stationary/neutral: throttle governs, idles at idle
+    } else {
+      targetN = gearedN;                          // rolling & gripping: wheels govern
+      if (body.wheelspin) targetN = Math.max(targetN, freeN);  // spin lets revs flare toward throttle
+    }
     const curN = this.rpm / this.redline;
-    // engine inertia: revRate lets light engines (bikes) spin up snappier.
-    // Climb rate raised (was 2.2+6·t0) so rpm no longer LAGS behind a fast
-    // low-gear pull — before, a quick sweep upshifted at ~0.94 redline so only
-    // sustained top-gear WOT ever reached the true redline note (Erik). Now the
-    // engine catches its target in every gear and hits redline at each upshift.
-    const climb = (3.4 + 9.5 * t0) * (body.wheelspin ? 1.6 : 1) * this.revRate;
-    const rate = (wantN > curN ? climb : 1.6 * this.revRate);
-    const step = Math.max(-rate * dt, Math.min(rate * dt, wantN - curN));
+    // revRate = engine "lightness". revUp ≈ (1-idleN)/rate seconds idle→redline.
+    const revRate = T.revRate;
+    const revUp = 2.2 * revRate;                  // muscle ~0.47s · bike ~0.20s · alcohol ~0.29s
+    const revDown = 1.6 * revRate;                // decay on lift: muscle ~0.64s (a touch slower)
+    // engaged & gripping tracks the wheels near-instantly (car mass sets the real
+    // rate); free-rev / wheelspin flare are limited by the engine's own inertia.
+    const rate = !freeRev
+      ? 12
+      : (targetN > curN ? revUp : revDown);
+    const step = Math.max(-rate * dt, Math.min(rate * dt, targetN - curN));
     this.rpm = (curN + step) * this.redline;
 
     // ---- LOAD: throttle "opens up" the timbre; a shift cut reads as low load. -
