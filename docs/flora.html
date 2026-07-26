@@ -3,29 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>PLAYFORGE — Character</title>
+<title>PLAYFORGE — Flora Lab</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #9ec4e4; }
-  canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb9dc; }
+  canvas#game { width: 100%; height: 100%; display: block; touch-action: none; }
   #hud { position: fixed; left: 12px; top: 10px; color: #fff; font: 13px/1.5 system-ui, sans-serif;
          user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
   #hud b { color: #ffd75e; }
 </style>
-  <script type="module" crossorigin src="./assets/character-Cnpxrr0Z.js"></script>
+  <script type="module" crossorigin src="./assets/flora-DGUK3p1C.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/BufferGeometryUtils-D7sDqU3E.js">
   <link rel="modulepreload" crossorigin href="./assets/vehicletest-hOtb4VUa.js">
-  <link rel="modulepreload" crossorigin href="./assets/physics-wWigouDd.js">
   <link rel="modulepreload" crossorigin href="./assets/rapier-CKC5f6tm.js">
   <link rel="modulepreload" crossorigin href="./assets/phys-DlvceUR_.js">
-  <link rel="modulepreload" crossorigin href="./assets/thirdperson-BugudSCF.js">
-  <link rel="modulepreload" crossorigin href="./assets/terrain-B5pv1ski.js">
   <link rel="modulepreload" crossorigin href="./assets/carphysics-DEUeWjhi.js">
-  <link rel="modulepreload" crossorigin href="./assets/GLTFLoader-80FKpUBI.js">
-  <link rel="modulepreload" crossorigin href="./assets/character-D_mwSrLp.js">
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="hud"><b>PLAYFORGE — Character</b> · click to look · WASD walk · Shift run · Space jump<br>
-<span id="stats">loading…</span></div>
+<div id="hud"><b>PLAYFORGE — Flora Lab</b> · procedural grass, data-driven bend<br>
+drive <b>WASD</b> (or autopilot) / fly <b>F</b> through the grass · R reset · sliders: density &amp; wind · <b>?max=</b>60000<br>
+<span id="status">loading…</span></div>
 </body>
 </html>
