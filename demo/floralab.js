@@ -5,17 +5,20 @@
 // your path, then springs back — all in the vertex shader, fed each frame via
 // field.setDisturbers([...]). Density + wind sliders. See FLORA_PLAN.md.
 //
+// The car is the COMPLETE proving-ground car (createCarRig): physics + Synty
+// muscle model + tyre/burnout smoke + sparks + EXHAUST BACKFIRE FLAME + procedural
+// audio + skid trails + chase/cockpit/free camera + full input. One drop-in
+// component — same car everywhere, no more stripped-down reinventions.
+//
 // Same lab methodology as garage / ragdoll / map. Own fixed-step loop.
 import {
-  Engine, World, Physics, initRapier, Car, FloraField, loadVehicle, THREE,
+  Engine, World, Physics, initRapier, FloraField, THREE, createCarRig,
   makeGrassSprig, makeFlower, makeBush, makePineTree, makeOakTree,
 } from "../src/index.js";
-import { VehicleAudio } from "../src/vehicleaudio.js";
-import RAPIER from "@dimforge/rapier3d-compat";
 
 // ---- grass/dirt kickup: spin the driven wheels (or slide) on grass and they
 // fling grass clippings + dirt clods backward — the peel-out effect for a grass
-// world (black skid marks + white tyre smoke would look wrong here). Pooled. -----
+// world (the rig's tyre smoke reads as burning rubber; this adds the clippings). -
 class GrassKickup {
   constructor(scene, groundAt = null) {
     this.scene = scene; this.groundAt = groundAt; this.parts = []; this.pool = []; this._cd = 0;
@@ -89,11 +92,8 @@ ground.receiveShadow = true; scene.add(ground);
 
 const phys = new Physics({ gravity: -20 });
 
-// procedural engine audio + grass/dirt peel-out FX
-const audio = new VehicleAudio({ hp: 450 });
+// grass/dirt peel-out clippings (the rig owns engine audio + smoke + skids)
 const kickup = new GrassKickup(scene, groundH);
-const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); removeEventListener("touchstart", startAudio); };
-addEventListener("keydown", startAudio); addEventListener("mousedown", startAudio); addEventListener("touchstart", startAudio);
 
 // ---- flora ecosystem: grass · flowers · bushes · pines · oaks ---------------
 const MAX_GRASS = +(qs.get("max") || 60000);
@@ -122,91 +122,26 @@ oaks.scatter(300, () => ({ ...spot(), scale: rand(0.8, 1.4) }));
 const fields = [grass, flowers, bushes, pines, oaks];
 for (const f of fields) f.setWind({ dir: [1, 0.4], strength: 0.25, gust: 0.6 });
 
-// ---- car (drive through the grass) + a WASD/auto driver ---------------------
-let car = null;
-const keys = {};
-const auto = { on: true, t: 0 };
-const freeCam = { on: false, pos: new THREE.Vector3(), yaw: 0, pitch: -0.2, speed: 45 };
-addEventListener("keydown", (e) => {
-  keys[e.code] = true;
-  if (e.code === "KeyR") resetCar();
-  if (e.code === "KeyF") toggleFreeCam();
-  if (["Space", "KeyW", "KeyS", "KeyA", "KeyD"].includes(e.code) && freeCam.on) e.preventDefault();
-});
-addEventListener("keyup", (e) => { keys[e.code] = false; });
-function carInput() {
-  if (freeCam.on) { auto.t += FIXED; return { throttle: 1, steer: 0.3 * Math.sin(auto.t * 0.3), brake: 0 }; }
-  const up = keys.KeyW || keys.ArrowUp, dn = keys.KeyS || keys.ArrowDown, l = keys.KeyA || keys.ArrowLeft, r = keys.KeyD || keys.ArrowRight;
-  if (up || dn || l || r) auto.on = false;
-  if (auto.on) { auto.t += FIXED; return { throttle: 1, steer: 0.35 * Math.sin(auto.t * 0.3), brake: 0 }; }
-  return { throttle: (up ? 1 : 0) - (dn ? 1 : 0), steer: (l ? 1 : 0) - (r ? 1 : 0), brake: 0, handbrake: !!keys.Space };
-}
-function resetCar() {
-  if (!car) return;
-  car.body.setTranslation({ x: 0, y: groundH(0, 0) + 2, z: 0 }, true);
-  car.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
-  car.body.setLinvel({ x: 0, y: 0, z: 0 }, true); car.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-  car._read(car.currPos, car.currQuat); car.prevPos.copy(car.currPos); car.prevQuat.copy(car.currQuat);
-  auto.t = 0;
-}
-function toggleFreeCam() {
-  freeCam.on = !freeCam.on;
-  if (freeCam.on) { freeCam.pos.copy(world.camera.position); const d = new THREE.Vector3(); world.camera.getWorldDirection(d); freeCam.yaw = Math.atan2(d.x, d.z); freeCam.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1)); engine.renderer.domElement.requestPointerLock?.(); }
-  else document.exitPointerLock?.();
-}
-engine.renderer.domElement.addEventListener("click", () => { if (freeCam.on && !document.pointerLockElement) engine.renderer.domElement.requestPointerLock?.(); });
-addEventListener("mousemove", (e) => { if (!freeCam.on || !document.pointerLockElement) return; freeCam.yaw -= e.movementX * 0.0022; freeCam.pitch = THREE.MathUtils.clamp(freeCam.pitch - e.movementY * 0.0022, -1.5, 1.5); });
-
+// ---- the car: the complete proving-ground rig (drive through the grass) ------
+let rig = null;
 initRapier().then(() => {
   world.spawn("physics").add(phys);
-  // flat-ish physics floor sampled from groundH (heightfield collider — cheap)
+  // rolling physics floor sampled from groundH (heightfield collider — cheap)
   phys.addHeightfield(-FIELD, -FIELD, FIELD * 2, groundH, { n: 96, friction: 1.0 });
-  car = new Car(phys.world, RAPIER, { pos: [0, groundH(0, 0) + 2, 0] });
-  scene.add(car.mesh);
-  // Synty muscle car instead of the placeholder box (non-blocking)
-  loadVehicle("models/fabpack/SK_veh_Muscle_01.fbx", {
-    targetLength: 4.6, textureDir: "models/fabpack", textureFlipY: true,
-    textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" },
-  }).then((rig) => car.attachModel(rig)).catch((e) => console.warn("muscle load failed:", e.message));
-  phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
-  phys._post.push(() => car.snapshotCurr());
-  setStatus("drive (WASD / autopilot) or fly (F) through the grass — it bends + springs back");
+  rig = createCarRig({
+    scene, phys, camera: world.camera, dom: engine.renderer.domElement,
+    model: "muscle", hp: 450, pos: [0, groundH(0, 0) + 2, 0],
+  });
+  setStatus("drive (WASD, Space=handbrake) — [C] chase / cockpit / free-fly · [R] reset — grass bends + springs back");
 });
 
-// ---- camera (chase / free-fly) ----------------------------------------------
-const _f = new THREE.Vector3(), _g = new THREE.Vector3(), _t = new THREE.Vector3();
-function updateCamera(dt) {
-  const cam = world.camera;
-  if (freeCam.on) {
-    const cy = Math.cos(freeCam.yaw), sy = Math.sin(freeCam.yaw), cp = Math.cos(freeCam.pitch), sp = Math.sin(freeCam.pitch);
-    _f.set(sy * cp, sp, cy * cp);
-    const spd = freeCam.speed * (keys.ShiftLeft ? 3 : 1) * dt;
-    if (keys.KeyW) freeCam.pos.addScaledVector(_f, spd);
-    if (keys.KeyS) freeCam.pos.addScaledVector(_f, -spd);
-    if (keys.KeyD) { freeCam.pos.x += cy * spd; freeCam.pos.z -= sy * spd; }
-    if (keys.KeyA) { freeCam.pos.x -= cy * spd; freeCam.pos.z += sy * spd; }
-    if (keys.Space) freeCam.pos.y += spd;
-    if (keys.ControlLeft || keys.KeyC) freeCam.pos.y -= spd;
-    cam.position.copy(freeCam.pos); cam.lookAt(freeCam.pos.x + _f.x, freeCam.pos.y + _f.y, freeCam.pos.z + _f.z);
-    return;
-  }
-  if (!car) return;
-  const p = car.mesh.position;
-  _f.set(0, 0, 1).applyQuaternion(car.mesh.quaternion);
-  _g.set(p.x - _f.x * 9, p.y + 4.5, p.z - _f.z * 9);
-  cam.position.lerp(_g, 0.12);
-  _t.set(p.x + _f.x * 5, p.y + 1, p.z + _f.z * 5); cam.lookAt(_t);
-}
-
-// ---- feed disturbers (car + free cam when low) → grass reacts ----------------
-const _lv = new THREE.Vector3();
+// ---- feed disturbers (the car + the free-fly cam when low) → grass reacts -----
 function feedDisturbers() {
+  if (!rig) { for (const f of fields) f.setDisturbers([]); return; }
   const d = [];
-  if (car) {
-    const t = car.body.translation(), v = car.body.linvel();
-    d.push({ x: t.x, y: t.y, z: t.z, radius: 4.5, strength: 0.9, vx: v.x * 0.05, vz: v.z * 0.05 });
-  }
-  if (freeCam.on) d.push({ x: freeCam.pos.x, y: freeCam.pos.y, z: freeCam.pos.z, radius: 4, strength: 0.7, vx: 0, vz: 0 });
+  const t = rig.car.body.translation(), v = rig.car.body.linvel();
+  d.push({ x: t.x, y: t.y, z: t.z, radius: 4.5, strength: 0.9, vx: v.x * 0.05, vz: v.z * 0.05 });
+  if (rig.cameraMode === "free") { const c = world.camera.position; d.push({ x: c.x, y: c.y, z: c.z, radius: 4, strength: 0.7, vx: 0, vz: 0 }); }
   for (const f of fields) f.setDisturbers(d);
 }
 
@@ -218,15 +153,12 @@ function frame() {
   fps += ((1 / Math.max(1e-3, dt)) - fps) * 0.1;
   acc += dt; let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) { world._fixedUpdate(FIXED, engine); acc -= FIXED; steps++; }
-  if (car) {
-    car.interpolate(Math.min(1, acc / FIXED));
-    car.shiftCut = !!(audio.engine && audio.engine.running && audio.engine._shiftT > 0);
-    audio.update(dt, car);        // procedural engine + tyre squeal
-    kickup.update(dt, car);       // grass/dirt flung by spinning/sliding wheels
+  if (rig) {
+    rig.update(dt, Math.min(1, acc / FIXED));   // FX + skids + audio + interpolate + camera
+    kickup.update(dt, rig.car);                 // grass/dirt clippings flung by spinning/sliding wheels
   }
   feedDisturbers();
   for (const f of fields) f.update(dt);
-  updateCamera(dt);
   world._update(dt, engine);
   updateHUD();
   engine.renderer.render(scene, world.camera);
@@ -239,9 +171,9 @@ fit(); addEventListener("resize", fit);
 function setStatus(t) { const el = document.getElementById("status"); if (el) el.textContent = t; }
 function updateHUD() {
   const el = document.getElementById("readouts"); if (!el) return;
-  const spd = car ? Math.hypot(car.body.linvel().x, car.body.linvel().z) * 3.6 : 0;
+  const spd = rig ? Math.hypot(rig.car.body.linvel().x, rig.car.body.linvel().z) * 3.6 : 0;
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
-  el.innerHTML = line("mode", freeCam.on ? "FREE-FLY" : "drive") + line("fps", fps.toFixed(0))
+  el.innerHTML = line("cam", rig ? rig.cameraMode : "—") + line("fps", fps.toFixed(0))
     + line("grass", grass.mesh.count) + line("flowers", flowers.count) + line("bushes", bushes.count)
     + line("trees", pines.count + oaks.count) + line("car", spd.toFixed(0) + " km/h");
 }
@@ -267,4 +199,4 @@ function updateHUD() {
   panel.append(sld); document.body.append(panel);
 })();
 
-window.__flora = { engine, world, fields, grass, flowers, bushes, pines, oaks, get car() { return car; }, feedDisturbers, audio, kickup };
+window.__flora = { engine, world, fields, grass, flowers, bushes, pines, oaks, get car() { return rig && rig.car; }, get rig() { return rig; }, feedDisturbers, kickup };

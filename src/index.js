@@ -32,6 +32,7 @@ export { CarCollisions } from "./damage.js";
 export { AITrafficDriver, roadSpawn } from "./traffic.js";
 export { loadModel, loadCarModel, loadProp } from "./assets.js";
 export { loadVehicle, VehicleRig } from "./vehicledef.js";
+export { createCarRig } from "./carrig.js";
 export { noise2, fbm, ridged, mulberry } from "./noise.js";
 export { CombatSystem, WEAPONS, WEAPON_ORDER, rayHit, meleeHits } from "./combat.js";
 export { CombatHUD } from "./combathud.js";
