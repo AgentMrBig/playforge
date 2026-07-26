@@ -19,12 +19,12 @@ import { fbm, ridged, mulberry } from "./noise.js";
  */
 export function makeIslandTerrain({
   seed = 1337, islandR = 1500, sea = 0,
-  gridN = 512, erosion = true, droplets = 60000, detail = true,
+  gridN = 640, erosion = true, droplets = 95000, detail = true,
 } = {}) {
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const smooth = (t) => { t = clamp01(t); return t * t * (3 - 2 * t); };
-  const PEAK = 240;
-  const EXT = islandR * 2.2;          // grid covers [-EXT/2, EXT/2] in x and z
+  const PEAK = 300;
+  const EXT = islandR * 2.8;          // wide deep-sea margin so the grid edge is far underwater
   const W = gridN + 1;                // grid vertices per side
   const cell = EXT / gridN;
   const half = EXT / 2;
@@ -41,8 +41,8 @@ export function makeIslandTerrain({
     if (land <= 0) return sea - 3 - smooth((d - shore) / 0.6) * 45;   // sea floor
     const relief = fbm(nx * 5 + 20, nz * 5 + 20, { octaves: 4, seed }) * 0.5 + 0.5;
     const range = clamp01(fbm(nx * 1.4 + 50, nz * 1.4 + 50, { octaves: 2, seed: seed + 21 }) * 2.1 + 0.28);
-    const rg = ridged(nx * 5.5 + 3, nz * 5.5 + 3, { octaves: 5, seed: seed + 7 });
-    const peak = Math.pow(rg, 1.2) * range;
+    const rg = ridged(nx * 5.5 + 3, nz * 5.5 + 3, { octaves: 6, seed: seed + 7 });
+    const peak = Math.pow(rg, 1.1) * range;
     return land * (4 + relief * 18 + peak * peak * PEAK);
   }
 
@@ -56,8 +56,12 @@ export function makeIslandTerrain({
 
   // ── 3. bilinear grid sampler + procedural micro-detail ──
   function sample(x, z) {
-    const fx = (x + half) / cell, fz = (z + half) / cell;
-    if (fx < 0 || fx >= gridN || fz < 0 || fz >= gridN) return sea - 8;   // beyond the island = open sea
+    // clamp to the grid edge (which is deep flat sea) instead of dropping to a
+    // hard sea-floor value — that hard step was the visible straight cliff at the
+    // grid boundary. Beyond the grid you just get the deep-sea edge height.
+    let fx = (x + half) / cell, fz = (z + half) / cell;
+    fx = fx < 0 ? 0 : fx > gridN - 1.001 ? gridN - 1.001 : fx;
+    fz = fz < 0 ? 0 : fz > gridN - 1.001 ? gridN - 1.001 : fz;
     const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, o = j * W + i;
     const a = H[o], b = H[o + 1], c = H[o + W], e = H[o + W + 1];
     return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + e * u) * v;
@@ -145,8 +149,8 @@ export function makeIslandTerrain({
 function erodeHeightmap(H, W, seed, droplets) {
   const N = W - 1;
   const rnd = mulberry((seed ^ 0x9e3779b9) >>> 0);
-  const MAX_STEPS = 30, INERTIA = 0.05, CAP = 4.0, MIN_SLOPE = 0.01,
-        DEPOSIT = 0.3, ERODE = 0.3, EVAP = 0.02, GRAV = 12, R = 2;
+  const MAX_STEPS = 42, INERTIA = 0.05, CAP = 5.5, MIN_SLOPE = 0.01,
+        DEPOSIT = 0.3, ERODE = 0.38, EVAP = 0.02, GRAV = 12, R = 2;
 
   // erosion brush: offsets + normalized weights within radius R (smooth channels)
   const bOff = [], bW = []; let bSum = 0;
