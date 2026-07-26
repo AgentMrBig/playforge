@@ -81,6 +81,10 @@ const JOINTS = [
 // so the trunk being at rest is the honest "the body has come to rest" signal.
 const CORE_SEG = new Set(["pelvis", "chest"]);
 
+// POSTURAL joints (child names) — spine/neck/hips. Muscle mode stiffens these extra
+// so the torso stays UPRIGHT instead of folding forward at the waist (the "slump").
+const CORE_POST = new Set(["chest", "head", "thighL", "thighR"]);
+
 const MASS_FRAC = {
   pelvis: 0.22, chest: 0.24, head: 0.07,
   upperArmL: 0.035, forearmL: 0.025, handL: 0.015,
@@ -105,6 +109,17 @@ export class Ragdoll {
                          //   damping ratio rises with stiffness (√tone left it
                          //   underdamped and it blew up to the clamp at high tone).
     muscleMaxTorque = 500, // hard cap on PD torque per step — divergence-proof.
+    // ── WORLD-orientation postural hold (Phase 2) — the relative PD above only resists
+    //    LOCAL bending; nothing pulls a limb toward its WORLD target, so gravity droops
+    //    the arms/legs/torso ("hangs by the hips, dangles limbs"). This drives each body
+    //    toward its held WORLD orientation. Safe (non-momentum-conserving) ONLY in muscle
+    //    mode, where the pelvis is pinned to a static body that absorbs the reaction.
+    muscleWorldKp = 160, // world postural stiffness per unit tone (firm enough to hold
+                         //   the arms/legs out against gravity — 60 let them sag).
+    muscleWorldKd = 18,  // world postural damping per unit tone.
+    muscleWorldMax = 1400, // cap on the world postural torque (higher than the relative
+                         //   cap — the torso needs real force to not fold forward).
+    corePostureMul = 3.0, // extra stiffness on spine/neck/hip joints so he stands tall.
     // ── firm, stable soft ROM (spine/shoulder/hip have no native Rapier limits) ──
     romMargin = 0.06,    // deadzone (rad) past the cone before the ligament engages.
     romSpring = 95,      // restoring torque per rad of overshoot. Firmer tendon than
@@ -136,6 +151,10 @@ export class Ragdoll {
     this.muscleKp = muscleKp;
     this.muscleKd = muscleKd;
     this.muscleMaxTorque = muscleMaxTorque;
+    this.muscleWorldKp = muscleWorldKp;
+    this.muscleWorldKd = muscleWorldKd;
+    this.muscleWorldMax = muscleWorldMax;
+    this.corePostureMul = corePostureMul;
     this.romMargin = romMargin;
     this.romSpring = romSpring;
     this.romDamp = romDamp;
@@ -712,7 +731,7 @@ export class Ragdoll {
     if (effTone > 0.001) {
       const pQ = T.q1, cQ = T.q2, curRel = T.q3, err = T.qA;
       for (const L of this._joints) {
-        const stiff = L.c.stiffMul ?? 1;
+        const stiff = (L.c.stiffMul ?? 1) * (this.muscle && CORE_POST.has(L.c.name) ? this.corePostureMul : 1);
         const kp = this.muscleKp * effTone * stiff;
         if (kp <= 0 || !L.holdRel) continue;
         const a = L.p.body.rotation(), b = L.c.body.rotation();
@@ -735,6 +754,33 @@ export class Ragdoll {
         const k = Ir * dt * mag;
         L.c.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
         L.p.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
+      }
+    }
+    // ═══ WORLD POSTURAL HOLD (Phase 2) — muscle mode only ═══
+    // Drive each body toward its HELD world orientation so limbs/torso resist gravity
+    // and he holds his POSE instead of hanging by the hips. Applied to the child body
+    // only (non-conserving) — fine here because the pelvis is pinned to a static body
+    // in muscle mode, which absorbs the reaction. Skips the anchor segment itself.
+    if (this.muscle && effTone > 0.001) {
+      const curQ = T.q1, werr = T.qA;
+      for (const s of this.segments) {
+        if (s === this._anchorSeg || !s.holdBodyQ) continue;
+        const stiff = (s.stiffMul ?? 1) * (CORE_POST.has(s.name) ? this.corePostureMul : 1);
+        const b = s.body.rotation();
+        curQ.set(b.x, b.y, b.z, b.w);
+        werr.copy(s.holdBodyQ).multiply(curQ.invert());     // holdBodyQ · cur⁻¹ (world)
+        if (werr.w < 0) { werr.x *= -1; werr.y *= -1; werr.z *= -1; werr.w *= -1; }
+        const angle = 2 * Math.acos(Math.min(1, Math.abs(werr.w)));
+        if (angle < 1e-3) continue;
+        const s3 = Math.sqrt(Math.max(1e-9, 1 - werr.w * werr.w));
+        const axis = T.v1.set(werr.x / s3, werr.y / s3, werr.z / s3);   // already world
+        const w = s.body.angvel();
+        const wproj = w.x * axis.x + w.y * axis.y + w.z * axis.z;
+        let mag = (this.muscleWorldKp * Math.min(angle, 1.5) - this.muscleWorldKd * wproj) * effTone * stiff;
+        if (mag > this.muscleWorldMax) mag = this.muscleWorldMax;
+        else if (mag < -this.muscleWorldMax) mag = -this.muscleWorldMax;
+        const k = s.inertia * dt * mag;
+        s.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
       }
     }
     // ligaments / soft ROM — the spine/shoulder/hip/neck are SPHERICAL joints and

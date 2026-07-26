@@ -123,11 +123,13 @@ export function createCharacterController(world, {
       entity.rotation.y += d * Math.min(1, dt * 9);
     }
 
-    // animation state machine. air-time hysteresis: a step-up flickers `grounded`
-    // for a frame or two — don't let that fire the jump pose. Only play jump when
-    // genuinely airborne (rising, or off the ground for >0.12s).
+    // animation state machine. Only play the jump/fall pose when he's ACTUALLY jumping
+    // (rising) or falling from a real height — NOT when stepping off a small ledge/block
+    // (that briefly reads "not grounded" and used to snap him into the flailing jump pose).
     if (grounded) airT = 0; else airT += dt;
-    const airborne = airT > 0.12 || body.velocity.y > 2.0;
+    const gA = probeGround(entity.position.x, entity.position.z, entity.position.y);
+    const heightAbove = gA != null ? entity.position.y - gA : 99;
+    const airborne = body.velocity.y > 2.0 || (airT > 0.14 && heightAbove > 0.5);
     const moving = Math.hypot(ix, iz);
     if (airborne) animator.play("jump", { fade: 0.1, once: true });
     else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
