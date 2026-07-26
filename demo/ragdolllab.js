@@ -275,7 +275,7 @@ function updateHUD() {
 // Dial "bob metres" (frequency) + "phase" so the yellow dips line up with the foot lows,
 // then tell me the numbers and I'll hard-code them.
 window.__bobDebugOn = true;
-window.__bobTune = window.__bobTune || { div: 1.46, amp: 0.07, phase: 0 };   // pre-seed (controller loads async); 1.46m ≈ 1 dip/footfall
+window.__bobTune = window.__bobTune || { amp: 0.07, floor: 0.13, swing: 0.35 };   // pre-seed (controller loads async); auto-synced to feet
 (function bobGraph() {
   const W = 340, H = 130, N = W;
   const cvs = document.createElement("canvas"); cvs.width = W; cvs.height = H;
@@ -294,9 +294,9 @@ window.__bobTune = window.__bobTune || { div: 1.46, amp: 0.07, phase: 0 };   // 
     inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); window.__bobTune[key] = +inp.value; };
     row.append(lab, inp, out); panel.append(row);
   };
-  mk("bob metres", 1, 10, window.__bobTune.div, 0.05, "div");
-  mk("bob amp", 0, 0.2, window.__bobTune.amp, 0.005, "amp");
-  mk("bob phase", 0, 1, window.__bobTune.phase, 0.02, "phase");
+  mk("bob amp", 0, 0.2, window.__bobTune.amp, 0.005, "amp");        // bob height
+  mk("foot floor", 0, 0.3, window.__bobTune.floor, 0.01, "floor"); // planted-foot height (dip point)
+  mk("swing range", 0.05, 0.6, window.__bobTune.swing, 0.01, "swing"); // foot lift that = full rise
   document.body.appendChild(panel);
   const line = (buf, color, lo, hi) => {
     g.strokeStyle = color; g.lineWidth = 1.5; g.beginPath();

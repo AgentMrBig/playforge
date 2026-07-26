@@ -73,8 +73,8 @@ export function createCharacterController(world, {
   let grounded = true, freeFly = false, airT = 0, smoothVisY = null, bobPhase = 0, lastBob = 0;
   // live-tunable gait bob (console/sliders): div = metres per bob cycle (lower = faster),
   // amp = bob height (m), phase = phase offset in cycles. Dial vs the footstep graph.
-  if (typeof window !== "undefined" && !window.__bobTune) window.__bobTune = { div: 1.46, amp: 0.07, phase: 0 };
-  const _bobDEF = { div: 1.46, amp: 0.07, phase: 0 };   // 1.46m ≈ one dip per footfall at the measured run cadence
+  if (typeof window !== "undefined" && !window.__bobTune) window.__bobTune = { amp: 0.07, floor: 0.13, swing: 0.35 };
+  const _bobDEF = { amp: 0.07, floor: 0.13, swing: 0.35 };   // auto-sync: amp=bob height, floor=planted-foot height, swing=lift range
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
@@ -186,11 +186,19 @@ export function createCharacterController(world, {
       // IK) so the legs compress/extend to make the bob = a real gait, not a floating slide.
       const bt = (typeof window !== "undefined" && window.__bobTune) || _bobDEF;
       const hsp = Math.hypot(body.velocity.x, body.velocity.z);
-      bobPhase += (hsp * dt / Math.max(0.5, bt.div)) * Math.PI * 2;   // one bob per bt.div metres
-      // DIP-ONLY bob (range [-amp, 0]): the body sinks on each step and returns to the
-      // ground-pin, but NEVER rises above it — so a near-straight leg never has to
-      // over-extend and the planted foot stays on the ground.
-      const bob = (Math.cos(bobPhase + (bt.phase || 0) * Math.PI * 2) - 1) * 0.5 * bt.amp * Math.min(1, hsp / runSpeed);
+      // AUTO-SYNC the bob to the FEET (read off the posed skeleton): the body is HIGH at
+      // mid-stance / flight (a foot swung up) and LOW at footfall (both feet near the
+      // ground). Locked to the animation at ANY speed — nothing to tune but taste (amp).
+      let lift = 0;
+      if (bones && visual) {
+        const fl = limbChain(visual, "footL"), fr = limbChain(visual, "footR");
+        const yL = fl ? fl.eff.getWorldPosition(_dbg).y - entity.position.y : 0;
+        const yR = fr ? fr.eff.getWorldPosition(_dbg).y - entity.position.y : 0;
+        lift = Math.max(yL, yR);                                    // the higher (swinging) foot
+      }
+      const norm = Math.min(1, Math.max(0, (lift - bt.floor) / Math.max(0.02, bt.swing)));  // 0 at footfall → 1 at peak swing
+      const move01 = Math.min(1, hsp / (walkSpeed * 0.6));                                   // fade the bob in as he moves
+      const bob = -bt.amp * (1 - norm) * move01;                                             // dip when no foot is lifted
       lastBob = bob;
       if (body._ipCurr) { body._ipCurr.y = smoothVisY + bob; if (body._ipPrev) body._ipPrev.y = smoothVisY + bob; }
     } else {
