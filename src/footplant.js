@@ -20,11 +20,15 @@ export class FootPlant {
    * @param {object} o.player      the entity (for facing / position)
    * @param {(x:number,z:number)=>number} [o.heightAt]  terrain height (feet snap to it)
    */
-  constructor({ playerObj, player, heightAt = null, rayGround = null } = {}) {
+  constructor({ playerObj, player, heightAt = null, rayGround = null, footOffset = 0.02 } = {}) {
     this.playerObj = playerObj; this.player = player; this.heightAt = heightAt;
     // rayGround(x, z, footY) => surface Y | null — a physics raycast so feet plant on
     // the REAL surface (ramps, steps, obstacles), not just a flat height function.
     this.rayGround = rayGround;
+    // the IK effector is the ANKLE bone, which naturally sits this far ABOVE the sole.
+    // Target it to groundY+footOffset so the SOLE touches (0.02 targeted ground level,
+    // which is unreachable → the leg over-extended and LIFTED the foot).
+    this.footOffset = footOffset;
     this.enabled = true;
     this.releaseDist = 0.22;      // clip moved the foot this far → real step, re-plant
     this.locks = { footL: null, footR: null };   // world Vector3 targets
@@ -53,7 +57,7 @@ export class FootPlant {
         chain.eff.getWorldPosition(_v);
         const g = this._groundY(_v.x, _v.z, _v.y);
         if (g == null) continue;
-        const ground = g + 0.02;
+        const ground = g + this.footOffset;
         if (_v.y < ground - 0.015) {
           const target = _v.clone(); target.y = ground;
           const anchor = chain.root.getWorldPosition(new THREE.Vector3());
@@ -73,7 +77,7 @@ export class FootPlant {
         // (re)plant where the clip has the foot now, snapped to the real surface
         lock = this.locks[limb] = _v.clone();
         const g = this._groundY(lock.x, lock.z, _v.y);
-        if (g != null) lock.y = g + 0.02;
+        if (g != null) lock.y = g + this.footOffset;
       }
       // knee-forward pole from the character's facing
       const anchor = chain.root.getWorldPosition(new THREE.Vector3());

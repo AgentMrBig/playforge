@@ -69,7 +69,7 @@ export function createCharacterController(world, {
   // fight — the roll-our-own move, same lesson as the car's raycast suspension.
   body.flying = true;
   const GRAVITY = 20;
-  let grounded = true, freeFly = false;
+  let grounded = true, freeFly = false, airT = 0;
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
@@ -123,9 +123,13 @@ export function createCharacterController(world, {
       entity.rotation.y += d * Math.min(1, dt * 9);
     }
 
-    // animation state machine
+    // animation state machine. air-time hysteresis: a step-up flickers `grounded`
+    // for a frame or two — don't let that fire the jump pose. Only play jump when
+    // genuinely airborne (rising, or off the ground for >0.12s).
+    if (grounded) airT = 0; else airT += dt;
+    const airborne = airT > 0.12 || body.velocity.y > 2.0;
     const moving = Math.hypot(ix, iz);
-    if (!grounded) animator.play("jump", { fade: 0.1, once: true });
+    if (airborne) animator.play("jump", { fade: 0.1, once: true });
     else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
     else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
     else animator.play("idle", { fade: 0.3 });
@@ -153,19 +157,19 @@ export function createCharacterController(world, {
     const px = entity.position.x, pz = entity.position.z;
     const gY = probeGround(px, pz, entity.position.y);
     if (gY == null) { grounded = false; body.onGround = false; return; }
-    if (entity.position.y < gY - 0.004) {              // sank below the surface → lift onto it
+    // PLANT: within the landing band (or sunk below) and not rising → snap the feet
+    // EXACTLY onto the surface. Only preventing sink left him floating a few cm; this
+    // puts the feet on the ground (and rides him up onto steps as he crosses them).
+    grounded = entity.position.y <= gY + 0.14 && body.velocity.y <= 0.02;
+    if (grounded) {
       entity.position.y = gY;
       body.rb.setTranslation({ x: px, y: gY + height / 2, z: pz }, true);
       body.rb.setNextKinematicTranslation({ x: px, y: gY + height / 2, z: pz });
       body._lastSynced.copy(entity.position);
       if (body.velocity.y < 0) body.velocity.y = 0;
+      if (body._ipCurr) { body._ipCurr.y = gY; if (body._ipPrev) body._ipPrev.y = gY; }   // pin visual Y (no jitter)
     }
-    grounded = entity.position.y <= gY + 0.12 && body.velocity.y <= 0.02;
     body.onGround = grounded;
-    if (grounded && body._ipCurr) {                    // pin the VISUAL Y (kills the up/down jitter)
-      body._ipCurr.y = entity.position.y;
-      if (body._ipPrev) body._ipPrev.y = entity.position.y;
-    }
   }
 
   // ── natural get-up: settle → snap to where he lies → play a get-up clip ──
@@ -245,7 +249,7 @@ export function createCharacterController(world, {
     entity.mesh(ch.visual);
     animator.play("idle");
     if (lean) entity.add(new TrajectoryLean(bones, () => body));          // lean into turns/accel
-    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt, rayGround: footProbe });   // foot IK on the real surface
+    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt, rayGround: footProbe, footOffset: 0.14 });   // foot IK on the real surface (0.14 = ankle-above-sole → soles plant)
     rag = new Ragdoll(bones, phys, { tone });
     rag.build();                                        // pre-build capsules (disabled) so a picker can hit them
     handle.rag = rag; handle.animator = animator; handle.bones = bones; handle.visual = visual;
