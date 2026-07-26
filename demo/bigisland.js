@@ -998,14 +998,19 @@ const wantCars = new URLSearchParams(location.search).get("cars");
 const SPAWN = wantCars === "all" ? FLEET : FLEET.filter((s) =>
   s.name === "Muscle" || s.name === "GW_LowCar" || s.name === "GW_LowCar2" || s.name === "GW_Van");
 const cars = [];
-for (const spec of SPAWN) {
+SPAWN.forEach((spec, i) => {
   Promise.all([physReady, loadVehicle(spec.file, spec.opts)])
     .then(([, rig]) => {
       if (spec.paint) rig.setPaint(spec.paint);
       // New Car system (same stack as proving.html?car=muscle) — car.mesh is
       // added to the scene by CarVehicle; don't parent the rig on the entity.
+      // Lay the filtered fleet out in a clean row so cars can't spawn overlapping.
+      // The full-fleet dz slots collide once you take a subset (Muscle's -35 sat
+      // 1m from GW_LowCar2's -34 → they interpenetrated and flipped). ?cars=all
+      // keeps the authored dz spread.
+      const zSlot = wantCars === "all" ? spec.dz : (i - (SPAWN.length - 1) / 2) * 5;
       const e = world.spawn("drivable")
-        .at(RUN.x0 + 10, RUN.h + 0.4, RUN.z + spec.dz);
+        .at(RUN.x0 + 10, RUN.h + 0.4, RUN.z + zSlot);
       e.rotation.y = Math.PI / 2;                       // face down the runway (+X)
       const cv = new CarVehicle({
         enginePower: spec.ep, topSpeed: spec.top,
@@ -1022,7 +1027,7 @@ for (const spec of SPAWN) {
       e.specName = spec.name; e.rig = rig;
       cars.push(e);
     }).catch((err) => console.warn(spec.name, err.message));
-}
+});
 
 // ============================================================================
 // camera + controls + HUD
