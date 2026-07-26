@@ -5,7 +5,7 @@ import { Ragdoll } from "./ragdoll.js";
 import { loadCharacter } from "./character.js";
 import { TrajectoryLean } from "./charlean.js";
 import { FootPlant } from "./footplant.js";
-import { solveTwoBone, limbChain } from "./ik.js";
+import { solveTwoBone, limbChain, currentBendPole } from "./ik.js";
 
 /**
  * createCharacterController — THE reusable main character controller (the character
@@ -133,6 +133,7 @@ export function createCharacterController(world, {
     const airborne = body.velocity.y > 2.0 || (airT > 0.14 && heightAbove > 0.5);
     const moving = Math.hypot(ix, iz);
     if (airborne) animator.play("jump", { fade: 0.1, once: true });
+    else if (wallW > 0.4 && moving > 0.15) animator.play("idle", { fade: 0.2 });   // braced on a wall → stop marching, push
     else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
     else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
     else animator.play("idle", { fade: 0.3 });
@@ -180,8 +181,12 @@ export function createCharacterController(world, {
       // ~1.8m step, dip at footfall), amplitude scaling with speed. Feet stay planted (foot
       // IK) so the legs compress/extend to make the bob = a real gait, not a floating slide.
       const hsp = Math.hypot(body.velocity.x, body.velocity.z);
-      bobPhase += (hsp * dt / 5.75) * Math.PI * 2;   // one bob per ~5.75m → matches the anim clip cadence (+25% freq)
-      const bob = -Math.cos(bobPhase) * 0.06 * Math.min(1, hsp / runSpeed);
+      bobPhase += (hsp * dt / 4.6) * Math.PI * 2;    // one bob per ~4.6m → matches the anim clip cadence
+      // DIP-ONLY bob (range [-amp, 0]): the body sinks on each step and returns to the
+      // ground-pin, but NEVER rises above it — so a near-straight leg never has to
+      // over-extend and the planted foot stays on the ground (feet were lifting on the
+      // up-phase of a symmetric bob).
+      const bob = (Math.cos(bobPhase) - 1) * 0.5 * 0.07 * Math.min(1, hsp / runSpeed);
       if (body._ipCurr) { body._ipCurr.y = smoothVisY + bob; if (body._ipPrev) body._ipPrev.y = smoothVisY + bob; }
     } else {
       smoothVisY = entity.position.y;   // airborne (jump/fall): visual tracks physics exactly
@@ -208,17 +213,21 @@ export function createCharacterController(world, {
     wallW += (want - wallW) * (1 - Math.exp(-8 * dt));
     if (wallW < 0.02) return;
     const toi = hit ? (hit.timeOfImpact ?? hit.toi) : reach;
-    _wpt.copy(_wfwd).multiplyScalar(Math.max(0.2, toi - 0.05)).add(_wray.origin);   // just off the wall
-    _wlat.set(_wfwd.z, 0, -_wfwd.x);                                                 // lateral (right)
-    for (const [limb, side] of [["handL", -1], ["handR", 1]]) {
+    _wpt.copy(_wfwd).multiplyScalar(Math.max(0.15, toi - 0.02)).add(_wray.origin);  // ON the wall surface
+    _wlat.set(_wfwd.z, 0, -_wfwd.x);                                                 // LEFT of facing (fwd × up)
+    // handL → left, handR → right (was swapped → arms crossed through the wall)
+    for (const [limb, side] of [["handL", 1], ["handR", -1]]) {
       const chain = limbChain(visual, limb);
       if (!chain) continue;
       chain.eff.getWorldPosition(_whand);
-      _wtgt.copy(_wpt).addScaledVector(_wlat, side * 0.2); _wtgt.y = entity.position.y + 1.35;
+      _wtgt.copy(_wpt).addScaledVector(_wlat, side * 0.22); _wtgt.y = entity.position.y + 1.25;  // shoulder-width, chest height
       _wtgt.lerpVectors(_whand, _wtgt, wallW);                                       // blend current hand → wall
+      // elbow pole: straight DOWN from the shoulder (+ a touch back). Unambiguous (no
+      // left/right term → can't flip/cross), and lets the hand come UP to chest height
+      // on the wall (currentBendPole kept the hands hanging low at the waist).
       chain.root.getWorldPosition(_wanchor);
-      _wpole.copy(_wanchor).addScaledVector(_wfwd, -0.4); _wpole.y -= 0.4;           // elbow down/back
-      solveTwoBone({ ...chain, target: _wtgt, pole: _wpole, iterations: 2 });
+      _wpole.copy(_wanchor).addScaledVector(_wfwd, -0.2); _wpole.y -= 0.7;
+      solveTwoBone({ ...chain, target: _wtgt, pole: _wpole, iterations: 3 });
     }
   }
 
@@ -300,7 +309,7 @@ export function createCharacterController(world, {
     entity.mesh(ch.visual);
     animator.play("idle");
     if (lean) entity.add(new TrajectoryLean(bones, () => body));          // lean into turns/accel
-    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt, rayGround: footProbe, footOffset: 0.14 });   // foot IK on the real surface (0.14 = ankle-above-sole → soles plant)
+    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt, rayGround: footProbe, footOffset: 0.14 });   // foot IK on the real surface (ankle-above-sole → soles plant)
     rag = new Ragdoll(bones, phys, { tone });
     rag.build();                                        // pre-build capsules (disabled) so a picker can hit them
     handle.rag = rag; handle.animator = animator; handle.bones = bones; handle.visual = visual;
