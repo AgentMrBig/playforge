@@ -57,9 +57,32 @@ let ch = null;                    // the character controller handle
 const state = () => (ch ? ch.state : "anim");
 const getRag = () => (ch ? ch.rag : null);
 
+// ---- Phase 2b obstacle course: uneven geometry to test weight-bearing foot IK ---
+// steps (climb), a platform (step up onto), a shallow stair "ramp" (walk up a slope),
+// and low trip-boxes (feet conform / stumble over). Each = a static box collider + mesh.
+function buildObstacles() {
+  const matStep = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.9 });
+  const matTrip = new THREE.MeshStandardMaterial({ color: 0x6a5540, roughness: 0.95 });
+  const box = (w, h, d, x, y, z, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; scene.add(m);
+    phys.addBox([w / 2, h / 2, d / 2], [x, y, z], { friction: 1.0 });
+  };
+  // staircase (climb) — 4 steps, +X
+  for (let i = 0; i < 4; i++) box(3, 0.22 * (i + 1), 0.6, 7, 0.11 * (i + 1), -3 + i * 0.6, matStep);
+  // a low platform to step onto, -X
+  box(3, 0.5, 3, -7, 0.25, 0, matStep);
+  // shallow "ramp" made of thin rising steps (walk up a slope), +Z
+  for (let i = 0; i < 8; i++) box(3, 0.09 * (i + 1), 0.7, 0, 0.045 * (i + 1), 7 + i * 0.7, matStep);
+  // scattered low trip-boxes near spawn (feet conform / stumble)
+  const trips = [[2.5, 0.15, 2], [-2, 0.12, 3], [3, 0.18, -1.5], [-3, 0.15, -3], [1.5, 0.1, 4.5]];
+  for (const [x, h, z] of trips) box(0.9, h, 0.9, x, h / 2, z, matTrip);
+}
+
 initRapier().then(() => {
   world.spawn("physics").add(phys);
   phys.addGroundPlane(0);         // the Rapier floor the capsule + ragdoll land on
+  buildObstacles();
   ch = createCharacterController(world, {
     scene, phys, camera: true, dragOrbit: true, spawn: [0, 0, 0], tone: TONE0, fly: false,
   });

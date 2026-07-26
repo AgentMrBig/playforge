@@ -106,8 +106,14 @@ export function createCharacterController(world, {
     } else {
       body.velocity.x = _wish.x * spd;
       body.velocity.z = _wish.z * spd;
-      body.velocity.y -= GRAVITY * dt;                    // OUR gravity (Rapier's is off via flying)
-      if (input.pressed("Space") && grounded) { body.velocity.y = jumpSpeed; grounded = false; }
+      // vertical: OWN it (ran BEFORE the physics step so the capsule never drives DOWN
+      // into the floor — that down-then-clamp each frame was the up/down jitter).
+      // planted → velocity.y = 0; airborne → our gravity; grounded + Space → jump.
+      const gY = probeGround(entity.position.x, entity.position.z, entity.position.y);
+      const near = gY != null && entity.position.y <= gY + 0.12;
+      if (near && input.pressed("Space")) { body.velocity.y = jumpSpeed; grounded = false; }
+      else if (near && body.velocity.y <= 0) { body.velocity.y = 0; grounded = true; }
+      else { body.velocity.y -= GRAVITY * dt; grounded = false; }
     }
 
     // face the way he's moving
@@ -130,25 +136,36 @@ export function createCharacterController(world, {
   // velocity killed, so a standing character never sinks and rides uneven terrain.
   // Runs as a phys _post hook (after the capsule's own move wrote entity.position).
   const _gray = R ? new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }) : null;
+  // one downward ray → the real surface Y under (x,z), from `fromY`+up. Hits ANY
+  // collider (ground, ramps, steps, obstacles), so it works over arbitrary geometry.
+  function probeGround(x, z, fromY, up = 1.2, len = 4.0) {
+    if (!_gray || !phys?.world || !body.rb) return null;
+    _gray.origin.x = x; _gray.origin.y = fromY + up; _gray.origin.z = z;
+    const hit = phys.world.castRay(_gray, len, true, undefined, undefined, undefined, body.rb);
+    return hit ? (fromY + up) - (hit.timeOfImpact ?? hit.toi) : null;
+  }
+  // foot-IK ground sampler (used by FootPlant): surface under a foot, cast from just above it
+  function footProbe(x, z, footY) { return probeGround(x, z, footY, 0.6, 1.6); }
+  // runs AFTER the capsule's horizontal move: catch any residual sink and keep the
+  // render-interpolation Y in sync so the body doesn't visibly jitter up/down.
   function groundClamp() {
-    if (!groundRay || !_gray || !phys?.world || !body.rb || state !== "anim" || freeFly) { grounded = false; return; }
-    const px = entity.position.x, pz = entity.position.z, oy = entity.position.y + 1.2;
-    _gray.origin.x = px; _gray.origin.y = oy; _gray.origin.z = pz;
-    const hit = phys.world.castRay(_gray, 4.0, true, undefined, undefined, undefined, body.rb);
-    if (!hit) { grounded = false; body.onGround = false; return; }
-    const groundY = oy - (hit.timeOfImpact ?? hit.toi);
-    // land: at/just-below the ground while descending → pin the feet exactly on it
-    if (entity.position.y <= groundY + 0.06 && body.velocity.y <= 0.01) {
-      entity.position.y = groundY;
-      body.rb.setTranslation({ x: px, y: groundY + height / 2, z: pz }, true);
-      body.rb.setNextKinematicTranslation({ x: px, y: groundY + height / 2, z: pz });
+    if (!groundRay || state !== "anim" || freeFly) return;
+    const px = entity.position.x, pz = entity.position.z;
+    const gY = probeGround(px, pz, entity.position.y);
+    if (gY == null) { grounded = false; body.onGround = false; return; }
+    if (entity.position.y < gY - 0.004) {              // sank below the surface → lift onto it
+      entity.position.y = gY;
+      body.rb.setTranslation({ x: px, y: gY + height / 2, z: pz }, true);
+      body.rb.setNextKinematicTranslation({ x: px, y: gY + height / 2, z: pz });
       body._lastSynced.copy(entity.position);
       if (body.velocity.y < 0) body.velocity.y = 0;
-      grounded = true;
-    } else {
-      grounded = entity.position.y <= groundY + 0.12 && body.velocity.y <= 0.01;
     }
+    grounded = entity.position.y <= gY + 0.12 && body.velocity.y <= 0.02;
     body.onGround = grounded;
+    if (grounded && body._ipCurr) {                    // pin the VISUAL Y (kills the up/down jitter)
+      body._ipCurr.y = entity.position.y;
+      if (body._ipPrev) body._ipPrev.y = entity.position.y;
+    }
   }
 
   // ── natural get-up: settle → snap to where he lies → play a get-up clip ──
@@ -228,7 +245,7 @@ export function createCharacterController(world, {
     entity.mesh(ch.visual);
     animator.play("idle");
     if (lean) entity.add(new TrajectoryLean(bones, () => body));          // lean into turns/accel
-    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt });   // foot IK
+    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt, rayGround: footProbe });   // foot IK on the real surface
     rag = new Ragdoll(bones, phys, { tone });
     rag.build();                                        // pre-build capsules (disabled) so a picker can hit them
     handle.rag = rag; handle.animator = animator; handle.bones = bones; handle.visual = visual;

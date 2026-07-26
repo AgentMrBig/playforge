@@ -20,12 +20,21 @@ export class FootPlant {
    * @param {object} o.player      the entity (for facing / position)
    * @param {(x:number,z:number)=>number} [o.heightAt]  terrain height (feet snap to it)
    */
-  constructor({ playerObj, player, heightAt = null } = {}) {
+  constructor({ playerObj, player, heightAt = null, rayGround = null } = {}) {
     this.playerObj = playerObj; this.player = player; this.heightAt = heightAt;
+    // rayGround(x, z, footY) => surface Y | null — a physics raycast so feet plant on
+    // the REAL surface (ramps, steps, obstacles), not just a flat height function.
+    this.rayGround = rayGround;
     this.enabled = true;
     this.releaseDist = 0.22;      // clip moved the foot this far → real step, re-plant
     this.locks = { footL: null, footR: null };   // world Vector3 targets
     if (typeof window !== "undefined") window.__footPlant = this;
+  }
+
+  /** surface Y under a foot: raycast first (sees obstacles), else the height function */
+  _groundY(x, z, footY) {
+    if (this.rayGround) { const y = this.rayGround(x, z, footY); if (y != null) return y; }
+    return this.heightAt ? this.heightAt(x, z) : null;
   }
 
   /** call once per frame, after the animator + aim layers.
@@ -35,14 +44,16 @@ export class FootPlant {
     if (!this.enabled || (!standing && !moving)) { this.locks.footL = this.locks.footR = null; return; }
     if (!standing && moving) {
       this.locks.footL = this.locks.footR = null;
-      if (!this.heightAt) return;
-      // locomotion ground-conform: if the clip puts a foot BELOW the terrain (slopes,
-      // steps), IK it up onto the surface; above-ground swing is the clip's business
+      if (!this.heightAt && !this.rayGround) return;
+      // locomotion ground-conform: if the clip puts a foot BELOW the surface (slopes,
+      // steps, obstacles), IK it up onto it; above-surface swing is the clip's business
       for (const limb of ["footL", "footR"]) {
         const chain = limbChain(this.playerObj, limb);
         if (!chain) continue;
         chain.eff.getWorldPosition(_v);
-        const ground = this.heightAt(_v.x, _v.z) + 0.02;
+        const g = this._groundY(_v.x, _v.z, _v.y);
+        if (g == null) continue;
+        const ground = g + 0.02;
         if (_v.y < ground - 0.015) {
           const target = _v.clone(); target.y = ground;
           const anchor = chain.root.getWorldPosition(new THREE.Vector3());
@@ -59,9 +70,10 @@ export class FootPlant {
       chain.eff.getWorldPosition(_v);
       let lock = this.locks[limb];
       if (!lock || _v.distanceTo(lock) > this.releaseDist) {
-        // (re)plant where the clip has the foot now, snapped to the ground
+        // (re)plant where the clip has the foot now, snapped to the real surface
         lock = this.locks[limb] = _v.clone();
-        if (this.heightAt) lock.y = this.heightAt(lock.x, lock.z) + 0.02;
+        const g = this._groundY(lock.x, lock.z, _v.y);
+        if (g != null) lock.y = g + 0.02;
       }
       // knee-forward pole from the character's facing
       const anchor = chain.root.getWorldPosition(new THREE.Vector3());
