@@ -11,13 +11,20 @@ import { EngineSound } from "./enginesound.js";
  *   audio.update(dt, car);       // each frame
  */
 export class VehicleAudio {
-  constructor({ hp = 450 } = {}) {
+  constructor({ hp = 450, preset } = {}) {
     this.ctx = null;
     this.hp = hp;
+    // engine voicing preset: explicit option > ?engine= URL param > "muscle".
+    // e.g. proving.html?car=muscle&engine=alcohol  A/Bs the dragster voicing.
+    const urlPreset = (typeof location !== "undefined" && /(?:\?|&)engine=(\w+)/.exec(location.search)) ? RegExp.$1 : null;
+    this.preset = preset || urlPreset || "muscle";
     this.engine = null;
     // reused adapter object EngineSound reads from (no per-frame allocation)
     this._body = { speed: 0, throttle: 0, topSpeed: 50, wheelspin: false, handbrake: false };  // ~180 km/h — gears spread the real range
   }
+
+  /** switch engine voicing at runtime (proxies to EngineSound.setPreset) */
+  setPreset(name) { this.preset = name; return this.engine ? this.engine.setPreset(name) : true; }
 
   /** create + resume the context (must be called from a user gesture) */
   start() {
@@ -25,7 +32,7 @@ export class VehicleAudio {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
       this.ctx = new AC();
-      this.engine = new EngineSound(this, { hp: this.hp });
+      this.engine = new EngineSound(this, { hp: this.hp, preset: this.preset });
       this.engine.start();
       this._buildScreech();
     }
