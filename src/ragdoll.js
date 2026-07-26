@@ -4,8 +4,9 @@ import { R } from "./phys.js";
 /**
  * Active ragdoll — the character as a jointed PHYSICS skeleton with muscles.
  *
- * Capsule rigid bodies built from Mixamo bones, connected by Multibody joints
- * (reduced-coordinate — no soft stretch under load, the big "jenky" fix).
+ * Capsule rigid bodies built from Mixamo bones, connected by spherical/revolute
+ * IMPULSE joints. Independent dynamic links self-collide (limbs can't pass through
+ * each other) and respond to the applied muscle/ligament torque-impulses.
  * Each fixed step a PD controller applies muscle torque toward the Animator
  * pose. Muscle tone is a dial:
  *   tone 0   = unconscious noodle
@@ -184,17 +185,19 @@ export class Ragdoll {
           { x: a1.x, y: a1.y, z: a1.z },
           { x: a2.x, y: a2.y, z: a2.z });
       }
-      // Multibody = reduced-coordinate tree: joints don't stretch under impact
-      // (impulse joints were the main "rubber-band / jenky" feel).
-      const j = P.world.createMultibodyJoint(params, p.body, c.body, true);
+      // IMPULSE joints (NOT multibody): links stay independent dynamic bodies, so
+      // non-adjacent limbs SELF-COLLIDE (multibody links cannot) and the PD-muscle
+      // + soft-ligament torque-impulses drive the solver as designed. Multibody's
+      // reduced-coordinate solver swallowed those torques → the ragdoll thrashed and
+      // never settled, and links passed through each other. Adjacent pairs disable
+      // their mutual contact so the joint isn't fighting a collision.
+      const j = P.world.createImpulseJoint(params, p.body, c.body, true);
       j.setContactsEnabled?.(false);
       let softHinge = false;
-      if (type === "revolute" && conf.hinge && typeof j.setLimits === "function") {
-        j.setLimits(conf.hinge[0], conf.hinge[1]);
-      } else if (type === "revolute" && conf.hinge) {
-        // Multibody revolute may not expose setLimits in this Rapier build —
-        // soft ligament uses the hinge range as a cone proxy.
-        softHinge = true;
+      if (type === "revolute" && conf.hinge) {
+        if (typeof j.setLimits === "function") j.setLimits(conf.hinge[0], conf.hinge[1]);
+        // build lacks revolute limits → soft ligament uses the hinge range as a proxy
+        else softHinge = true;
       }
       const qp = p.body.rotation(), qc = c.body.rotation();
       const rel0 = new THREE.Quaternion(qp.x, qp.y, qp.z, qp.w).invert()
@@ -206,7 +209,7 @@ export class Ragdoll {
           : (conf.limit ?? 1.2),
         hinge: conf.hinge || null,
         softHinge,
-        rel0, multibody: true,
+        rel0, multibody: false,
       });
     }
   }

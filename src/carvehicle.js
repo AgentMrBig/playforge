@@ -45,7 +45,8 @@ export class CarVehicle extends VehicleBody {
     this.wheelspin = false;
     this.steer = 0;
     this.speed = 0;
-    this.kmh = 0;
+    // NOTE: `kmh` is a getter-only prop on VehicleBody (Math.abs(speed*3.6)) —
+    // assigning it throws in strict mode. We drive `speed` and let the getter derive it.
     this._preHook = null;
     this._postHook = null;
     this._contactHook = null;
@@ -149,7 +150,7 @@ export class CarVehicle extends VehicleBody {
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(
       new THREE.Quaternion(q.x, q.y, q.z, q.w));
     this.speed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
-    this.kmh = Math.hypot(lv.x, lv.y, lv.z) * 3.6;
+    // kmh comes from VehicleBody's getter (Math.abs(speed*3.6)) — do NOT assign it.
     this.steer = car.steer;
     this.onGround = car.wheels.some((w) => w.grounded);
     const rearSlip = Math.max(
