@@ -16,7 +16,7 @@
 // Own fixed-step loop (like garage) for exact frametime control. The Car drives
 // via the phys _pre/_post hooks, same as CarVehicle.
 import {
-  Engine, World, Physics, initRapier, Car, StreamedTerrain, fbm, THREE,
+  Engine, World, Physics, initRapier, Car, StreamedTerrain, makeIslandTerrain, THREE,
 } from "../src/index.js";
 import RAPIER from "@dimforge/rapier3d-compat";   // deduped — same singleton phys.js uses
 
@@ -42,22 +42,14 @@ scene.add(sun);
 engine.renderer.shadowMap.enabled = true;
 engine.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// ---- representative island terrain (same shape of cost as the game: fbm) ----
-const SEED = 1337;
-function heightAt(x, z) {
-  const base = fbm(x / 320, z / 320, { octaves: 5, seed: SEED }) * 34;      // rolling hills
-  const mid = fbm(x / 90, z / 90, { octaves: 3, seed: SEED + 7 }) * 6;       // secondary
-  const fine = fbm(x / 24, z / 24, { octaves: 2, seed: SEED + 19 }) * 1.2;   // texture
-  return base + mid + fine;
-}
-const SAND = new THREE.Color(0xd9c58a), GRASS = new THREE.Color(0x4c8a45);
-const ROCK = new THREE.Color(0x7b7671), SNOW = new THREE.Color(0xf2f4f7);
-function colorAt(x, z, h, slope, out) {
-  if (h < 1.5) out.copy(SAND);
-  else if (h > 46 && slope < 1.0) out.copy(SNOW);
-  else if (slope > 0.85 || h > 32) out.copy(ROCK);
-  else out.copy(GRASS);
-}
+// ---- realistic procedural island (worldgen.js): domain-warped ridged ranges,
+// carved valleys, wandering coastline, moisture biomes. Iterate it here, then
+// swap into Big Island. ?seed=N for a different island. -------------------------
+const SEED = +(qs.get("seed") || 1337);
+const ISLAND_R = +(qs.get("islandR") || 1500);
+const gen = makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0 });
+const heightAt = gen.heightAt, colorAt = gen.colorAt;
+scene.add(gen.waterMesh());                                    // sea plane at y=0
 
 // ---- physics ----------------------------------------------------------------
 const phys = new Physics({ gravity: -20 });
@@ -120,10 +112,21 @@ function carInput() {
   if (auto.on) { auto.t += FIXED; return { throttle: 1, steer: 0.14 * Math.sin(auto.t * 0.12), brake: 0, handbrake: false }; }
   return { throttle: (up ? 1 : 0) - (down ? 1 : 0), steer: (left ? 1 : 0) - (right ? 1 : 0), brake: 0, handbrake: !!keys.Space };
 }
+// pick a gentle inland spawn (not a peak, not the beach) so you start on drivable ground
+function findSpawn() {
+  for (let r = 0; r < ISLAND_R * 0.7; r += 45)
+    for (let a = 0; a < 6.28; a += 0.5) {
+      const x = Math.cos(a) * r, z = Math.sin(a) * r, h = heightAt(x, z);
+      const s = Math.max(Math.abs(heightAt(x + 2, z) - h), Math.abs(heightAt(x, z + 2) - h)) / 2;
+      if (h > 3 && h < 22 && s < 0.4) return { x, z, h };
+    }
+  return { x: 0, z: 0, h: heightAt(0, 0) };
+}
+const spawn = findSpawn();
 function resetCar() {
   if (!car) return;
-  const y = heightAt(0, 0) + 2;
-  car.body.setTranslation({ x: 0, y, z: 0 }, true);
+  const y = heightAt(spawn.x, spawn.z) + 2;
+  car.body.setTranslation({ x: spawn.x, y, z: spawn.z }, true);
   car.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
   car.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   car.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -149,7 +152,7 @@ initRapier().then(() => {
   world.spawn("physics").add(phys);
   for (const t of pendingTiles) attachTileCollider(t);
   pendingTiles.length = 0;
-  car = new Car(phys.world, RAPIER, { pos: [0, heightAt(0, 0) + 2, 0] });
+  car = new Car(phys.world, RAPIER, { pos: [spawn.x, heightAt(spawn.x, spawn.z) + 2, spawn.z] });
   scene.add(car.mesh);
   world.spawn("terrain").add(terrain);
   // drive the car inside the physics step (suspension before world.step)
