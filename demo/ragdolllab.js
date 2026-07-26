@@ -1,22 +1,23 @@
 // PLAYFORGE — Ragdoll Lab (proving ground)
 //
-// The ragdoll equivalent of the car Garage (proving.html/garage.js): a stripped
-// scene — flat ground, one character, ZERO game code — so the ACTIVE RAGDOLL is
-// measurable and tunable in isolation. Build it here, prove it, then merge into
-// the game (same path the car system took).
+// The ragdoll equivalent of the car Garage: a stripped scene so the ACTIVE
+// RAGDOLL is measurable and tunable in isolation — now with the reusable MAIN
+// CHARACTER CONTROLLER dropped in, so you WALK the guy around (WASD, Shift run,
+// Space jump, third-person camera) and trigger the ragdoll while moving, the same
+// controller the game uses. Build it here, prove it, merge it into the game.
 //
-// What it gives you:
+//   • WALK around (WASD / Shift run / Space jump), third-person orbit camera
 //   • trigger the ragdoll every way it happens in-game (drop, punch, launch,
-//     trip, clothesline) + muscle mode (tries to hold the mocap pose / stand)
-//   • SEE it: orbit camera that follows the body, slow-mo + pause + single-step
-//   • MEASURE it: live readouts (state, settle time, max limb speed, joints past
-//     their ROM limit, self-collision overlaps)
-//   • TUNE it live: muscle tone + gravity-assist sliders, natural get-up on settle
+//     trip, clothesline) + muscle mode + a braced STAGGER (light hit → tries to
+//     stay up) — the seam the gradient blend rig grows from
+//   • RIGHT-CLICK to punch, right-drag to grab
+//   • SEE it: camera follows the body · slow-mo + pause + single-step
+//   • MEASURE it: live readouts (state, settle time, max limb speed, ROM, overlaps)
+//   • TUNE it live: muscle tone + gravity-assist sliders
 //
-// Own fixed-timestep loop (like garage.js) so slow-mo/pause/step are trivial and
-// the ragdoll renders smooth between steps.
+// Own fixed-timestep loop (like garage.js) so slow-mo/pause/step are trivial.
 import {
-  Engine, World, OrbitRig, Physics, initRapier, Ragdoll, loadCharacter, THREE,
+  Engine, World, Physics, initRapier, createCharacterController, THREE,
 } from "../src/index.js";
 import { attachRagdollMouse } from "./ragdollmouse.js";
 
@@ -49,165 +50,52 @@ const grid = new THREE.GridHelper(80, 80, 0x556070, 0x2c333b);
 grid.position.y = 0.01;
 scene.add(grid);
 
-// ---- camera: orbit that follows the body ------------------------------------
-const cam = new OrbitRig({ target: [0, 1.0, 0], distance: 5.5, pitch: 0.25 });
-world.spawn("camera").add(cam);
-
-// ---- physics + character + ragdoll ------------------------------------------
+// ---- physics + the reusable character controller (walk + ragdoll) -----------
 const phys = new Physics({ gravity: -20 });
-let rag = null, animator = null, bones = null, charVisual = null;
-let state = "anim";               // anim | ragdoll | getup | stagger
-let getupTimer = 0;
-let staggerTimer = 0;             // >0 while braced-staggering after a light hit
 const TONE0 = 1.9;
+let ch = null;                    // the character controller handle
+const state = () => (ch ? ch.state : "anim");
+const getRag = () => (ch ? ch.rag : null);
 
-const physReady = initRapier().then(() => {
+initRapier().then(() => {
   world.spawn("physics").add(phys);
-  phys.addGroundPlane(0);         // the Rapier floor the ragdoll lands on
+  phys.addGroundPlane(0);         // the Rapier floor the capsule + ragdoll land on
+  ch = createCharacterController(world, {
+    scene, phys, camera: true, spawn: [0, 0, 0], tone: TONE0, fly: false,
+  });
+  ch.ready.then(() => {
+    // ---- direct mouse interaction: right-click punch / right-drag grab -------
+    attachRagdollMouse({
+      canvas: engine.renderer.domElement,
+      getCamera: () => world.camera || engine.camera,
+      getRag: () => ch.rag,
+      getPhys: () => phys,
+      ensureActive: () => {                              // grab needs a live free ragdoll
+        if (!ch.rag) return null;
+        if (ch.rag.muscle) ch.rag.exitMuscle();
+        if (ch.state !== "ragdoll") ch.goRagdoll();
+        return ch.rag;
+      },
+      onPunch: (segName, point, impulse, power) => ch.hit(point, impulse, power),
+    });
+    setStatus("WALK: WASD · Shift run · Space jump — trigger buttons/keys, or RIGHT-CLICK to punch · SHIFT+right-click = hard · drag to grab");
+  }).catch((e) => setStatus("LOAD FAILED: " + e.message));
 });
 
-Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
-  textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8,
-  animations: [
-    { name: "idle", url: "models/character/anims/idle.fbx" },
-    { name: "walk", url: "models/character/anims/walking.fbx" },
-    { name: "getupBack", url: "models/character/anims/getup_back.fbx" },
-    { name: "getupFront", url: "models/character/anims/getup_front.fbx" },
-  ],
-})]).then(([, ch]) => {
-  charVisual = ch.visual;
-  animator = ch.animator;
-  bones = ch.bones;
-  scene.add(ch.visual);
-  ch.visual.position.set(0, 0, 0);
-  animator.play("idle");
-  rag = new Ragdoll(bones, phys, { tone: TONE0 });
-  rag.build();                      // pre-build capsules (disabled) so right-click can pick them
-  // NB: __lab.rag is a live getter (returns the module `rag`) — do NOT assign to
-  // it. Assigning to a getter-only property throws a TypeError in strict-mode ESM,
-  // which used to abort the rest of this .then() BEFORE the ragctl entity below
-  // was spawned → rag.fixedUpdate never ran → the ragdoll was silently PASSIVE
-  // (no muscles, no ligaments, never settled/got up). That single dead line was
-  // the real "settleT never rises" cause.
-
-  // the driver: physics ragdoll ⇄ animation, with a natural get-up on settle
-  world.spawn("ragctl").add({
-    fixedUpdate(dt) {
-      if (state === "getup") {
-        getupTimer -= dt;
-        if (getupTimer <= 0) { state = "anim"; animator.play("idle", { fade: 0.3 }); }
-        return;
-      }
-      // STAGGER: a light hit put him in a braced muscle-hold — he sways but stays
-      // up, then recovers his footing (back to idle) after the window.
-      if (state === "stagger") {
-        rag.fixedUpdate(dt);
-        staggerTimer -= dt;
-        if (staggerTimer <= 0) { rag.exitMuscle(); state = "anim"; charVisual.position.set(0, 0, 0); charVisual.rotation.set(0, 0, 0); animator.play("idle", { fade: 0.25 }); }
-        return;
-      }
-      if (state === "ragdoll" && rag.active) {
-        rag.fixedUpdate(dt);
-        if (rag.muscle) return;                       // muscle mode: no settle/get-up
-        if (rag.settled(1.3)) beginGetup();
-      }
-    },
-    update(dt) {
-      if (animator && (state === "anim" || state === "getup")) animator.update(dt);
-      if (rag && rag.active) rag.update();            // physics bodies → visual bones
-      // camera follows the body (pelvis when down, character when up)
-      const p = rag && rag.active ? rag.pelvisPos() : charVisual.position;
-      cam.target.set(p.x, Math.max(0.6, p.y + (rag && rag.active ? 0.3 : 1.0)), p.z);
-      updateHUD();
-    },
-  });
-
-  // ---- direct mouse interaction: right-click punch / right-drag grab ---------
-  attachRagdollMouse({
-    canvas: engine.renderer.domElement,
-    getCamera: () => world.camera || engine.camera,
-    getRag: () => rag,
-    getPhys: () => phys,
-    ensureActive: () => {                              // grab needs a live free ragdoll
-      if (!rag) return null;
-      if (rag.muscle) rag.exitMuscle();
-      if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
-      return rag;
-    },
-    onPunch: (segName, point, impulse, power) => {
-      if (!rag) return;
-      if (power >= rag.knockdownImpulse) {             // hard hit → knockdown
-        if (rag.muscle) rag.exitMuscle();
-        if (state !== "ragdoll") { state = "ragdoll"; if (!rag.active) rag.enter(); }
-        staggerTimer = 0;
-        rag.hit(point, impulse, { maxDeltaV: 16 });
-      } else {                                         // light hit → stagger, stay up
-        if (state !== "stagger") {
-          if (rag.active && !rag.muscle) rag.exit();
-          state = "stagger"; rag.enterMuscle(rag.tone);
-        }
-        rag.hit(point, impulse, { maxDeltaV: 12 });
-        staggerTimer = 1.0;
-      }
-    },
-  });
-
-  setStatus("ready — trigger, or RIGHT-CLICK to punch · SHIFT+right-click = hard · drag to grab");
-}).catch((e) => setStatus("LOAD FAILED: " + e.message));
-
-// ---- get-up: settle → snap character to where it lies → play a getup clip ----
-function beginGetup() {
-  const o = rag.groundOrientation();
-  const p = rag.pelvisPos();
-  rag.exit();
-  charVisual.position.set(p.x, 0, p.z);
-  charVisual.rotation.y = o.yaw;
-  const clip = o.faceUp ? "getupBack" : "getupFront";
-  const dur = animator.clips[clip]?.duration ?? 1.6;
-  const speed = Math.min(2.4, Math.max(1, dur / 2.0));
-  animator.play(clip, { fade: 0.1, once: true, speed });
-  getupTimer = (dur / speed) * 0.95;
-  state = "getup";
-}
-
-// ---- triggers (mirror the ways the ragdoll fires in-game) -------------------
-const V = (x, y, z) => new THREE.Vector3(x, y, z);
-function ensureRag() {
-  if (!rag) return false;
-  if (state !== "ragdoll") { state = "ragdoll"; rag.enter(); }
-  return true;
-}
-const chestPoint = () => { const p = rag.segPos("chest") || rag.pelvisPos(); return { x: p.x, y: p.y, z: p.z }; };
-
-const triggers = {
-  drop() { if (!rag) return; state = "ragdoll"; rag.enter(V(0, 0, 0)); rag.shove({ x: 0, y: 0.1, z: -1 }, 3, "chest"); },
-  punch() { if (!ensureRag()) return; rag.hit(chestPoint(), V(6, 2, 0).multiplyScalar(60), { maxDeltaV: 14, soften: 0.4 }); },
-  launch() { if (!rag) return; state = "ragdoll"; rag.enter(V(0, 9, 0)); rag.shove({ x: 0.3, y: 1, z: 0.2 }, 10, "pelvis"); },
-  trip() { if (!ensureRag()) return; rag.trip({ x: 1, y: 0, z: 0 }, 6, Math.random() < 0.5 ? "L" : "R"); },
-  clothesline() { if (!ensureRag()) return; rag.clothesline({ x: 1, y: 0, z: 0 }, 9); },
-  muscle() {
-    if (!rag) return;
-    if (rag.muscle) { rag.exitMuscle(); state = "anim"; animator.play("idle", { fade: 0.3 }); }
-    else { state = "ragdoll"; rag.enterMuscle(rag.tone); }
-  },
-  getup() { if (rag && rag.active && !rag.muscle) beginGetup(); },
-  reset() {
-    if (!rag) return;
-    if (rag.muscle) rag.exitMuscle();
-    if (rag.active) rag.exit();
-    state = "anim"; getupTimer = 0;
-    charVisual.position.set(0, 0, 0); charVisual.rotation.set(0, 0, 0);
-    animator.play("idle", { fade: 0.2 });
-  },
-};
+// ---- triggers → the controller ----------------------------------------------
+const fire = (name) => { if (ch && ch.triggers[name]) ch.triggers[name](); };
 
 // ---- input: keys + on-screen buttons ----------------------------------------
 const KEYMAP = {
-  KeyD: "drop", KeyH: "punch", KeyL: "launch", KeyT: "trip",
-  KeyC: "clothesline", KeyM: "muscle", KeyG: "getup", KeyR: "reset",
+  KeyH: "punch", KeyL: "launch", KeyT: "trip",
+  KeyM: "muscle", KeyG: "getup", KeyR: "reset",
 };
+// NB: WASD/Shift/Space are consumed by the walk controller; Q triggers "drop"
+// (D/C are walk keys now — was Drop/Clothesline). Buttons still cover everything.
+const KEYMAP2 = { KeyQ: "drop", KeyX: "clothesline" };
 addEventListener("keydown", (e) => {
-  if (KEYMAP[e.code]) { triggers[KEYMAP[e.code]](); e.preventDefault(); return; }
+  if (KEYMAP[e.code]) { fire(KEYMAP[e.code]); e.preventDefault(); return; }
+  if (KEYMAP2[e.code]) { fire(KEYMAP2[e.code]); e.preventDefault(); return; }
   if (e.code === "KeyP") togglePause();
   else if (e.code === "Period") stepOnce();
   else if (e.code === "Comma") cycleSlowmo();
@@ -242,9 +130,9 @@ function frame() {
     if (steps === MAX_SUBSTEPS) acc = 0;
   }
   renderFrame(acc / FIXED);
-  engine.input.endFrame();   // zero pointer dx/dy/wheel — our own loop doesn't get
-                             // the Engine's end-of-frame reset, so OrbitRig was
-                             // re-applying stale mouse deltas every frame (camera "on overdrive")
+  updateHUD();
+  engine.input.endFrame();   // zero pointer dx/dy/wheel + per-frame pressed — our own
+                             // loop doesn't get the Engine's end-of-frame reset
 }
 requestAnimationFrame(frame);
 function fitViewport() {
@@ -258,13 +146,13 @@ addEventListener("resize", fitViewport);
 // ---- HUD: live readouts + tuning sliders + trigger buttons ------------------
 function setStatus(t) { const el = document.getElementById("status"); if (el) el.textContent = t; }
 function metrics() {
+  const rag = getRag();
   if (!rag || !rag.active) return null;
   let maxV = 0;
   for (const s of rag.segments) {
     const v = s.body.linvel(), w = s.body.angvel();
     maxV = Math.max(maxV, Math.hypot(v.x, v.y, v.z), Math.hypot(w.x, w.y, w.z));
   }
-  // joints past their ROM limit (soft-limited spherical only — hinges are hard)
   let over = 0;
   for (const L of rag._joints) {
     if (L.type === "revolute" && !L.softHinge) continue;
@@ -275,7 +163,6 @@ function metrics() {
     const ang = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
     if (ang > (L.limit ?? 1.2) + 0.05) over++;
   }
-  // self-collision sanity: non-adjacent segment pairs interpenetrating
   const adj = new Set();
   for (const L of rag._joints) { adj.add(L.p.name + "|" + L.c.name); adj.add(L.c.name + "|" + L.p.name); }
   let overlaps = 0;
@@ -288,13 +175,14 @@ function metrics() {
   return { maxV, over, overlaps, settleT: rag._settleT || 0 };
 }
 function updateHUD() {
+  const rag = getRag();
   const m = metrics();
   const st = document.getElementById("readouts");
   if (!st) return;
   const smLabel = timeScale === 1 ? "1×" : timeScale + "×";
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   st.innerHTML =
-    line("state", rag && rag.muscle ? "MUSCLE" : state) +
+    line("state", rag && rag.muscle ? "MUSCLE" : state()) +
     line("tone", (rag ? rag.tone : TONE0).toFixed(2)) +
     line("time", (paused ? "PAUSED" : smLabel)) +
     line("fps", fps.toFixed(0)) +
@@ -326,12 +214,12 @@ function updateHUD() {
   panel.innerHTML = `<div id="readouts"></div>`;
   const grp = document.createElement("div"); grp.className = "grp";
   const btns = [
-    ["Drop (D)", "drop"], ["Punch (H)", "punch"], ["Launch (L)", "launch"], ["Trip (T)", "trip"],
-    ["Clothesline (C)", "clothesline"], ["Muscle (M)", "muscle"], ["Get up (G)", "getup"], ["Reset (R)", "reset"],
+    ["Drop (Q)", "drop"], ["Punch (H)", "punch"], ["Launch (L)", "launch"], ["Trip (T)", "trip"],
+    ["Clothesline (X)", "clothesline"], ["Muscle (M)", "muscle"], ["Get up (G)", "getup"], ["Reset (R)", "reset"],
   ];
   for (const [label, fn] of btns) {
     const b = document.createElement("div"); b.className = "btn"; b.textContent = label;
-    b.onclick = () => triggers[fn]?.();
+    b.onclick = () => fire(fn);
     grp.appendChild(b);
   }
   const timeRow = document.createElement("div"); timeRow.className = "grp";
@@ -351,14 +239,14 @@ function updateHUD() {
     inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); oninput(+inp.value); };
     wrap.append(lab, inp); sld.appendChild(wrap);
   };
-  mkSlider("tone", 0, 4, TONE0, 0.05, (v) => { if (rag) rag.tone = v; });
-  mkSlider("assist", 0, 1, 0.85, 0.05, (v) => { if (rag) rag.assist = v; });
+  mkSlider("tone", 0, 4, TONE0, 0.05, (v) => { const r = getRag(); if (r) r.tone = v; });
+  mkSlider("assist", 0, 1, 0.85, 0.05, (v) => { const r = getRag(); if (r) r.assist = v; });
   panel.append(grp, timeRow, sld);
   document.body.appendChild(panel);
 })();
 
 // ---- headless verification handle ------------------------------------------
 window.__lab = {
-  engine, world, phys, get rag() { return rag; }, get state() { return state; },
-  triggers, metrics, stepPhysics, setTimeScale: (v) => { timeScale = v; },
+  engine, world, phys, get ch() { return ch; }, get rag() { return ch && ch.rag; }, get state() { return state(); },
+  fire, metrics, stepPhysics, setTimeScale: (v) => { timeScale = v; },
 };

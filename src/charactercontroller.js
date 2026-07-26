@@ -1,0 +1,242 @@
+import * as THREE from "three";
+import { CharacterBody } from "./phys.js";
+import { ThirdPersonRig } from "./thirdperson.js";
+import { Ragdoll } from "./ragdoll.js";
+import { loadCharacter } from "./character.js";
+
+/**
+ * createCharacterController — THE reusable main character controller (the character
+ * analog of createCarRig). One drop-in that bundles what was proven in the Big
+ * Island demo + the Ragdoll Lab into a single component:
+ *
+ *   • a Rapier CAPSULE (CharacterBody) — real collision vs the world
+ *   • camera-relative locomotion: walk / run (Shift) / jump / optional fly (G)
+ *   • a third-person camera (ThirdPersonRig): orbit, zoom, occlusion
+ *   • an idle / walk / run / jump animation state machine
+ *   • RAGDOLL integration: go down on a hard hit, a braced "stagger" (muscle hold)
+ *     on a light hit so he TRIES TO STAY UP, muscle/authoring mode, and a natural
+ *     get-up on settle — with the capsule handed off to physics and back.
+ *
+ *   const ch = createCharacterController(world, { scene, phys, camera: true });
+ *   await ch.ready;                 // model + ragdoll built
+ *   ch.triggers.drop();            // fire the ragdoll like the lab buttons do
+ *   ch.hit(point, impulseVec, power);   // in-game hit → stagger or knockdown
+ *
+ * The heavy "gradient blend + IK foot placement on uneven ground" rig layers on
+ * TOP of this foundation (next phase) — the state machine here already has the
+ * seam (anim ⇄ stagger ⇄ ragdoll ⇄ getup) to grow a continuous blend into.
+ *
+ * @param world  the ECS World (spawns the player entity into it)
+ */
+const UP = new THREE.Vector3(0, 1, 0);
+const DEFAULT_ANIMS = [
+  { name: "idle", url: "models/character/anims/idle.fbx" },
+  { name: "walk", url: "models/character/anims/walking.fbx" },
+  { name: "run", url: "models/character/anims/running.fbx" },
+  { name: "jump", url: "models/character/anims/jumping up.fbx" },
+  { name: "getupFront", url: "models/character/anims/getup_front.fbx" },
+  { name: "getupBack", url: "models/character/anims/getup_back.fbx" },
+];
+
+export function createCharacterController(world, {
+  scene, phys,
+  model = "models/character/humanoid_male.fbx",
+  characterOpts = { textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8 },
+  anims = DEFAULT_ANIMS,
+  spawn = [0, 0, 0],
+  camera = true,
+  heightAt = () => 0,
+  walkSpeed = 5.0, runSpeed = 9.3, jumpSpeed = 9,
+  fly = false,
+  tone = 1.9,
+  radius = 0.32, height = 1.7,
+  onReady = null,
+} = {}) {
+  // ── the player entity: a kinematic capsule the world can't pass through ──
+  const entity = world.spawn("player").at(spawn[0], spawn[1], spawn[2])
+    .add(new CharacterBody({ radius, height }));
+  const body = entity.components.find((c) => c instanceof CharacterBody);
+
+  let state = "anim";          // anim | ragdoll | getup | stagger
+  let getupTimer = 0, staggerTimer = 0;
+  let rag = null, animator = null, bones = null, visual = null;
+
+  const _f = new THREE.Vector3(), _rt = new THREE.Vector3(), _wish = new THREE.Vector3(), _look = new THREE.Vector3();
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  // ── locomotion (camera-relative walk/run/jump, optional fly) ──
+  function move(dt, input, w) {
+    if (!animator) return;
+    const cam = w.camera;
+    cam.getWorldDirection(_f); _f.y = 0; _f.normalize();
+    _rt.crossVectors(_f, UP);
+    const stick = input.stick ? input.stick("left") : { x: 0, y: 0 };
+    const ix = input.axis("KeyA", "KeyD") + stick.x;
+    const iz = input.axis("KeyS", "KeyW") - stick.y;
+    const running = input.down("ShiftLeft");
+    const spd = running ? runSpeed : walkSpeed;
+    _wish.copy(_f).multiplyScalar(iz).addScaledVector(_rt, ix);
+    if (_wish.lengthSq() > 1) _wish.normalize();
+
+    if (fly && input.pressed("KeyG")) { body.flying = !body.flying; body.velocity.y = 0; }
+    if (body.flying) {
+      cam.getWorldDirection(_look);
+      const rt3 = new THREE.Vector3().crossVectors(_look, UP).normalize();
+      const flySpd = running ? 26 : 13;
+      const wv = new THREE.Vector3().addScaledVector(_look, iz).addScaledVector(rt3, ix);
+      if (input.down("Space")) wv.y += 1;
+      if (wv.lengthSq() > 1) wv.normalize();
+      body.velocity.set(wv.x * flySpd, wv.y * flySpd, wv.z * flySpd);
+    } else {
+      body.velocity.x = _wish.x * spd;
+      body.velocity.z = _wish.z * spd;
+      if (input.pressed("Space") && body.onGround) body.velocity.y = jumpSpeed;
+    }
+
+    // face the way he's moving
+    if (_wish.lengthSq() > 0.01) {
+      const want = Math.atan2(body.velocity.x, body.velocity.z);
+      let d = want - entity.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
+      entity.rotation.y += d * Math.min(1, dt * 9);
+    }
+
+    // animation state machine
+    const moving = Math.hypot(ix, iz);
+    if (!body.onGround) animator.play("jump", { fade: 0.1, once: true });
+    else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
+    else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
+    else animator.play("idle", { fade: 0.3 });
+  }
+
+  // ── natural get-up: settle → snap to where he lies → play a get-up clip ──
+  function beginGetup() {
+    const o = rag.groundOrientation();
+    const p = rag.pelvisPos();
+    rag.exit();
+    entity.position.set(p.x, heightAt(p.x, p.z), p.z);
+    entity.rotation.y = o.yaw;
+    body.setEnabled(false); body.velocity.set(0, 0, 0); body._lastSynced.copy(entity.position);
+    const clip = o.faceUp ? "getupBack" : "getupFront";
+    const dur = animator.clips[clip]?.duration ?? 1.8;
+    const speed = Math.min(2.4, Math.max(1, dur / 2.0));
+    animator.play(clip, { fade: 0.1, once: true, speed });
+    getupTimer = (dur / speed) * 0.95;
+    state = "getup";
+  }
+
+  function goRagdoll(pos) {
+    state = "ragdoll";
+    body.setEnabled(false);
+    if (!rag.active) rag.enter(pos);
+  }
+
+  // ── the driver component (runs inside the world's fixed/render loop) ──
+  const motor = {
+    fixedUpdate(dt, ctx) {
+      const input = ctx.input;
+      if (state === "getup") {
+        body.setEnabled(false);
+        getupTimer -= dt;
+        if (getupTimer <= 0) { state = "anim"; body.setEnabled(true); body.velocity.set(0, 0, 0); animator && animator.play("idle", { fade: 0.3 }); }
+        return;
+      }
+      if (state === "stagger") {                       // light hit: braced muscle hold — TRIES TO STAY UP
+        if (rag) rag.fixedUpdate(dt);
+        staggerTimer -= dt;
+        if (staggerTimer <= 0) { rag && rag.exitMuscle(); state = "anim"; body.setEnabled(true); body.velocity.set(0, 0, 0); animator && animator.play("idle", { fade: 0.25 }); }
+        return;
+      }
+      if (state === "ragdoll" && rag && rag.active) {
+        rag.fixedUpdate(dt);
+        body.setEnabled(false);
+        if (rag.muscle) return;                        // authoring/muscle mode: no settle/get-up
+        const p = rag.pelvisPos();
+        entity.position.set(p.x, Math.max(heightAt(p.x, p.z) - 0.2, p.y - 0.9), p.z);
+        body._lastSynced.copy(entity.position);        // no teleport-fight on get-up
+        if (rag.settled(1.3)) beginGetup();
+        return;
+      }
+      move(dt, input, ctx.world);                      // state === "anim"
+    },
+    update(dt) {
+      if (animator && (state === "anim" || state === "getup" || state === "stagger")) animator.update(dt);
+      if (rag && rag.active) rag.update();             // physics bodies → visual bones
+    },
+  };
+  entity.add(motor);
+
+  // ── third-person camera ──
+  let rig = null;
+  if (camera) {
+    rig = new ThirdPersonRig(entity, { distance: 5.5, phys, heightAt });
+    world.spawn("camera").add(rig);
+  }
+
+  // ── async: load the model, wire the animator + ragdoll ──
+  const ready = loadCharacter(model, { ...characterOpts, animations: anims }).then((ch) => {
+    visual = ch.visual; animator = ch.animator; bones = ch.bones;
+    entity.mesh(ch.visual);
+    animator.play("idle");
+    rag = new Ragdoll(bones, phys, { tone });
+    rag.build();                                        // pre-build capsules (disabled) so a picker can hit them
+    handle.rag = rag; handle.animator = animator; handle.bones = bones; handle.visual = visual;
+    if (onReady) onReady(handle);
+    return handle;
+  });
+
+  const chest = () => { const p = rag.segPos ? (rag.segPos("chest") || rag.pelvisPos()) : rag.pelvisPos(); return { x: p.x, y: p.y, z: p.z }; };
+
+  // ── triggers (mirror the ways the ragdoll fires in-game) ──
+  const triggers = {
+    drop() { if (!rag) return; goRagdoll(V(entity.position.x, 0, entity.position.z)); rag.shove({ x: 0, y: 0.1, z: -1 }, 3, "chest"); },
+    punch() { if (!rag) return; if (state !== "ragdoll") goRagdoll(); rag.hit(chest(), V(6, 2, 0).multiplyScalar(60), { maxDeltaV: 14, soften: 0.4 }); },
+    launch() { if (!rag) return; goRagdoll(V(entity.position.x, 9, entity.position.z)); rag.shove({ x: 0.3, y: 1, z: 0.2 }, 10, "pelvis"); },
+    trip() { if (!rag) return; if (state !== "ragdoll") goRagdoll(); rag.trip({ x: 1, y: 0, z: 0 }, 6, Math.random() < 0.5 ? "L" : "R"); },
+    clothesline() { if (!rag) return; if (state !== "ragdoll") goRagdoll(); rag.clothesline({ x: 1, y: 0, z: 0 }, 9); },
+    muscle() {
+      if (!rag) return;
+      if (rag.muscle) { rag.exitMuscle(); state = "anim"; body.setEnabled(true); animator && animator.play("idle", { fade: 0.3 }); }
+      else { state = "ragdoll"; body.setEnabled(false); rag.enterMuscle(rag.tone); }
+    },
+    getup() { if (rag && rag.active && !rag.muscle) beginGetup(); },
+    reset() {
+      if (!rag) return;
+      if (rag.muscle) rag.exitMuscle();
+      if (rag.active) rag.exit();
+      state = "anim"; getupTimer = 0; staggerTimer = 0;
+      entity.position.set(spawn[0], spawn[1], spawn[2]); entity.rotation.set(0, 0, 0);
+      body.setEnabled(true); body.velocity.set(0, 0, 0); body._lastSynced.copy(entity.position);
+      animator && animator.play("idle", { fade: 0.2 });
+    },
+  };
+
+  // ── in-game hit: hard → knockdown, light → stagger (braced, stays up) ──
+  function hit(point, impulse, power = Infinity) {
+    if (!rag) return;
+    if (power >= (rag.knockdownImpulse ?? 0)) {          // hard hit → full ragdoll
+      if (rag.muscle) rag.exitMuscle();
+      if (state !== "ragdoll") goRagdoll();
+      staggerTimer = 0;
+      rag.hit(point, impulse, { maxDeltaV: 16 });
+    } else {                                             // light hit → stagger, tries to stay up
+      if (state !== "stagger") {
+        if (rag.active && !rag.muscle) rag.exit();
+        state = "stagger"; body.setEnabled(false); rag.enterMuscle(rag.tone);
+      }
+      rag.hit(point, impulse, { maxDeltaV: 12 });
+      staggerTimer = 1.0;
+    }
+  }
+
+  const handle = {
+    entity, body, rig, triggers, hit, goRagdoll, ready,
+    rag: null, animator: null, bones: null, visual: null,
+    get state() { return state; },
+    set state(v) { state = v; },
+    dispose() {
+      if (rag && rag.active) rag.exit();
+      entity && world.destroy && world.destroy(entity);
+    },
+  };
+  return handle;
+}

@@ -17,6 +17,7 @@ export { Ragdoll } from "./ragdoll.js";
 export { EngineSound } from "./enginesound.js";
 export { Animator, buildHumanoid } from "./animation.js";
 export { loadCharacter, CharacterController } from "./character.js";
+export { createCharacterController } from "./charactercontroller.js";
 export { spawnPedestrians, Pedestrian } from "./npc.js";
 export { CharacterAim } from "./charanim.js";
 export { TrajectoryLean } from "./charlean.js";
