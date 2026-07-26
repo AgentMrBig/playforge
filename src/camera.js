@@ -21,8 +21,8 @@ export class OrbitRig {
 
   update(dt, { world, input }) {
     const p = input.pointer;
-    if (p.down || input.down("Mouse1")) {          // orbit
-      this.yaw -= p.dx * 0.005;
+    if (p.down || input.down("Mouse1")) {          // orbit (drag right → view swings right)
+      this.yaw += p.dx * 0.005;
       this.pitch = THREE.MathUtils.clamp(this.pitch + p.dy * 0.005, -1.45, 1.45);
     }
     if (p.rightDown) {                              // pan in view plane

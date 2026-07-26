@@ -9,7 +9,55 @@
 import {
   Engine, World, Physics, initRapier, Car, FloraField, makeGrassSprig, loadVehicle, THREE,
 } from "../src/index.js";
+import { VehicleAudio } from "../src/vehicleaudio.js";
 import RAPIER from "@dimforge/rapier3d-compat";
+
+// ---- grass/dirt kickup: spin the driven wheels (or slide) on grass and they
+// fling grass clippings + dirt clods backward — the peel-out effect for a grass
+// world (black skid marks + white tyre smoke would look wrong here). Pooled. -----
+class GrassKickup {
+  constructor(scene) {
+    this.scene = scene; this.parts = []; this.pool = []; this._cd = 0;
+    this.grassGeo = new THREE.PlaneGeometry(0.06, 0.18);
+    this.dirtGeo = new THREE.TetrahedronGeometry(0.05);
+    this.grassMat = new THREE.MeshStandardMaterial({ color: 0x4d7a38, roughness: 1, side: THREE.DoubleSide });
+    this.dirtMat = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 1 });
+  }
+  _spawn(x, y, z, vx, vy, vz, grass) {
+    let m = this.pool.pop();
+    if (!m) { m = new THREE.Mesh(); this.scene.add(m); }
+    m.geometry = grass ? this.grassGeo : this.dirtGeo;
+    m.material = grass ? this.grassMat : this.dirtMat;
+    m.visible = true; m.scale.setScalar(0.6 + Math.random() * 0.9);
+    m.position.set(x, y, z);
+    m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    m.userData = { vx, vy, vz, spin: (Math.random() - 0.5) * 22, life: 0.7 + Math.random() * 0.7 };
+    this.parts.push(m);
+  }
+  update(dt, car) {
+    this._cd -= dt;
+    const spin = car.driveSpin || 0, slide = car.screech || 0;
+    const peeling = spin > 8 || (slide > 0.4 && Math.abs(car.speedKmh) > 6);
+    if (peeling && this._cd <= 0) {
+      this._cd = 0.02;
+      const v = car.body.linvel(), intensity = Math.min(1, spin / 40 + slide);
+      for (const w of car.wheels) {
+        if (!w.driven || !w.grounded || w.detached || w.cx == null) continue;
+        for (let i = 0, n = 1 + (intensity * 4 | 0); i < n; i++)
+          this._spawn(w.cx, (w.cy || 0) + 0.05, w.cz,
+            -v.x * 0.15 + (Math.random() - 0.5) * 3, 2 + Math.random() * 3.5,
+            -v.z * 0.15 + (Math.random() - 0.5) * 3, Math.random() < 0.7);
+      }
+    }
+    for (let i = this.parts.length - 1; i >= 0; i--) {
+      const m = this.parts[i], u = m.userData;
+      u.vy -= 18 * dt; m.position.x += u.vx * dt; m.position.y += u.vy * dt; m.position.z += u.vz * dt;
+      m.rotation.x += u.spin * dt; m.rotation.z += u.spin * 0.7 * dt;
+      if (m.position.y < 0.02) { m.position.y = 0.02; u.vy = 0; u.vx *= 0.6; u.vz *= 0.6; }
+      if ((u.life -= dt) <= 0) { m.visible = false; this.parts.splice(i, 1); this.pool.push(m); }
+    }
+  }
+}
 
 const FIXED = 1 / 60, MAX_SUBSTEPS = 5;
 const qs = new URLSearchParams(location.search);
@@ -36,6 +84,12 @@ const ground = new THREE.Mesh(gGeo, new THREE.MeshStandardMaterial({ color: 0x3f
 ground.receiveShadow = true; scene.add(ground);
 
 const phys = new Physics({ gravity: -20 });
+
+// procedural engine audio + grass/dirt peel-out FX
+const audio = new VehicleAudio({ hp: 450 });
+const kickup = new GrassKickup(scene);
+const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); removeEventListener("touchstart", startAudio); };
+addEventListener("keydown", startAudio); addEventListener("mousedown", startAudio); addEventListener("touchstart", startAudio);
 
 // ---- flora field ------------------------------------------------------------
 const MAX_GRASS = +(qs.get("max") || 60000);
@@ -144,7 +198,12 @@ function frame() {
   fps += ((1 / Math.max(1e-3, dt)) - fps) * 0.1;
   acc += dt; let steps = 0;
   while (acc >= FIXED && steps < MAX_SUBSTEPS) { world._fixedUpdate(FIXED, engine); acc -= FIXED; steps++; }
-  if (car) car.interpolate(Math.min(1, acc / FIXED));
+  if (car) {
+    car.interpolate(Math.min(1, acc / FIXED));
+    car.shiftCut = !!(audio.engine && audio.engine.running && audio.engine._shiftT > 0);
+    audio.update(dt, car);        // procedural engine + tyre squeal
+    kickup.update(dt, car);       // grass/dirt flung by spinning/sliding wheels
+  }
   feedDisturbers();
   field.update(dt);
   updateCamera(dt);
@@ -187,4 +246,4 @@ function updateHUD() {
   panel.append(sld); document.body.append(panel);
 })();
 
-window.__flora = { engine, world, field, get car() { return car; }, feedDisturbers };
+window.__flora = { engine, world, field, get car() { return car; }, feedDisturbers, audio, kickup };
