@@ -80,7 +80,12 @@ Promise.all([physReady, loadCharacter("models/character/humanoid_male.fbx", {
   ch.visual.position.set(0, 0, 0);
   animator.play("idle");
   rag = new Ragdoll(bones, phys, { tone: TONE0 });
-  window.__lab.rag = rag;
+  // NB: __lab.rag is a live getter (returns the module `rag`) — do NOT assign to
+  // it. Assigning to a getter-only property throws a TypeError in strict-mode ESM,
+  // which used to abort the rest of this .then() BEFORE the ragctl entity below
+  // was spawned → rag.fixedUpdate never ran → the ragdoll was silently PASSIVE
+  // (no muscles, no ligaments, never settled/got up). That single dead line was
+  // the real "settleT never rises" cause.
 
   // the driver: physics ragdoll ⇄ animation, with a natural get-up on settle
   world.spawn("ragctl").add({

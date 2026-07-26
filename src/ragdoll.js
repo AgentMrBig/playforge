@@ -47,22 +47,33 @@ const SEGMENTS = [
 // Joint tree (parent → child). Multibody requires a tree; order is parent-first.
 // type: spherical (ball) | revolute (hinge). Revolute uses hard Rapier limits.
 // limit = soft cone ROM for spherical (rad from bind). hinge = [min,max] for revolute.
+// ROM limits are ANATOMICAL maxima (how far a real joint CAN travel from the
+// T-pose bind), NOT "stay near the T-pose". A ragdoll settled on the ground
+// naturally folds — spine curved, hips flexed, head turned — so tight cones made
+// EVERY settled pose read as hyperextended and it could never come to rest. These
+// generous cones let a natural heap sit WITHIN ROM (so settle fires) while still
+// blocking impossible poses; the ugly backward-bend of knees/elbows is caught by
+// the hard revolute hinge limits below, not these cones.
 const JOINTS = [
-  ["pelvis",    "chest",     "Spine1",       { type: "spherical", limit: 0.35 }],
-  ["chest",     "head",      "Head",         { type: "spherical", limit: 0.55 }],
-  ["chest",     "upperArmL", "LeftArm",      { type: "spherical", limit: 1.15 }],
+  ["pelvis",    "chest",     "Spine1",       { type: "spherical", limit: 0.9 }],   // lumbar
+  ["chest",     "head",      "Head",         { type: "spherical", limit: 1.0 }],   // neck
+  ["chest",     "upperArmL", "LeftArm",      { type: "spherical", limit: 2.2 }],   // shoulder (very mobile)
   ["upperArmL", "forearmL",  "LeftForeArm",  { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
-  ["forearmL",  "handL",     "LeftHand",     { type: "spherical", limit: 0.7 }],
-  ["chest",     "upperArmR", "RightArm",     { type: "spherical", limit: 1.15 }],
+  ["forearmL",  "handL",     "LeftHand",     { type: "spherical", limit: 1.0 }],   // wrist
+  ["chest",     "upperArmR", "RightArm",     { type: "spherical", limit: 2.2 }],
   ["upperArmR", "forearmR",  "RightForeArm", { type: "revolute",  hinge: [-0.05, 2.45], limit: 1.3 }],
-  ["forearmR",  "handR",     "RightHand",    { type: "spherical", limit: 0.7 }],
-  ["pelvis",    "thighL",    "LeftUpLeg",    { type: "spherical", limit: 0.95 }],
+  ["forearmR",  "handR",     "RightHand",    { type: "spherical", limit: 1.0 }],
+  ["pelvis",    "thighL",    "LeftUpLeg",    { type: "spherical", limit: 2.0 }],   // hip (fetal flexion)
   ["thighL",    "shinL",     "LeftLeg",      { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
-  ["shinL",     "footL",     "LeftFoot",     { type: "spherical", limit: 0.55 }],
-  ["pelvis",    "thighR",    "RightUpLeg",   { type: "spherical", limit: 0.95 }],
+  ["shinL",     "footL",     "LeftFoot",     { type: "spherical", limit: 0.9 }],   // ankle
+  ["pelvis",    "thighR",    "RightUpLeg",   { type: "spherical", limit: 2.0 }],
   ["thighR",    "shinR",     "RightLeg",     { type: "revolute",  hinge: [-0.05, 2.25], limit: 1.2 }],
-  ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.55 }],
+  ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.9 }],
 ];
+
+// The "core" — torso + hips. Settle is judged on these alone: they carry the
+// body's mass and come to rest cleanly, unlike the twitchy low-inertia limbs.
+const CORE_SEG = new Set(["pelvis", "chest", "head", "thighL", "thighR"]);
 
 const MASS_FRAC = {
   pelvis: 0.22, chest: 0.24, head: 0.07,
@@ -80,11 +91,44 @@ const RAGDOLL_GROUPS = (0x0002 << 16) | 0xffff;
 let _grabId = 1;
 
 export class Ragdoll {
-  constructor(bones, phys, { totalMass = 75, tone = 1.9, collisionGroups = null, assist = 0.85 } = {}) {
+  constructor(bones, phys, {
+    totalMass = 75, tone = 1.9, collisionGroups = null, assist = 0.85,
+    // ── ROM soft-limit + settle dials (tunable live from the editor) ──
+    romMargin = 0.12,    // deadzone (rad) past the ROM cone before the ligament acts,
+                         //   so a settled pose sitting right at ROM isn't nagged.
+    romSpring = 45,      // restoring torque per rad of overshoot beyond the margin.
+    romDamp = 8,         // one-sided damping of the OPENING rate (never fights return).
+    romMaxTorque = 140,  // cap on ligament torque — kept low so it catches extremes
+                         //   without pumping energy through the shared-body joints.
+    romHyper = 0.45,     // overshoot past ROM (rad) that counts as EGREGIOUS — the
+                         //   only ROM state that blocks get-up (a broken-looking pose).
+    settleLinV = 0.4,    // the CORE (torso+hips) counts as "still" below this linear …
+    settleAngV = 1.6,    // … AND this angular speed. Both must hold (sustained via
+                         //   settleT) before get-up fires. Judged on the core only —
+                         //   the limbs twitch/pop and would never all go quiet.
+    limpTime = 0.55,     // free knockdown: seconds to relax from full tone → limp.
+    limpFloor = 0.0,     // …down to this fraction of tone. A downed body CAN'T hold
+                         //   the standing pose it's targeting, so fighting for it
+                         //   pumps the solver to the velocity clamp — it must go
+                         //   limp and settle, then get up via animation. Muscle mode
+                         //   keeps FULL tone (it IS meant to hold a pose).
+  } = {}) {
     this.bones = bones;
     this.phys = phys;
     this.tone = tone;
     this.assist = assist;                 // gravity-compensation dial (muscle mode)
+    this.romMargin = romMargin;
+    this.romSpring = romSpring;
+    this.romDamp = romDamp;
+    this.romMaxTorque = romMaxTorque;
+    this.romHyper = romHyper;
+    this._hyperROM = 0;
+    this.settleLinV = settleLinV;
+    this.settleAngV = settleAngV;
+    this.limpTime = limpTime;
+    this.limpFloor = limpFloor;
+    this._downT = 0;                      // time since knockdown (drives limp ramp)
+    this._overROM = 0;                    // joints resting past ROM (live metric)
     this.collisionGroups = collisionGroups;
     this.active = false;
     this.muscle = false;
@@ -137,10 +181,13 @@ export class Ragdoll {
       const dir = b.clone().sub(a);
       const len = Math.max(dir.length(), radius * 1.6);
       const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-      // extremities settle faster; core keeps a bit more life for readable tumbles
+      // extremities settle faster; core keeps a bit more life for readable tumbles.
+      // Angular damping is a RATE resistance — high values barely affect a fast
+      // tumble (the hit impulses dominate) but firmly kill the low-speed residual
+      // writhe that used to keep the pile alive forever, so it comes to rest.
       const isTip = /hand|foot|head/.test(name);
-      const linDamp = isTip ? 0.55 : 0.35;
-      const angDamp = isTip ? 2.4 : 1.7;
+      const linDamp = isTip ? 0.6 : 0.4;
+      const angDamp = isTip ? 6.0 : 5.0;
       const rb = P.world.createRigidBody(
         R.RigidBodyDesc.dynamic()
           .setTranslation(mid.x, mid.y, mid.z)
@@ -266,6 +313,7 @@ export class Ragdoll {
     if (impulse && impulsePoint) this.hit(impulsePoint, impulse);
     this.active = true;
     this._settleT = 0;
+    this._downT = 0;
   }
 
   /** rebuild body poses from the CURRENT animated skeleton (re-entering) */
@@ -553,10 +601,21 @@ export class Ragdoll {
   /** per fixed step: capture animation targets + apply PD muscle torques */
   fixedUpdate(dt) {
     if (!this.active || !this.tone) return;
+    this._downT += dt;
     this._updateReflexes();
     if (this.muscle) {
       this._anchorStep();
       this._gravityAssist();
+    }
+    // effective tone: MUSCLE mode holds full tone (it's anchored + gravity-assisted
+    // to keep a pose). A FREE knockdown relaxes from full tone → limp over limpTime,
+    // so the body reacts on impact then goes slack and settles instead of endlessly
+    // fighting toward the standing pose the animator is frozen on (which pumped the
+    // solver to the velocity clamp).
+    let effTone = this.tone;
+    if (!this.muscle) {
+      const k = Math.min(1, this._downT / Math.max(1e-3, this.limpTime));
+      effTone = this.tone * (1 - k * (1 - this.limpFloor));
     }
     const T = this._tmp;
     for (const s of this.segments) {
@@ -574,21 +633,29 @@ export class Ragdoll {
         const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
         const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3);
         const av = s.body.angvel();
-        const kp = 42 * this.tone * (s.stiffMul ?? 1), kd = 6 * Math.sqrt(Math.max(0.1, this.tone));
+        const kp = 42 * effTone * (s.stiffMul ?? 1), kd = 6 * Math.sqrt(Math.max(0.1, effTone));
         const torque = axis.multiplyScalar(kp * angle)
           .sub(T.v2.set(av.x, av.y, av.z).multiplyScalar(kd));
         const k = s.inertia * dt;
         s.body.applyTorqueImpulse({ x: torque.x * k, y: torque.y * k, z: torque.z * k }, true);
       }
     }
-    // ligaments / soft ROM — skip hard-limited revolutes (Rapier enforces those)
+    // ligaments / soft ROM — the spine/shoulder/hip/neck are SPHERICAL joints and
+    // Rapier's JS build exposes no cone limit for them (only revolutes get native
+    // setLimits). With the ROM cones widened to real anatomical maxima, a settled
+    // heap sits WITHIN ROM on its own — so the ligament's only job is to catch the
+    // EXTREME overshoots of a violent hit, gently. A velocity-projected "wall" was
+    // tried and REJECTED: forcing an inward relative rate every step, on the 4
+    // joints sharing the chest body, pumped ~20 rad/s of angular writhe that never
+    // died. This is instead a mild damped restoring SPRING past a deadzone: torque
+    // ∝ overshoot beyond the margin + one-sided damping of the opening rate, capped
+    // low and scaled by the pair's reduced inertia. Below the deadzone it does
+    // NOTHING, so normal settling is never disturbed (that was the writhe source).
+    let overCount = 0, hyperCount = 0;
+    const MARGIN = this.romMargin;
     for (const L of this._joints) {
-      if (L.type === "revolute" && !L.softHinge) {
-        // tendon damping only on hinges
-        this._tendonDamp(L, dt);
-        continue;
-      }
       this._tendonDamp(L, dt);
+      if (L.type === "revolute" && !L.softHinge) continue;   // native hard limits
       if (!L.limit) continue;
       const qp = L.p.body.rotation(), qc = L.c.body.rotation();
       const parentQ = T.q1.set(qp.x, qp.y, qp.z, qp.w);
@@ -597,21 +664,30 @@ export class Ragdoll {
       if (err.w < 0) { err.x *= -1; err.y *= -1; err.z *= -1; err.w *= -1; }
       const ang = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
       const over = ang - L.limit;
-      if (over > 0) {
-        const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
-        const bindW = T.q2.copy(parentQ).multiply(L.rel0);
-        const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3).applyQuaternion(bindW);
-        const wp = L.p.body.angvel(), wc = L.c.body.angvel();
-        const relW = T.v2.set(wc.x - wp.x, wc.y - wp.y, wc.z - wp.z).dot(axis);
-        const mag = Math.min(160 * over + 32 * Math.max(0, relW), 850);
-        const k = L.c.inertia * dt * mag;
-        L.c.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
-        L.p.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
-      }
+      if (over > 0.02) overCount++;
+      // EGREGIOUS hyperextension (visibly broken) — the only ROM state that must
+      // block get-up. A joint a little past its cone in a settled heap is natural.
+      if (over > this.romHyper) hyperCount++;
+      if (over <= MARGIN) continue;          // deadzone: leave the settled pose alone
+      const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
+      const bindW = T.q2.copy(parentQ).multiply(L.rel0);
+      // axis of the deviation, in world — the direction opening PAST the limit
+      const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3).applyQuaternion(bindW).normalize();
+      const wp = L.p.body.angvel(), wc = L.c.body.angvel();
+      const relW = (wc.x - wp.x) * axis.x + (wc.y - wp.y) * axis.y + (wc.z - wp.z) * axis.z;
+      const Ir = (L.c.inertia * L.p.inertia) / (L.c.inertia + L.p.inertia);
+      // spring back toward the limit + damp ONLY further opening (one-sided), capped.
+      const mag = Math.min(this.romSpring * (over - MARGIN) + this.romDamp * Math.max(0, relW), this.romMaxTorque);
+      const k = Ir * dt * mag;
+      L.c.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
+      L.p.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
     }
+    this._overROM = overCount;
+    this._hyperROM = hyperCount;
     // soft sanity clamps — scale down runaway, never hard-zero (that was the
-    // unpredictable "teleport stop" feel)
-    let maxV = 0;
+    // unpredictable "teleport stop" feel). Track whole-body max (readout) AND the
+    // CORE (torso+hips) max separately — the core is what the settle test watches.
+    let maxV = 0, maxW = 0, coreV = 0, coreW = 0;
     for (const s of this.segments) {
       const v = s.body.linvel(), w = s.body.angvel();
       let vl = Math.hypot(v.x, v.y, v.z), wl = Math.hypot(w.x, w.y, w.z);
@@ -628,10 +704,24 @@ export class Ragdoll {
       if (wl > 40) {
         const scl = 40 / wl;
         s.body.setAngvel({ x: w.x * scl, y: w.y * scl, z: w.z * scl }, true);
+        wl = 40;
       }
       maxV = Math.max(maxV, vl);
+      maxW = Math.max(maxW, wl);
+      if (CORE_SEG.has(s.name)) { coreV = Math.max(coreV, vl); coreW = Math.max(coreW, wl); }
     }
-    this._settleT = maxV < 0.8 ? (this._settleT ?? 0) + dt : 0;
+    this._maxV = maxV; this._maxW = maxW; this._coreV = coreV; this._coreW = coreW;
+    // SETTLE = the CORE (torso + hips) is linearly AND angularly still, sustained.
+    // Watching every segment never worked: the tiny-inertia extremities (hands,
+    // feet, forearms) keep spinning at ~5 rad/s toward an unreachable target and
+    // the solver occasionally POPS a trapped limb to >10 rad/s — both kept resetting
+    // the timer forever (the "settleT never rises" bug). None of that matters for
+    // get-up, which teleports to the PELVIS and plays an animation that resets the
+    // whole pose. So the core is the honest "the body has come to rest" signal.
+    // (The old lin-ONLY test also missed the core's own angular writhe; we require
+    // both.) Muscle mode never settles — it's meant to hold a pose.
+    const still = !this.muscle && coreV < this.settleLinV && coreW < this.settleAngV;
+    this._settleT = still ? (this._settleT ?? 0) + dt : 0;
   }
 
   _tendonDamp(L, dt) {
