@@ -47,7 +47,7 @@ engine.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // swap into Big Island. ?seed=N for a different island. -------------------------
 const SEED = +(qs.get("seed") || 1337);
 const ISLAND_R = +(qs.get("islandR") || 1500);
-const gen = makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0 });
+const gen = makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0, erosion: qs.get("erode") !== "0" });
 const heightAt = gen.heightAt, colorAt = gen.colorAt;
 scene.add(gen.waterMesh());                                    // sea plane at y=0
 
