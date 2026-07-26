@@ -198,29 +198,36 @@ export function createCharacterController(world, {
   // face-first. Forward ray from the chest; when close + pushing toward it, IK both hands
   // onto the wall surface, blended in/out by wallW. Runs per render frame (after the anim).
   let wallW = 0;
+  // live-tunable wall-brace pose (console: __wallTune.height = 1.4, etc.)
+  if (typeof window !== "undefined" && !window.__wallTune)
+    window.__wallTune = { reach: 0.8, depth: 0.13, height: 1.25, width: 0.22, speed: 1.0 };
+  const _wDEF = { reach: 0.8, depth: 0.13, height: 1.25, width: 0.22, speed: 1.0 };
   const _wray = R ? new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }) : null;
   const _wfwd = new THREE.Vector3(), _wlat = new THREE.Vector3(), _wpt = new THREE.Vector3();
   const _wtgt = new THREE.Vector3(), _whand = new THREE.Vector3(), _wpole = new THREE.Vector3(), _wanchor = new THREE.Vector3();
   function updateWallTouch(dt) {
     if (!_wray || !phys?.world || !bones || !body.rb || state !== "anim" || freeFly) { wallW = Math.max(0, wallW - dt * 6); return; }
+    const T = (typeof window !== "undefined" && window.__wallTune) || _wDEF;
     _wfwd.set(Math.sin(entity.rotation.y), 0, Math.cos(entity.rotation.y));
     _wray.origin.x = entity.position.x; _wray.origin.y = entity.position.y + 1.3; _wray.origin.z = entity.position.z;
     _wray.dir.x = _wfwd.x; _wray.dir.y = 0; _wray.dir.z = _wfwd.z;
-    const reach = 0.8;
+    const reach = T.reach;
     const hit = phys.world.castRay(_wray, reach, true, undefined, undefined, undefined, body.rb);
     const pressing = grounded && Math.hypot(body.velocity.x, body.velocity.z) > 1.0;   // trying to walk forward
     const want = (hit && pressing) ? 1 : 0;
     wallW += (want - wallW) * (1 - Math.exp(-8 * dt));
     if (wallW < 0.02) return;
     const toi = hit ? (hit.timeOfImpact ?? hit.toi) : reach;
-    _wpt.copy(_wfwd).multiplyScalar(Math.max(0.15, toi - 0.02)).add(_wray.origin);  // ON the wall surface
+    // target the WRIST `depth` short of the wall so the palm/fingers rest ON the surface
+    // (targeting the wrist AT the surface pushed the hand mesh through the wall).
+    _wpt.copy(_wfwd).multiplyScalar(Math.max(0.05, toi - T.depth)).add(_wray.origin);
     _wlat.set(_wfwd.z, 0, -_wfwd.x);                                                 // LEFT of facing (fwd × up)
     // handL → left, handR → right (was swapped → arms crossed through the wall)
     for (const [limb, side] of [["handL", 1], ["handR", -1]]) {
       const chain = limbChain(visual, limb);
       if (!chain) continue;
       chain.eff.getWorldPosition(_whand);
-      _wtgt.copy(_wpt).addScaledVector(_wlat, side * 0.22); _wtgt.y = entity.position.y + 1.25;  // shoulder-width, chest height
+      _wtgt.copy(_wpt).addScaledVector(_wlat, side * T.width); _wtgt.y = entity.position.y + T.height;  // shoulder-width, chest height
       _wtgt.lerpVectors(_whand, _wtgt, wallW);                                       // blend current hand → wall
       // elbow pole: straight DOWN from the shoulder (+ a touch back). Unambiguous (no
       // left/right term → can't flip/cross), and lets the hand come UP to chest height
