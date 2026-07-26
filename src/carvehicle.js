@@ -181,6 +181,13 @@ export class CarVehicle extends VehicleBody {
     car.impact(ev.point, ev.force, dir);
   }
 
+  // IMPORTANT: the new Car drives itself through the phys _pre/_post hooks
+  // (_drive/_sync) registered in init(). We must NOT let VehicleBody's inherited
+  // fixedUpdate run — its old suspension sim (_suspend) writes
+  // rig.suspension.bodyRoot.position.y = baseBodyY + heave, sinking the body mesh
+  // ~1m below the wheels (Erik's "bodies beneath the cars"). Override to a no-op.
+  fixedUpdate() {}
+
   update(dt, ctx) {
     const car = this.car; if (!car) return;
     const FIXED = ctx?.engine?.constructor?.FIXED_DT ?? (1 / 60);
