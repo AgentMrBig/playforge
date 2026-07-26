@@ -1,0 +1,241 @@
+// PLAYFORGE — Map Lab (large-world streaming proving ground)
+//
+// The map equivalent of the car Garage / ragdoll lab: an isolated scene whose
+// ONLY job is to make large-world streaming measurable. A car auto-drives
+// flat-out across infinite streamed terrain while a live frametime graph shows
+// every hitch. Build the "very good" streaming here, prove it's smooth at speed,
+// then merge into the game (same path the car + ragdoll took).
+//
+// What it measures/exposes:
+//   • frametime graph (last ~3s) with the 16.7ms (60fps) line — hitches are red
+//   • worst frame in the last 2s, hitch count, fps, tiles loaded, tiles/sec
+//   • collider strategy A/B: ?col=heightfield (default) | trimesh | none
+//   • WASD to drive, or leave it on autopilot (full-throttle gentle snake so it
+//     always crosses fresh tiles — the streaming worst case)
+//
+// Own fixed-step loop (like garage) for exact frametime control. The Car drives
+// via the phys _pre/_post hooks, same as CarVehicle.
+import {
+  Engine, World, Physics, initRapier, Car, StreamedTerrain, fbm, THREE,
+} from "../src/index.js";
+import RAPIER from "@dimforge/rapier3d-compat";   // deduped — same singleton phys.js uses
+
+const FIXED = 1 / 60;
+const MAX_SUBSTEPS = 5;
+const qs = new URLSearchParams(location.search);
+const COL_MODE = qs.get("col") || "heightfield";     // heightfield | trimesh | none
+const COL_CELL = +(qs.get("cell") || 1.5);           // collider cell size (m)
+
+const engine = new Engine(document.getElementById("game"), { clearColor: 0x8fb9dc });
+const world = new World();
+engine.world = world;
+const scene = world.scene;
+scene.fog = new THREE.Fog(0x8fb9dc, 260, 780);
+
+// ---- lights -----------------------------------------------------------------
+scene.add(new THREE.HemisphereLight(0xcfe0f0, 0x40402e, 0.9));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.4);
+sun.position.set(60, 120, 40); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, far: 320 });
+scene.add(sun);
+engine.renderer.shadowMap.enabled = true;
+engine.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+// ---- representative island terrain (same shape of cost as the game: fbm) ----
+const SEED = 1337;
+function heightAt(x, z) {
+  const base = fbm(x / 320, z / 320, { octaves: 5, seed: SEED }) * 34;      // rolling hills
+  const mid = fbm(x / 90, z / 90, { octaves: 3, seed: SEED + 7 }) * 6;       // secondary
+  const fine = fbm(x / 24, z / 24, { octaves: 2, seed: SEED + 19 }) * 1.2;   // texture
+  return base + mid + fine;
+}
+const SAND = new THREE.Color(0xd9c58a), GRASS = new THREE.Color(0x4c8a45);
+const ROCK = new THREE.Color(0x7b7671), SNOW = new THREE.Color(0xf2f4f7);
+function colorAt(x, z, h, slope, out) {
+  if (h < 1.5) out.copy(SAND);
+  else if (h > 46 && slope < 1.0) out.copy(SNOW);
+  else if (slope > 0.85 || h > 32) out.copy(ROCK);
+  else out.copy(GRASS);
+}
+
+// ---- physics ----------------------------------------------------------------
+const phys = new Physics({ gravity: -20 });
+
+// ---- streamed terrain + per-tile collider (the thing under test) ------------
+const terrain = new StreamedTerrain({
+  heightAt, colorAt,
+  tileSize: 128,
+  rings: [[1, 48], [2, 24], [4, 12]],
+  anchor: () => car ? car.mesh.position : new THREE.Vector3(),
+});
+let tilesBuilt = 0, colliderBuildMs = 0;   // telemetry
+const pendingTiles = [];
+terrain.onTile = (tile) => {
+  tilesBuilt++;
+  if (COL_MODE === "none") return;
+  if (!phys.world) { pendingTiles.push(tile); return; }
+  attachTileCollider(tile);
+};
+function attachTileCollider(tile) {
+  if (tile.dead) return;
+  const t0 = performance.now();
+  let col;
+  if (COL_MODE === "trimesh") {
+    // old path: dense trimesh sampled from heightAt (BVH build — the hitch)
+    const cell = COL_CELL, cres = Math.max(8, Math.round(tile.size / cell)), N = cres + 1;
+    const verts = new Float32Array(N * N * 3);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const wx = tile.x0 + (i / cres) * tile.size, wz = tile.z0 + (j / cres) * tile.size, o = (j * N + i) * 3;
+      verts[o] = wx; verts[o + 1] = heightAt(wx, wz); verts[o + 2] = wz;
+    }
+    const idx = new Uint32Array(cres * cres * 6); let t = 0;
+    for (let j = 0; j < cres; j++) for (let i = 0; i < cres; i++) {
+      const a = j * N + i, b = a + 1, c = a + N, d = c + 1;
+      idx[t++] = a; idx[t++] = c; idx[t++] = b; idx[t++] = b; idx[t++] = c; idx[t++] = d;
+    }
+    col = phys.addTrimesh(verts, idx, { friction: 1.0 });
+  } else {
+    // new path: Rapier heightfield — no BVH, ~0.5ms build
+    const n = Math.max(8, Math.round(tile.size / COL_CELL));
+    col = phys.addHeightfield(tile.x0, tile.z0, tile.size, heightAt, { n, friction: 1.0 });
+  }
+  colliderBuildMs = performance.now() - t0;
+  tile.cleanup.push(() => phys.removeCollider(col));
+}
+
+// ---- the car (raw Car; driven via phys hooks like CarVehicle) ---------------
+let car = null;
+const keys = {};
+addEventListener("keydown", (e) => { keys[e.code] = true;
+  if (e.code === "KeyR") resetCar();
+  if (e.code === "Space") auto.on = !auto.on;
+});
+addEventListener("keyup", (e) => { keys[e.code] = false; });
+const auto = { on: true, t: 0 };
+function carInput() {
+  const up = keys.KeyW || keys.ArrowUp, down = keys.KeyS || keys.ArrowDown;
+  const left = keys.KeyA || keys.ArrowLeft, right = keys.KeyD || keys.ArrowRight;
+  if (up || down || left || right) { auto.on = false; }
+  if (auto.on) { auto.t += FIXED; return { throttle: 1, steer: 0.14 * Math.sin(auto.t * 0.12), brake: 0, handbrake: false }; }
+  return { throttle: (up ? 1 : 0) - (down ? 1 : 0), steer: (left ? 1 : 0) - (right ? 1 : 0), brake: 0, handbrake: !!keys.Space };
+}
+function resetCar() {
+  if (!car) return;
+  const y = heightAt(0, 0) + 2;
+  car.body.setTranslation({ x: 0, y, z: 0 }, true);
+  car.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+  car.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  car.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  car._read(car.currPos, car.currQuat); car.prevPos.copy(car.currPos); car.prevQuat.copy(car.currQuat);
+  auto.t = 0;
+}
+
+// ---- chase camera -----------------------------------------------------------
+const camTmp = new THREE.Vector3(), camGoal = new THREE.Vector3(), fwd = new THREE.Vector3();
+function updateCamera(alpha) {
+  if (!car) return;
+  const cam = world.camera;
+  const p = car.mesh.position;
+  fwd.set(0, 0, 1).applyQuaternion(car.mesh.quaternion);
+  camGoal.set(p.x - fwd.x * 11, p.y + 5.5, p.z - fwd.z * 11);
+  cam.position.lerp(camGoal, 0.12);
+  camTmp.set(p.x + fwd.x * 6, p.y + 1.2, p.z + fwd.z * 6);
+  cam.lookAt(camTmp);
+}
+
+// ---- boot -------------------------------------------------------------------
+initRapier().then(() => {
+  world.spawn("physics").add(phys);
+  for (const t of pendingTiles) attachTileCollider(t);
+  pendingTiles.length = 0;
+  car = new Car(phys.world, RAPIER, { pos: [0, heightAt(0, 0) + 2, 0] });
+  scene.add(car.mesh);
+  world.spawn("terrain").add(terrain);
+  // drive the car inside the physics step (suspension before world.step)
+  phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
+  phys._post.push(() => car.snapshotCurr());
+  setStatus("streaming — car on autopilot (Space toggles, WASD drives, R resets)");
+}).catch((e) => setStatus("BOOT FAILED: " + e.message));
+
+// ---- fixed-step loop + frametime capture ------------------------------------
+const FT = new Float32Array(180); let ftI = 0;      // rolling frametime ring (ms)
+let last = performance.now() / 1000, acc = 0;
+let hitches = 0, worst2s = 0, worst2sT = 0;
+let fpsAvg = 60;
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now() / 1000;
+  let dt = now - last; last = now;
+  if (dt > 0.25) dt = FIXED;                 // tab was backgrounded — don't spiral
+  const ms = dt * 1000;
+  FT[ftI = (ftI + 1) % FT.length] = ms;
+  fpsAvg += ((1 / Math.max(1e-3, dt)) - fpsAvg) * 0.1;
+  if (ms > 20) hitches++;
+  worst2s = Math.max(worst2s, ms); worst2sT += dt;
+  if (worst2sT > 2) { worst2sT = 0; worst2s = ms; }
+
+  acc += dt;
+  let steps = 0;
+  while (acc >= FIXED && steps < MAX_SUBSTEPS) { world._fixedUpdate(FIXED, engine); acc -= FIXED; steps++; }
+  if (steps === MAX_SUBSTEPS) acc = 0;
+  world._update(dt, engine);                 // terrain streaming + any components
+  if (car) car.interpolate(Math.min(1, acc / FIXED));
+  updateCamera();
+  drawGraph();
+  updateHUD();
+  engine.renderer.render(scene, world.camera);
+}
+requestAnimationFrame(frame);
+function fit() { engine.renderer.setSize(innerWidth, innerHeight, false); world.camera.aspect = innerWidth / innerHeight; world.camera.updateProjectionMatrix(); }
+fit(); addEventListener("resize", fit);
+
+// ---- HUD: frametime graph + readouts ---------------------------------------
+function setStatus(t) { const el = document.getElementById("status"); if (el) el.textContent = t; }
+let gctx = null;
+function drawGraph() {
+  const cv = document.getElementById("ftgraph"); if (!cv) return;
+  if (!gctx) { gctx = cv.getContext("2d"); }
+  const w = cv.width, h = cv.height, g = gctx;
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = "rgba(10,14,18,.72)"; g.fillRect(0, 0, w, h);
+  const scaleY = h / 40;                       // 0..40ms range
+  // 16.7ms (60fps) + 33.3ms (30fps) lines
+  g.strokeStyle = "rgba(120,220,140,.5)"; g.beginPath(); g.moveTo(0, h - 16.7 * scaleY); g.lineTo(w, h - 16.7 * scaleY); g.stroke();
+  g.strokeStyle = "rgba(230,170,70,.5)"; g.beginPath(); g.moveTo(0, h - 33.3 * scaleY); g.lineTo(w, h - 33.3 * scaleY); g.stroke();
+  const n = FT.length, bw = w / n;
+  for (let k = 0; k < n; k++) {
+    const v = FT[(ftI + 1 + k) % n];
+    const bh = Math.min(h, v * scaleY);
+    g.fillStyle = v > 33.3 ? "#e05555" : v > 18 ? "#e0a020" : "#5fbf7f";
+    g.fillRect(k * bw, h - bh, Math.max(1, bw - 0.5), bh);
+  }
+}
+function updateHUD() {
+  const el = document.getElementById("readouts"); if (!el) return;
+  const spd = car ? Math.hypot(car.body.linvel().x, car.body.linvel().y, car.body.linvel().z) * 3.6 : 0;
+  const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
+  el.innerHTML =
+    line("collider", COL_MODE + (COL_MODE !== "none" ? ` @${COL_CELL}m` : "")) +
+    line("fps", fpsAvg.toFixed(0)) +
+    line("worst 2s", worst2s.toFixed(1) + "ms") +
+    line("hitches >20ms", hitches) +
+    line("last collider build", colliderBuildMs.toFixed(1) + "ms") +
+    line("tiles loaded", terrain.tileCount) +
+    line("tiles built", tilesBuilt) +
+    line("car", spd.toFixed(0) + " km/h");
+}
+
+// ---- headless verification handle ------------------------------------------
+window.__map = {
+  engine, world, phys, terrain, get car() { return car; }, heightAt,
+  frametimes: FT, get hitches() { return hitches; }, get worst2s() { return worst2s; },
+  get tilesBuilt() { return tilesBuilt; }, setAuto: (v) => { auto.on = v; },
+  // measure a single collider build cost for the current mode at (x0,z0)
+  timeColliderBuild(x0 = 500, z0 = 500) {
+    const t = { dead: false, x0, z0, size: 128, cleanup: [] };
+    const t0 = performance.now(); attachTileCollider(t); const dt = performance.now() - t0;
+    for (const f of t.cleanup) f();
+    return +dt.toFixed(2);
+  },
+};

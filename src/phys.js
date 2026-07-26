@@ -163,6 +163,40 @@ export class Physics {
     return col;
   }
 
+  /**
+   * Static HEIGHTFIELD collider sampled from a height function — the ideal
+   * terrain collider. A trimesh tile paid ~7 ms building its BVH on the main
+   * thread (a dropped frame every time a tile streamed in at speed); a
+   * heightfield has an implicit grid, so it builds in ~0.5 ms, gives smooth
+   * interpolated collision (no coarse face-normal launch), and costs far less
+   * memory. Spans [x0, x0+size] × [z0, z0+size], centered on its own fixed body.
+   *
+   * @param sampleFn (wx, wz) => height   (skipped if `heights` is supplied)
+   * @param n        cells per side; the grid is (n+1)² samples
+   * @param heights  optional pre-sampled Float32Array, column-major H[j*(n+1)+i]
+   *                 (lets a Web Worker do the sampling off the render thread)
+   */
+  addHeightfield(x0, z0, size, sampleFn, { n = 42, friction = 1.0, restitution = 0.02, entity = null, heights = null } = {}) {
+    const g = n + 1;
+    const H = heights || new Float32Array(g * g);
+    if (!heights) {
+      // Rapier heightfield indexing: element (row i, col j) = H[i*g + j], where
+      // i (rows) runs along +X and j (cols) along +Z. Storing z under i transposes
+      // the terrain (only x==z points match — verified in the Map Lab).
+      for (let i = 0; i <= n; i++)
+        for (let j = 0; j <= n; j++)
+          H[i * g + j] = sampleFn(x0 + (i / n) * size, z0 + (j / n) * size);
+    }
+    const rb = this.world.createRigidBody(
+      R.RigidBodyDesc.fixed().setTranslation(x0 + size / 2, 0, z0 + size / 2));
+    const col = this.world.createCollider(
+      R.ColliderDesc.heightfield(n, n, H, { x: size, y: 1, z: size })
+        .setFriction(friction).setRestitution(restitution), rb);
+    col._ownBody = rb;                 // removeCollider tears down the dedicated body too
+    if (entity) this._handleEnt.set(col.handle, entity);
+    return col;
+  }
+
   /** static box collider (props, walls) — half extents, world center */
   addBox(half, center, { yaw = 0, friction = 1.0, restitution = 0.05, entity = null } = {}) {
     const rb = this.world.createRigidBody(
@@ -210,6 +244,7 @@ export class Physics {
 
   removeCollider(col) {
     this._handleEnt.delete(col.handle);
+    if (col._ownBody) { this.world.removeRigidBody(col._ownBody); return; }  // heightfield tiles own a fixed body
     this.world.removeCollider(col, true);
   }
 
