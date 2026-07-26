@@ -23,6 +23,7 @@ export default defineConfig({
         tank: resolve(__dirname, "tank.html"),         // tracked-vehicle sandbox
         ragdoll: resolve(__dirname, "ragdoll.html"),   // active-ragdoll proving ground
         map: resolve(__dirname, "map.html"),           // large-world streaming proving ground
+        flora: resolve(__dirname, "flora.html"),       // procedural flora proving ground
       },
     },
   },

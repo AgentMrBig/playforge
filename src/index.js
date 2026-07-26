@@ -22,6 +22,7 @@ export { CharacterAim } from "./charanim.js";
 export { TrajectoryLean } from "./charlean.js";
 export { StreamedTerrain } from "./streamworld.js";
 export { makeIslandTerrain, makeHeightmapTerrain, loadTerrarium } from "./worldgen.js";
+export { FloraField, makeGrassSprig } from "./flora.js";
 export { RoadNetwork, RoadEditor } from "./road.js";
 export { generateRoads, RoadGraph } from "./roadgen.js";
 export { layoutTowns, mountTowns } from "./townlayout.js";

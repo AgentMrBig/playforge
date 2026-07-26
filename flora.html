@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>PLAYFORGE — Flora Lab</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb9dc; }
+  canvas#game { width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: fixed; left: 12px; top: 10px; color: #fff; font: 13px/1.5 system-ui, sans-serif;
+         user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #hud b { color: #ffd75e; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><b>PLAYFORGE — Flora Lab</b> · procedural grass, data-driven bend<br>
+drive <b>WASD</b> (or autopilot) / fly <b>F</b> through the grass · R reset · sliders: density &amp; wind · <b>?max=</b>60000<br>
+<span id="status">loading…</span></div>
+<script type="module" src="/demo/floralab.js"></script>
+</body>
+</html>
