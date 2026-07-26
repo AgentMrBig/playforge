@@ -26,11 +26,15 @@ const qs = new URLSearchParams(location.search);
 const COL_MODE = qs.get("col") || "heightfield";     // heightfield | trimesh | none
 const COL_CELL = +(qs.get("cell") || 1.5);           // collider cell size (m)
 
-const engine = new Engine(document.getElementById("game"), { clearColor: 0x8fb9dc });
+const engine = new Engine(document.getElementById("game"), { clearColor: 0xaacbe6, logDepth: true });
 const world = new World();
 engine.world = world;
 const scene = world.scene;
-scene.fog = new THREE.Fog(0x8fb9dc, 420, 1600);   // see far while flying the free cam
+// flight-sim view distance: far plane ~16km + logarithmic depth + atmospheric
+// haze so distant terrain/ocean melt into the sky instead of hard-clipping.
+world.camera.far = 16000;
+world.camera.updateProjectionMatrix();
+scene.fog = new THREE.FogExp2(0xbcd6ea, 0.00011);   // ~half haze by ~8km, faded out by ~20km
 
 // ---- lights -----------------------------------------------------------------
 scene.add(new THREE.HemisphereLight(0xcfe0f0, 0x40402e, 0.9));
@@ -49,7 +53,8 @@ const SEED = +(qs.get("seed") || 1337);
 const ISLAND_R = +(qs.get("islandR") || 1500);
 const gen = makeIslandTerrain({ seed: SEED, islandR: ISLAND_R, sea: 0, erosion: qs.get("erode") !== "0" });
 const heightAt = gen.heightAt, colorAt = gen.colorAt;
-scene.add(gen.waterMesh());                                    // sea plane at y=0
+scene.add(gen.waterMesh(42000));                              // ocean to the horizon
+scene.add(gen.backdropMesh(320));                            // whole-island backdrop (seen from altitude; near tiles overlay it)
 
 // ---- physics ----------------------------------------------------------------
 const phys = new Physics({ gravity: -20 });

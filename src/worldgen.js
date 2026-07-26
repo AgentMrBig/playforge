@@ -97,7 +97,42 @@ export function makeIslandTerrain({
     return m;
   }
 
-  return { heightAt, colorAt, waterMesh, islandR, sea, PEAK };
+  /**
+   * BACKDROP: one coarse static mesh of the WHOLE island, so it's visible from
+   * altitude out to the horizon without streaming thousands of tiles. Sits a hair
+   * below the surface (drop) so the high-detail streamed tiles always win where
+   * they overlap near the camera; the offset is invisible at distance/haze.
+   */
+  function backdropMesh(res = 256, drop = 0.5) {
+    const N = res + 1, step = EXT / res;
+    const pos = new Float32Array(N * N * 3), col = new Float32Array(N * N * 3), nrm = new Float32Array(N * N * 3);
+    const c = new THREE.Color();
+    for (let j = 0; j < N; j++)
+      for (let i = 0; i < N; i++) {
+        const wx = -half + i * step, wz = -half + j * step, o = (j * N + i) * 3;
+        const h = heightAt(wx, wz);
+        pos[o] = wx; pos[o + 1] = h - drop; pos[o + 2] = wz;
+        const dhdx = (heightAt(wx + step, wz) - heightAt(wx - step, wz)) / (2 * step);
+        const dhdz = (heightAt(wx, wz + step) - heightAt(wx, wz - step)) / (2 * step);
+        const inv = 1 / Math.hypot(dhdx, 1, dhdz);
+        nrm[o] = -dhdx * inv; nrm[o + 1] = inv; nrm[o + 2] = -dhdz * inv;
+        colorAt(wx, wz, h, Math.max(Math.abs(dhdx), Math.abs(dhdz)), c);
+        col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
+      }
+    const idx = [];
+    for (let j = 0; j < res; j++)
+      for (let i = 0; i < res; i++) { const a = j * N + i, b = a + 1, d = a + N, e = d + 1; idx.push(a, d, b, b, d, e); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96 }));
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  return { heightAt, colorAt, waterMesh, backdropMesh, islandR, sea, PEAK, extent: EXT };
 }
 
 /**

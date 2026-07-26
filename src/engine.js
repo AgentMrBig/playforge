@@ -23,9 +23,11 @@ export class Engine {
   static FIXED_DT = 1 / 60;
   static MAX_CATCHUP = 5; // fixed steps per frame cap (spiral-of-death guard)
 
-  constructor(canvas, { clearColor = 0x10131a, shadows = true } = {}) {
+  constructor(canvas, { clearColor = 0x10131a, shadows = true, logDepth = false } = {}) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // logarithmicDepthBuffer: needed for flight-sim far planes (tens of km) — a
+    // linear depth buffer z-fights badly once far/near gets large.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: logDepth });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(clearColor);
     this.renderer.shadowMap.enabled = shadows;
