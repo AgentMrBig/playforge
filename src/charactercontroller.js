@@ -1,30 +1,35 @@
 import * as THREE from "three";
-import { CharacterBody } from "./phys.js";
+import { CharacterBody, R } from "./phys.js";
 import { ThirdPersonRig } from "./thirdperson.js";
 import { Ragdoll } from "./ragdoll.js";
 import { loadCharacter } from "./character.js";
+import { TrajectoryLean } from "./charlean.js";
+import { FootPlant } from "./footplant.js";
 
 /**
  * createCharacterController — THE reusable main character controller (the character
  * analog of createCarRig). One drop-in that bundles what was proven in the Big
  * Island demo + the Ragdoll Lab into a single component:
  *
- *   • a Rapier CAPSULE (CharacterBody) — real collision vs the world
- *   • camera-relative locomotion: walk / run (Shift) / jump / optional fly (G)
- *   • a third-person camera (ThirdPersonRig): orbit, zoom, occlusion
- *   • an idle / walk / run / jump animation state machine
- *   • RAGDOLL integration: go down on a hard hit, a braced "stagger" (muscle hold)
- *     on a light hit so he TRIES TO STAY UP, muscle/authoring mode, and a natural
- *     get-up on settle — with the capsule handed off to physics and back.
+ *   • a Rapier CAPSULE (CharacterBody) for horizontal collision vs the world
+ *   • RAYCAST GROUND SUPPORT (roll-our-own, like the car's raycast suspension):
+ *     a ray finds the ground and holds the feet on it, so he NEVER sinks and it
+ *     works on uneven ground — the foundation for weight-bearing IK feet. This
+ *     replaces Rapier's flaky KinematicCharacterController grounding (which let a
+ *     standing capsule fall straight through a flat plane).
+ *   • camera-relative walk / run (Shift) / jump / optional fly (G)
+ *   • a third-person camera (ThirdPersonRig): orbit, zoom, occlusion; `dragOrbit`
+ *     makes it set-and-stay (left-drag) so the cursor is free for menus
+ *   • idle / walk / run / jump animation state machine
+ *   • PROCEDURAL JUICE: TrajectoryLean (lean into turns/accel) + FootPlant (foot IK)
+ *   • RAGDOLL integration: go down on a hard hit, a braced STAGGER on a light hit
+ *     (he TRIES TO STAY UP), muscle/authoring mode, natural get-up on settle.
  *
  *   const ch = createCharacterController(world, { scene, phys, camera: true });
- *   await ch.ready;                 // model + ragdoll built
- *   ch.triggers.drop();            // fire the ragdoll like the lab buttons do
- *   ch.hit(point, impulseVec, power);   // in-game hit → stagger or knockdown
+ *   await ch.ready;
+ *   ch.triggers.drop();  ch.hit(point, impulseVec, power);
  *
- * The heavy "gradient blend + IK foot placement on uneven ground" rig layers on
- * TOP of this foundation (next phase) — the state machine here already has the
- * seam (anim ⇄ stagger ⇄ ragdoll ⇄ getup) to grow a continuous blend into.
+ * The gradient anim↔physics blend rig layers on top of this foundation next.
  *
  * @param world  the ECS World (spawns the player entity into it)
  */
@@ -44,10 +49,10 @@ export function createCharacterController(world, {
   characterOpts = { textureDir: "models/character", texture: "base_texture.png", targetHeight: 1.8 },
   anims = DEFAULT_ANIMS,
   spawn = [0, 0, 0],
-  camera = true,
+  camera = true, dragOrbit = false,
   heightAt = () => 0,
   walkSpeed = 5.0, runSpeed = 9.3, jumpSpeed = 9,
-  fly = false,
+  fly = false, groundRay = true, lean = true, footPlant = true,
   tone = 1.9,
   radius = 0.32, height = 1.7,
   onReady = null,
@@ -56,10 +61,19 @@ export function createCharacterController(world, {
   const entity = world.spawn("player").at(spawn[0], spawn[1], spawn[2])
     .add(new CharacterBody({ radius, height }));
   const body = entity.components.find((c) => c instanceof CharacterBody);
+  // WE own the vertical (gravity + ground + jump) via a downward ray — Rapier's
+  // KinematicCharacterController only does HORIZONTAL collision now. Its own
+  // grounding let a standing capsule fall through a flat plane, and fighting it
+  // with position corrections made him oscillate after a jump. `flying` tells
+  // CharacterBody to skip its gravity/snap/ground-zeroing so there's nothing to
+  // fight — the roll-our-own move, same lesson as the car's raycast suspension.
+  body.flying = true;
+  const GRAVITY = 20;
+  let grounded = true, freeFly = false;
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
-  let rag = null, animator = null, bones = null, visual = null;
+  let rag = null, animator = null, bones = null, visual = null, footIK = null;
 
   const _f = new THREE.Vector3(), _rt = new THREE.Vector3(), _wish = new THREE.Vector3(), _look = new THREE.Vector3();
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -68,7 +82,9 @@ export function createCharacterController(world, {
   function move(dt, input, w) {
     if (!animator) return;
     const cam = w.camera;
-    cam.getWorldDirection(_f); _f.y = 0; _f.normalize();
+    cam.getWorldDirection(_f); _f.y = 0;
+    if (_f.lengthSq() < 1e-6) _f.set(0, 0, 1);       // camera looking straight down → safe fallback
+    _f.normalize();
     _rt.crossVectors(_f, UP);
     const stick = input.stick ? input.stick("left") : { x: 0, y: 0 };
     const ix = input.axis("KeyA", "KeyD") + stick.x;
@@ -78,8 +94,8 @@ export function createCharacterController(world, {
     _wish.copy(_f).multiplyScalar(iz).addScaledVector(_rt, ix);
     if (_wish.lengthSq() > 1) _wish.normalize();
 
-    if (fly && input.pressed("KeyG")) { body.flying = !body.flying; body.velocity.y = 0; }
-    if (body.flying) {
+    if (fly && input.pressed("KeyG")) { freeFly = !freeFly; body.velocity.y = 0; }
+    if (freeFly) {
       cam.getWorldDirection(_look);
       const rt3 = new THREE.Vector3().crossVectors(_look, UP).normalize();
       const flySpd = running ? 26 : 13;
@@ -90,7 +106,8 @@ export function createCharacterController(world, {
     } else {
       body.velocity.x = _wish.x * spd;
       body.velocity.z = _wish.z * spd;
-      if (input.pressed("Space") && body.onGround) body.velocity.y = jumpSpeed;
+      body.velocity.y -= GRAVITY * dt;                    // OUR gravity (Rapier's is off via flying)
+      if (input.pressed("Space") && grounded) { body.velocity.y = jumpSpeed; grounded = false; }
     }
 
     // face the way he's moving
@@ -102,10 +119,36 @@ export function createCharacterController(world, {
 
     // animation state machine
     const moving = Math.hypot(ix, iz);
-    if (!body.onGround) animator.play("jump", { fade: 0.1, once: true });
+    if (!grounded) animator.play("jump", { fade: 0.1, once: true });
     else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
     else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
     else animator.play("idle", { fade: 0.3 });
+  }
+
+  // ── RAYCAST GROUND SUPPORT — our own grounding, not Rapier's. A ray down from
+  // the chest finds the real ground; the feet are pinned to it and downward
+  // velocity killed, so a standing character never sinks and rides uneven terrain.
+  // Runs as a phys _post hook (after the capsule's own move wrote entity.position).
+  const _gray = R ? new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }) : null;
+  function groundClamp() {
+    if (!groundRay || !_gray || !phys?.world || !body.rb || state !== "anim" || freeFly) { grounded = false; return; }
+    const px = entity.position.x, pz = entity.position.z, oy = entity.position.y + 1.2;
+    _gray.origin.x = px; _gray.origin.y = oy; _gray.origin.z = pz;
+    const hit = phys.world.castRay(_gray, 4.0, true, undefined, undefined, undefined, body.rb);
+    if (!hit) { grounded = false; body.onGround = false; return; }
+    const groundY = oy - (hit.timeOfImpact ?? hit.toi);
+    // land: at/just-below the ground while descending → pin the feet exactly on it
+    if (entity.position.y <= groundY + 0.06 && body.velocity.y <= 0.01) {
+      entity.position.y = groundY;
+      body.rb.setTranslation({ x: px, y: groundY + height / 2, z: pz }, true);
+      body.rb.setNextKinematicTranslation({ x: px, y: groundY + height / 2, z: pz });
+      body._lastSynced.copy(entity.position);
+      if (body.velocity.y < 0) body.velocity.y = 0;
+      grounded = true;
+    } else {
+      grounded = entity.position.y <= groundY + 0.12 && body.velocity.y <= 0.01;
+    }
+    body.onGround = grounded;
   }
 
   // ── natural get-up: settle → snap to where he lies → play a get-up clip ──
@@ -160,23 +203,32 @@ export function createCharacterController(world, {
     },
     update(dt) {
       if (animator && (state === "anim" || state === "getup" || state === "stagger")) animator.update(dt);
+      if (footIK && state === "anim") {                // foot IK on top of the anim pose
+        const sp = Math.hypot(body.velocity.x, body.velocity.z);
+        footIK.update(body.onGround && sp <= 0.6, body.onGround && sp > 0.6);
+      }
       if (rag && rag.active) rag.update();             // physics bodies → visual bones
     },
   };
   entity.add(motor);
 
+  // our raycast grounding runs after the capsule's move each physics step
+  if (groundRay) phys._pre && phys._post ? phys._post.push(groundClamp) : null;
+
   // ── third-person camera ──
   let rig = null;
   if (camera) {
-    rig = new ThirdPersonRig(entity, { distance: 5.5, phys, heightAt });
+    rig = new ThirdPersonRig(entity, { distance: 5.5, phys, heightAt, dragOrbit });
     world.spawn("camera").add(rig);
   }
 
-  // ── async: load the model, wire the animator + ragdoll ──
+  // ── async: load the model, wire the animator + ragdoll + procedural juice ──
   const ready = loadCharacter(model, { ...characterOpts, animations: anims }).then((ch) => {
     visual = ch.visual; animator = ch.animator; bones = ch.bones;
     entity.mesh(ch.visual);
     animator.play("idle");
+    if (lean) entity.add(new TrajectoryLean(bones, () => body));          // lean into turns/accel
+    if (footPlant) footIK = new FootPlant({ playerObj: visual, player: entity, heightAt });   // foot IK
     rag = new Ragdoll(bones, phys, { tone });
     rag.build();                                        // pre-build capsules (disabled) so a picker can hit them
     handle.rag = rag; handle.animator = animator; handle.bones = bones; handle.visual = visual;
@@ -235,6 +287,7 @@ export function createCharacterController(world, {
     set state(v) { state = v; },
     dispose() {
       if (rag && rag.active) rag.exit();
+      if (phys._post) phys._post = phys._post.filter((h) => h !== groundClamp);
       entity && world.destroy && world.destroy(entity);
     },
   };

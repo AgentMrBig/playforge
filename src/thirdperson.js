@@ -33,12 +33,14 @@ export class ThirdPersonRig {
     isSprinting = null,             // optional fn() → bool
     phys = null,                    // Physics (Rapier) → real occlusion vs terrain/buildings
     heightAt = null,                // (x,z)=>y terrain height → keep the camera above ground
+    dragOrbit = false,              // true: only orbit while LEFT mouse is held (set-and-stay,
+                                    // so the cursor is free for menus) — labs. false: GTA mouselook.
   } = {}) {
     this.target = target;
     Object.assign(this, {
       distance, minDist, maxDist, height, shoulder,
       minPitch, maxPitch, sensitivity,
-      recenterDelay, recenterRate, fov, sprintFov, collisionPad, isSprinting, phys, heightAt,
+      recenterDelay, recenterRate, fov, sprintFov, collisionPad, isSprinting, phys, heightAt, dragOrbit,
     });
     this.yaw = target ? target.rotation.y + Math.PI : 0;
     this.pitch = pitch;
@@ -58,8 +60,11 @@ export class ThirdPersonRig {
     // here also spun the player, which made dragged limbs loop in circles (Erik)
     const tm = (typeof window !== "undefined" && window.__pfTest && window.__pfTest.active && !window.__pfTest.livePlay) ? 0 : 1;
     const stick = input.stick("right");
-    const lx = (input.pointer.dx * this.sensitivity + stick.x * 3.2 * dt) * tm;
-    const ly = (input.pointer.dy * this.sensitivity + stick.y * 2.4 * dt) * tm;
+    // drag-orbit: mouse only turns the camera while LEFT is held (set-and-stay for menus).
+    // GTA mode (dragOrbit false): any mouse movement looks (pointer-locked in game).
+    const md = (this.dragOrbit && !input.pointer.down) ? 0 : 1;
+    const lx = (input.pointer.dx * this.sensitivity * md + stick.x * 3.2 * dt) * tm;
+    const ly = (input.pointer.dy * this.sensitivity * md + stick.y * 2.4 * dt) * tm;
     if (Math.abs(lx) > 1e-5 || Math.abs(ly) > 1e-5) this._idleT = 0;
     else this._idleT += dt;
     this.yaw -= lx;
@@ -76,7 +81,7 @@ export class ThirdPersonRig {
     const body = t.components?.find((c) => c.velocity);
     const vel = body?.velocity ?? ZERO;
     const speed2 = vel.x * vel.x + vel.z * vel.z;
-    if (this._idleT > this.recenterDelay && speed2 > 4) {
+    if (!this.dragOrbit && this._idleT > this.recenterDelay && speed2 > 4) {   // drag-orbit = set-and-stay, never auto-drift
       const inv = 1 / Math.sqrt(speed2);
       const vdx = vel.x * inv, vdz = vel.z * inv;
       // camera's view direction on the ground plane is -back = (-sinYaw, -cosYaw)

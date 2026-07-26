@@ -61,7 +61,7 @@ initRapier().then(() => {
   world.spawn("physics").add(phys);
   phys.addGroundPlane(0);         // the Rapier floor the capsule + ragdoll land on
   ch = createCharacterController(world, {
-    scene, phys, camera: true, spawn: [0, 0, 0], tone: TONE0, fly: false,
+    scene, phys, camera: true, dragOrbit: true, spawn: [0, 0, 0], tone: TONE0, fly: false,
   });
   ch.ready.then(() => {
     // ---- direct mouse interaction: right-click punch / right-drag grab -------
