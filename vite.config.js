@@ -22,6 +22,7 @@ export default defineConfig({
         bike: resolve(__dirname, "bike.html"),         // motorcycle sandbox
         tank: resolve(__dirname, "tank.html"),         // tracked-vehicle sandbox
         ragdoll: resolve(__dirname, "ragdoll.html"),   // active-ragdoll proving ground
+        chareditor: resolve(__dirname, "character-editor.html"), // character + ragdoll editor
         map: resolve(__dirname, "map.html"),           // large-world streaming proving ground
         flora: resolve(__dirname, "flora.html"),       // procedural flora proving ground
       },
