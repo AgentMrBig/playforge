@@ -180,7 +180,7 @@ export function createCharacterController(world, {
       // ~1.8m step, dip at footfall), amplitude scaling with speed. Feet stay planted (foot
       // IK) so the legs compress/extend to make the bob = a real gait, not a floating slide.
       const hsp = Math.hypot(body.velocity.x, body.velocity.z);
-      bobPhase += (hsp * dt / 3.6) * Math.PI * 2;    // one bob per ~3.6m → matches the anim clip cadence (was 2x too fast)
+      bobPhase += (hsp * dt / 7.2) * Math.PI * 2;    // one bob per ~7.2m → matches the anim clip cadence
       const bob = -Math.cos(bobPhase) * 0.06 * Math.min(1, hsp / runSpeed);
       if (body._ipCurr) { body._ipCurr.y = smoothVisY + bob; if (body._ipPrev) body._ipPrev.y = smoothVisY + bob; }
     } else {
