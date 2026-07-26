@@ -76,8 +76,11 @@ export function createCharacterController(world, {
   if (typeof window !== "undefined" && !window.__bobTune) window.__bobTune = { amp: 0.07, floor: 0.13, swing: 0.35 };
   const _bobDEF = { amp: 0.07, floor: 0.13, swing: 0.35 };   // auto-sync: amp=bob height, floor=planted-foot height, swing=lift range
 
-  let state = "anim";          // anim | ragdoll | getup | stagger
+  let state = "anim";          // anim | ragdoll | getup | stagger | vault
   let getupTimer = 0, staggerTimer = 0;
+  // parkour: vault over an obstacle too tall to step (a timed procedural arc + hand plant)
+  let vaultT = 0; const vaultDur = 0.55;
+  const vaultStart = new THREE.Vector3(), vaultLand = new THREE.Vector3(), vaultTop = new THREE.Vector3();
   let rag = null, animator = null, bones = null, visual = null, footIK = null;
 
   const _f = new THREE.Vector3(), _rt = new THREE.Vector3(), _wish = new THREE.Vector3(), _look = new THREE.Vector3(), _dbg = new THREE.Vector3();
@@ -86,6 +89,10 @@ export function createCharacterController(world, {
   // ── locomotion (camera-relative walk/run/jump, optional fly) ──
   function move(dt, input, w) {
     if (!animator) return;
+    // actual horizontal speed (how far he REALLY moved) — tells "stuck pushing a wall"
+    // (≈0) apart from "sliding along it" (>0), so the brace pose doesn't slide sideways.
+    const actualHSpeed = (move._px != null) ? Math.hypot(entity.position.x - move._px, entity.position.z - move._pz) / dt : 0;
+    move._px = entity.position.x; move._pz = entity.position.z;
     const cam = w.camera;
     cam.getWorldDirection(_f); _f.y = 0;
     if (_f.lengthSq() < 1e-6) _f.set(0, 0, 1);       // camera looking straight down → safe fallback
@@ -98,6 +105,9 @@ export function createCharacterController(world, {
     const spd = running ? runSpeed : walkSpeed;
     _wish.copy(_f).multiplyScalar(iz).addScaledVector(_rt, ix);
     if (_wish.lengthSq() > 1) _wish.normalize();
+
+    // PARKOUR: moving into (or jumping at) a vaultable ledge → vault over it
+    if ((input.pressed("Space") || _wish.lengthSq() > 0.3) && checkVault()) { startVault(); return; }
 
     if (fly && input.pressed("KeyG")) { freeFly = !freeFly; body.velocity.y = 0; }
     if (freeFly) {
@@ -137,7 +147,7 @@ export function createCharacterController(world, {
     const airborne = body.velocity.y > 2.0 || (airT > 0.14 && heightAbove > 0.5);
     const moving = Math.hypot(ix, iz);
     if (airborne) animator.play("jump", { fade: 0.1, once: true });
-    else if (wallW > 0.4 && moving > 0.15) animator.play("idle", { fade: 0.2 });   // braced on a wall → stop marching, push
+    else if (wallW > 0.4 && actualHSpeed < 1.2 && moving > 0.15) animator.play("idle", { fade: 0.2 });   // braced + STUCK on a wall → push (not while sliding along it)
     else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
     else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
     else animator.play("idle", { fade: 0.3 });
@@ -153,6 +163,7 @@ export function createCharacterController(world, {
   function probeGround(x, z, fromY, up = 1.2, len = 4.0) {
     if (!_gray || !phys?.world || !body.rb) return null;
     _gray.origin.x = x; _gray.origin.y = fromY + up; _gray.origin.z = z;
+    _gray.dir.x = 0; _gray.dir.y = -1; _gray.dir.z = 0;   // DOWN (other callers reuse _gray for forward rays)
     const hit = phys.world.castRay(_gray, len, true, undefined, undefined, undefined, body.rb);
     return hit ? (fromY + up) - (hit.timeOfImpact ?? hit.toi) : null;
   }
@@ -205,6 +216,36 @@ export function createCharacterController(world, {
       smoothVisY = entity.position.y;   // airborne (jump/fall): visual tracks physics exactly
     }
     body.onGround = grounded;
+  }
+
+  // ── PARKOUR / VAULT — detect an obstacle too tall to step (0.4–1.3m) with a clear top
+  // and a lower far side. Returns true (and fills _vTop/_vLand) when vaultable. ──
+  const _vTop = new THREE.Vector3(), _vLand = new THREE.Vector3();
+  const _vdbg = (typeof window !== "undefined");
+  function checkVault() {
+    if (!_gray || !phys?.world || !body.rb) return false;
+    _wfwd.set(Math.sin(entity.rotation.y), 0, Math.cos(entity.rotation.y));
+    _gray.origin.x = entity.position.x; _gray.origin.y = entity.position.y + 0.45; _gray.origin.z = entity.position.z;   // mid-obstacle (not the top edge)
+    _gray.dir.x = _wfwd.x; _gray.dir.y = 0; _gray.dir.z = _wfwd.z;
+    const fhit = phys.world.castRay(_gray, 1.2, true, undefined, undefined, undefined, body.rb);
+    if (!fhit) { if (_vdbg) window.__vaultDbg = "no forward hit"; return false; }
+    const d = fhit.timeOfImpact ?? fhit.toi;
+    const tx = entity.position.x + _wfwd.x * (d + 0.18), tz = entity.position.z + _wfwd.z * (d + 0.18);
+    const topY = probeGround(tx, tz, entity.position.y + 2.2, 0, 3.0);   // top surface just past the edge
+    if (topY == null) { if (_vdbg) window.__vaultDbg = "no top d=" + d.toFixed(2); return false; }
+    const h = topY - entity.position.y;
+    if (h < 0.4 || h > 1.3) { if (_vdbg) window.__vaultDbg = "h out of range " + h.toFixed(2); return false; }
+    const lx = entity.position.x + _wfwd.x * (d + 1.1), lz = entity.position.z + _wfwd.z * (d + 1.1);
+    const landY = probeGround(lx, lz, topY + 0.5, 0, 3.5);               // clear far-side landing?
+    if (landY == null || landY > topY - 0.1) { if (_vdbg) window.__vaultDbg = "no land landY=" + landY; return false; }
+    _vTop.set(tx, topY, tz); _vLand.set(lx, landY, lz);
+    if (_vdbg) window.__vaultDbg = "OK h=" + h.toFixed(2);
+    return true;
+  }
+  function startVault() {
+    vaultStart.copy(entity.position); vaultTop.copy(_vTop); vaultLand.copy(_vLand);
+    state = "vault"; vaultT = 0; body.setEnabled(false);
+    animator && animator.play("jump", { fade: 0.1 });
   }
 
   // ── WALL TOUCH — walking into a wall, bring the hands up onto it instead of pressing
@@ -277,6 +318,21 @@ export function createCharacterController(world, {
   const motor = {
     fixedUpdate(dt, ctx) {
       const input = ctx.input;
+      if (state === "vault") {
+        vaultT += dt;
+        const t = Math.min(1, vaultT / vaultDur);
+        const x = vaultStart.x + (vaultLand.x - vaultStart.x) * t;
+        const z = vaultStart.z + (vaultLand.z - vaultStart.z) * t;
+        const peak = Math.max(vaultTop.y, vaultStart.y, vaultLand.y) + 0.25;   // clear the top
+        const y = t < 0.5 ? vaultStart.y + (peak - vaultStart.y) * (t * 2)
+                          : peak + (vaultLand.y - peak) * ((t - 0.5) * 2);
+        entity.position.set(x, y, z);
+        body.rb.setTranslation({ x, y: y + height / 2, z }, true);
+        body.rb.setNextKinematicTranslation({ x, y: y + height / 2, z });
+        body._lastSynced.copy(entity.position);
+        if (t >= 1) { state = "anim"; body.setEnabled(true); body.velocity.set(0, 0, 0); smoothVisY = null; }
+        return;
+      }
       if (state === "getup") {
         body.setEnabled(false);
         getupTimer -= dt;
@@ -302,7 +358,20 @@ export function createCharacterController(world, {
       move(dt, input, ctx.world);                      // state === "anim"
     },
     update(dt) {
-      if (animator && (state === "anim" || state === "getup" || state === "stagger")) animator.update(dt);
+      if (animator && (state === "anim" || state === "getup" || state === "stagger" || state === "vault")) animator.update(dt);
+      if (state === "vault" && bones && visual) {      // plant hands on the ledge as he goes over
+        const t = Math.min(1, vaultT / vaultDur);
+        if (t > 0.1 && t < 0.75) {
+          _wlat.set(_wfwd.z, 0, -_wfwd.x);
+          for (const [limb, side] of [["handL", 1], ["handR", -1]]) {
+            const chain = limbChain(visual, limb); if (!chain) continue;
+            _wtgt.copy(vaultTop).addScaledVector(_wlat, side * 0.2);
+            chain.root.getWorldPosition(_wanchor);
+            _wpole.copy(_wanchor).addScaledVector(_wlat, side * 0.4); _wpole.y -= 0.4;
+            solveTwoBone({ ...chain, target: _wtgt, pole: _wpole, iterations: 2 });
+          }
+        }
+      }
       if (footIK && state === "anim") {                // foot IK on top of the anim pose
         const sp = Math.hypot(body.velocity.x, body.velocity.z);
         footIK.update(body.onGround && sp <= 0.6, body.onGround && sp > 0.6);
