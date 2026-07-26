@@ -127,21 +127,41 @@ export class StreamedTerrain {
     // ---- terrain grid with a skirt ring -------------------------------------
     const N = res + 1;                   // interior verts per side
     const W = N + 2;                     // + skirt verts each side
+    const step = size / res;
+
+    // SAMPLE THE HEIGHT GRID ONCE, with a 1-cell apron (ci ∈ [-1, N]). The old
+    // build called heightAt ~8×/vertex — positions (1×) + slopeAt (3×) + analytic
+    // normals (4×) — which made a near tile ~33ms to build (the last streaming
+    // hitch). Here every vertex samples heightAt once; normals + slope come from
+    // central differences on this grid. The apron holds the neighbours the edge
+    // vertices need, so boundary normals still MATCH the next tile (seamless — the
+    // reason the old code re-sampled heightAt instead of using computeVertexNormals).
+    const AS = N + 2;                     // apron side: indices for ci ∈ [-1, N]
+    const ah = new Float32Array(AS * AS);
+    for (let ai = -1; ai <= N; ai++)
+      for (let aj = -1; aj <= N; aj++)
+        ah[(ai + 1) * AS + (aj + 1)] = this._fn(x0 + ai * step, z0 + aj * step);
+    const AH = (ci, cj) => ah[(ci + 1) * AS + (cj + 1)];
+
     const pos = new Float32Array(W * W * 3);
     const col = new Float32Array(W * W * 3);
+    const nrm = new Float32Array(W * W * 3);
     const c = new THREE.Color();
-    const step = size / res;
     for (let j = 0; j < W; j++)
       for (let i = 0; i < W; i++) {
         const ci = Math.min(Math.max(i - 1, 0), N - 1);
         const cj = Math.min(Math.max(j - 1, 0), N - 1);
         const wx = x0 + ci * step, wz = z0 + cj * step;
         const inSkirt = i === 0 || j === 0 || i === W - 1 || j === W - 1;
-        const h = this._fn(wx, wz);
+        const h = AH(ci, cj);
         const o = (j * W + i) * 3;
         pos[o] = wx; pos[o + 1] = inSkirt ? h - this.skirt : h; pos[o + 2] = wz;
-        const slope = this.slopeAt(wx, wz);
-        this._colorAt(wx, wz, h, slope, c);
+        // normal + slope from the apron grid (central differences → seamless)
+        const dhdx = (AH(ci + 1, cj) - AH(ci - 1, cj)) / (2 * step);
+        const dhdz = (AH(ci, cj + 1) - AH(ci, cj - 1)) / (2 * step);
+        const inv = 1 / Math.hypot(dhdx, 1, dhdz);
+        nrm[o] = -dhdx * inv; nrm[o + 1] = inv; nrm[o + 2] = -dhdz * inv;
+        this._colorAt(wx, wz, h, Math.max(Math.abs(dhdx), Math.abs(dhdz)), c);
         if (inSkirt) c.multiplyScalar(0.55);
         col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
       }
@@ -150,19 +170,6 @@ export class StreamedTerrain {
       for (let i = 0; i < W - 1; i++) {
         const a = j * W + i, b = a + 1, d = a + W, e = d + 1;
         idx.push(a, d, b, b, d, e);
-      }
-    // analytic normals from the height function — seamless across tiles
-    // (computeVertexNormals would shade each tile island-alone → visible seams)
-    const nrm = new Float32Array(W * W * 3);
-    const eps = step;
-    for (let j = 0; j < W; j++)
-      for (let i = 0; i < W; i++) {
-        const o = (j * W + i) * 3;
-        const wx = pos[o], wz = pos[o + 2];
-        const dhdx = (this._fn(wx + eps, wz) - this._fn(wx - eps, wz)) / (2 * eps);
-        const dhdz = (this._fn(wx, wz + eps) - this._fn(wx, wz - eps)) / (2 * eps);
-        const inv = 1 / Math.hypot(dhdx, 1, dhdz);
-        nrm[o] = -dhdx * inv; nrm[o + 1] = inv; nrm[o + 2] = -dhdz * inv;
       }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
