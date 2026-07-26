@@ -131,7 +131,13 @@ export function createCharacterController(world, {
       // dime. accel while there's input, decel (slower) while coasting.
       const mt = (typeof window !== "undefined" && window.__moveTune) || _moveDEF;
       const tvx = _wish.x * spd, tvz = _wish.z * spd;
-      const rate = (_wish.lengthSq() > 0.01 ? mt.accel : mt.decel) * dt;
+      const hasInput = _wish.lengthSq() > 0.01;
+      // decel, with a SNAPPY final stop: once he's slow and off the stick, brake harder so
+      // he plants and settles quickly instead of coasting forward in the walk pose for a
+      // beat. The weighty initial decel (from full speed) is preserved.
+      const curHSpd = Math.hypot(body.velocity.x, body.velocity.z);
+      const decel = (!hasInput && curHSpd < 2.5) ? mt.decel * 3 : mt.decel;
+      const rate = (hasInput ? mt.accel : decel) * dt;
       body.velocity.x += Math.max(-rate, Math.min(rate, tvx - body.velocity.x));
       body.velocity.z += Math.max(-rate, Math.min(rate, tvz - body.velocity.z));
       // vertical: OWN it (ran BEFORE the physics step so the capsule never drives DOWN

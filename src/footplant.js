@@ -34,6 +34,7 @@ export class FootPlant {
     this.releaseDist = 0.22;      // clip moved the foot this far → real step, re-plant
     this.plantBand = 0.14;        // a foot within this of the surface = STANCE (plant it); higher = SWING (leave to clip)
     this.maxReach = 0.45;         // if a locked foot is farther than this (horiz) from its hip, re-plant — stops the leg splaying into a split
+    this.idleNarrow = 0.62;       // idle stance width vs the clip (0.62 → pulls the wide clip stance ~38% narrower)
     this.locks = { footL: null, footR: null };   // world Vector3 targets
     if (typeof window !== "undefined") window.__footPlant = this;
   }
