@@ -71,9 +71,12 @@ const JOINTS = [
   ["shinR",     "footR",     "RightFoot",    { type: "spherical", limit: 0.9 }],
 ];
 
-// The "core" — torso + hips. Settle is judged on these alone: they carry the
-// body's mass and come to rest cleanly, unlike the twitchy low-inertia limbs.
-const CORE_SEG = new Set(["pelvis", "chest", "head", "thighL", "thighR"]);
+// The "trunk" — pelvis + chest. Settle is judged on THESE alone: they carry the
+// body's mass and come to rest cleanly. Even the head and thighs keep a ~2 rad/s
+// angular jitter long after the pelvis is dead still, which (when they were in the
+// settle set) held settleT at zero forever. The pelvis is where get-up teleports,
+// so the trunk being at rest is the honest "the body has come to rest" signal.
+const CORE_SEG = new Set(["pelvis", "chest"]);
 
 const MASS_FRAC = {
   pelvis: 0.22, chest: 0.24, head: 0.07,
@@ -92,31 +95,40 @@ let _grabId = 1;
 
 export class Ragdoll {
   constructor(bones, phys, {
-    totalMass = 75, tone = 1.9, collisionGroups = null, assist = 0.85,
-    // ── ROM soft-limit + settle dials (tunable live from the editor) ──
-    romMargin = 0.12,    // deadzone (rad) past the ROM cone before the ligament acts,
-                         //   so a settled pose sitting right at ROM isn't nagged.
-    romSpring = 45,      // restoring torque per rad of overshoot beyond the margin.
-    romDamp = 8,         // one-sided damping of the OPENING rate (never fights return).
-    romMaxTorque = 140,  // cap on ligament torque — kept low so it catches extremes
-                         //   without pumping energy through the shared-body joints.
-    romHyper = 0.45,     // overshoot past ROM (rad) that counts as EGREGIOUS — the
-                         //   only ROM state that blocks get-up (a broken-looking pose).
-    settleLinV = 0.4,    // the CORE (torso+hips) counts as "still" below this linear …
-    settleAngV = 1.6,    // … AND this angular speed. Both must hold (sustained via
-                         //   settleT) before get-up fires. Judged on the core only —
-                         //   the limbs twitch/pop and would never all go quiet.
-    limpTime = 0.55,     // free knockdown: seconds to relax from full tone → limp.
-    limpFloor = 0.0,     // …down to this fraction of tone. A downed body CAN'T hold
-                         //   the standing pose it's targeting, so fighting for it
-                         //   pumps the solver to the velocity clamp — it must go
-                         //   limp and settle, then get up via animation. Muscle mode
-                         //   keeps FULL tone (it IS meant to hold a pose).
+    totalMass = 75, tone = 1.8, collisionGroups = null, assist = 0.95,
+    // ── stable muscle PD gains ──
+    muscleKp = 42,       // proportional gain per unit tone (torque ∝ pose error).
+    muscleKd = 12,       // derivative gain per unit tone — LINEAR in tone so the
+                         //   damping ratio rises with stiffness (√tone left it
+                         //   underdamped and it blew up to the clamp at high tone).
+    muscleMaxTorque = 500, // hard cap on PD torque per step — divergence-proof.
+    // ── firm, stable soft ROM (spine/shoulder/hip have no native Rapier limits) ──
+    romMargin = 0.08,    // deadzone (rad) past the cone before the ligament engages.
+    romSpring = 60,      // restoring torque per rad of overshoot. Firm enough to
+                         //   visibly hold joint limits, but NOT so firm it rocks the
+                         //   trunk and blocks settle (140 held limits harder but the
+                         //   spine ligament kept pelvis+chest rocking → never settled).
+    romDamp = 14,        // one-sided damping of the OPENING rate (near-critical).
+    romMaxTorque = 380,  // cap on ligament torque.
+    romHyper = 0.6,      // overshoot (rad) counting as EGREGIOUS (readout only).
+    settleLinV = 0.35,   // TRUNK (pelvis+chest) linear-still threshold …
+    settleAngV = 1.1,    // … AND angular-still threshold, sustained → get-up.
+    // ── tension / knockdown model (Erik: "TENSION, not a wet towel") ──
+    giveTime = 0.22,     // on knockdown: seconds of impact GIVE before tensing up.
+    giveFloor = 0.55,    // tone fraction during the give (staggery react), rising to 1.
+    proneY = 0.75,       // pelvis height (m) below which the body is treated as DOWN.
+    settleRelax = 0.08,  // once DOWN, muscle tone × this so a tense body can still
+                         //   come to rest and get up (ROM/limbs stay firm regardless).
+    knockdownImpulse = 320, // hit impulse magnitude at/above which a strike KNOCKS
+                         //   HIM DOWN; below it he staggers and stays up (used by labs).
   } = {}) {
     this.bones = bones;
     this.phys = phys;
     this.tone = tone;
     this.assist = assist;                 // gravity-compensation dial (muscle mode)
+    this.muscleKp = muscleKp;
+    this.muscleKd = muscleKd;
+    this.muscleMaxTorque = muscleMaxTorque;
     this.romMargin = romMargin;
     this.romSpring = romSpring;
     this.romDamp = romDamp;
@@ -125,9 +137,12 @@ export class Ragdoll {
     this._hyperROM = 0;
     this.settleLinV = settleLinV;
     this.settleAngV = settleAngV;
-    this.limpTime = limpTime;
-    this.limpFloor = limpFloor;
-    this._downT = 0;                      // time since knockdown (drives limp ramp)
+    this.giveTime = giveTime;
+    this.giveFloor = giveFloor;
+    this.proneY = proneY;
+    this.settleRelax = settleRelax;
+    this.knockdownImpulse = knockdownImpulse;
+    this._downT = 0;                      // time since knockdown (drives give→tense ramp)
     this._overROM = 0;                    // joints resting past ROM (live metric)
     this.collisionGroups = collisionGroups;
     this.active = false;
@@ -310,11 +325,45 @@ export class Ragdoll {
       if (velocity) s.body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
       s.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+    // Capture the pose to HOLD, ONCE, from the animated skeleton — BEFORE any
+    // physics runs. The PD (tension) targets THIS snapshot, never the live bones:
+    // rag.update() rewrites the bones from the physics bodies every frame, so a PD
+    // reading the bones would chase a one-frame-lagged copy of its own output —
+    // positive feedback that flings the joints apart (peakSep in the hundreds of m,
+    // the "stretch to infinity"). A fixed snapshot is a stable PD setpoint = real
+    // muscle tension that resists deviation without pumping.
+    this._snapshotHold();
     if (impulse && impulsePoint) this.hit(impulsePoint, impulse);
     this.active = true;
     this._settleT = 0;
     this._downT = 0;
   }
+
+  /** snapshot the pose to HOLD: each body's orientation + each joint's RELATIVE
+   *  rotation (the muscle PD targets the relative pose so the body can tumble as a
+   *  whole while holding its shape), plus the muscle anchor pose. */
+  _snapshotHold() {
+    const T = this._tmp;
+    for (const s of this.segments) {
+      const q = s.body.rotation();
+      s.holdBodyQ = (s.holdBodyQ || new THREE.Quaternion()).set(q.x, q.y, q.z, q.w);
+      s.bone.updateWorldMatrix(true, false);
+      s.holdQ = (s.holdQ || new THREE.Quaternion()).copy(s.bone.getWorldQuaternion(T.q1));
+    }
+    // per-joint snapshot relative rotation (child in parent's body frame)
+    for (const L of this._joints) {
+      L.holdRel = (L.holdRel || new THREE.Quaternion())
+        .copy(L.p.holdBodyQ).invert().multiply(L.c.holdBodyQ);
+    }
+    const s = this._anchorSeg;
+    if (s) {
+      const bodyQ = s.bone.getWorldQuaternion(T.q1).multiply(s.qOff.clone().invert());
+      const mid = s.bone.getWorldPosition(T.v1).sub(s.pOff.clone().applyQuaternion(bodyQ));
+      this._anchorPose = { pos: mid.clone(), quat: bodyQ.clone() };
+    }
+  }
+  /** re-capture the hold pose from the CURRENT bones (clip-tracking; call pre-update) */
+  refreshMuscleTargets() { this._snapshotHold(); }
 
   /** rebuild body poses from the CURRENT animated skeleton (re-entering) */
   _syncBodiesToBones() {
@@ -331,43 +380,55 @@ export class Ragdoll {
     }
   }
 
-  /** ═══ MUSCLE MODE — hips anchored, limbs physically track the clip ═══ */
+  /** ═══ MUSCLE MODE — hips pinned in place, limbs physically hold the pose ═══ */
   enterMuscle(tone = this.tone) {
     this.tone = tone;
-    this.enter();
+    this.enter();                         // captures the hold snapshot (segments)
     this.muscle = true;
     const root = this._byName.pelvis || this._byName.chest;
     if (root) {
-      root.body.setBodyType(R.RigidBodyType.KinematicPositionBased, true);
       this._anchorSeg = root;
+      // Pin the pelvis with a REAL fixed joint to a static body — do NOT make it
+      // kinematic. A kinematic anchor has infinite mass, so it ABSORBS the reaction
+      // half of every per-joint muscle torque; the pelvis-connected children then
+      // receive un-reacted torque, spin up (spherical joints don't resist spin),
+      // and blow the joints apart. A dynamic pelvis held by a fixed joint keeps the
+      // reactions in a real body (solver-managed) → the momentum-conserving PD stays
+      // stable, exactly like the free ragdoll.
+      const t = root.body.translation(), q = root.body.rotation();
+      const stat = this.phys.world.createRigidBody(
+        R.RigidBodyDesc.fixed().setTranslation(t.x, t.y, t.z).setRotation(q));
+      const I = { x: 0, y: 0, z: 0, w: 1 }, O = { x: 0, y: 0, z: 0 };
+      this._anchorJoint = this.phys.world.createImpulseJoint(
+        R.JointData.fixed(O, I, O, I), stat, root.body, true);
+      this._anchorStatic = stat;
     }
+    this._snapshotHold();
     return true;
   }
   exitMuscle() {
-    if (this._anchorSeg) this._anchorSeg.body.setBodyType?.(R.RigidBodyType.Dynamic, true);
-    this.muscle = false; this._anchorSeg = null;
+    if (this._anchorJoint) { try { this.phys.world.removeImpulseJoint(this._anchorJoint, true); } catch (_) {} }
+    if (this._anchorStatic) { try { this.phys.world.removeRigidBody(this._anchorStatic); } catch (_) {} }
+    this._anchorJoint = null; this._anchorStatic = null;
+    this.muscle = false; this._anchorSeg = null; this._anchorPose = null;
     this.releaseAll();
     this.exit();
   }
-  _anchorStep() {
-    const s = this._anchorSeg; if (!s) return;
-    s.bone.updateWorldMatrix(true, false);
-    const bodyQ = s.bone.getWorldQuaternion(this._tmp.q1).multiply(s.qOff.clone().invert());
-    const mid = s.bone.getWorldPosition(this._tmp.v1).sub(s.pOff.clone().applyQuaternion(bodyQ));
-    s.body.setNextKinematicTranslation({ x: mid.x, y: mid.y, z: mid.z });
-    s.body.setNextKinematicRotation({ x: bodyQ.x, y: bodyQ.y, z: bodyQ.z, w: bodyQ.w });
-  }
 
-  /** cancel a tone-scaled fraction of gravity so muscle PD can hold a stand without sag. */
-  _gravityAssist() {
+  /** cancel a tone-scaled fraction of gravity so muscle PD can hold a stand without
+   *  sag. Applied as a per-step IMPULSE (force·dt), NOT addForce: Rapier's addForce
+   *  PERSISTS and accumulates across steps unless reset, so calling it every frame
+   *  built an unbounded upward force that launched the skeleton (the muscle-mode
+   *  explosion). An impulse is one-shot and equivalent (impulse = m·g·k·dt). */
+  _gravityAssist(dt) {
     if (!this.muscle || this.assist <= 0) return;
     const g = this.phys.world.gravity;
-    const k = this.assist * Math.min(1, this.tone / 2.5);
+    const k = this.assist * dt;            // assist = direct gravity-comp fraction
     for (const s of this.segments) {
       if (s === this._anchorSeg) continue;
       if (typeof s.body.isEnabled === "function" && !s.body.isEnabled()) continue;
       const m = s.body.mass();
-      s.body.addForce({ x: -g.x * m * k, y: -g.y * m * k, z: -g.z * m * k }, true);
+      s.body.applyImpulse({ x: -g.x * m * k, y: -g.y * m * k, z: -g.z * m * k }, true);
     }
   }
 
@@ -603,41 +664,61 @@ export class Ragdoll {
     if (!this.active || !this.tone) return;
     this._downT += dt;
     this._updateReflexes();
-    if (this.muscle) {
-      this._anchorStep();
-      this._gravityAssist();
-    }
-    // effective tone: MUSCLE mode holds full tone (it's anchored + gravity-assisted
-    // to keep a pose). A FREE knockdown relaxes from full tone → limp over limpTime,
-    // so the body reacts on impact then goes slack and settles instead of endlessly
-    // fighting toward the standing pose the animator is frozen on (which pumped the
-    // solver to the velocity clamp).
+    if (this.muscle) this._gravityAssist(dt);  // pelvis held by a fixed joint now
+    // effective tone. MUSCLE mode holds FULL tone (anchored + gravity-assisted to
+    // keep a pose). A FREE knockdown is TENSE, not limp (Erik: "not a wet towel"):
+    //   • brief GIVE on impact (giveFloor) so a hit staggers/reads, then it TENSES
+    //     up to full tone over giveTime — muscles brace.
+    //   • BUT once the body is clearly DOWN (pelvis below proneY), relax the tone
+    //     (× settleRelax) so a tense body can still come to rest + get up — a body
+    //     fighting to stand while prone never settles. The FIRM ROM ligaments keep
+    //     the limbs from noodling/hyperextending the whole time, independent of tone,
+    //     so "down + relaxed" still looks boned, not like a rag.
     let effTone = this.tone;
     if (!this.muscle) {
-      const k = Math.min(1, this._downT / Math.max(1e-3, this.limpTime));
-      effTone = this.tone * (1 - k * (1 - this.limpFloor));
+      const k = Math.min(1, this._downT / Math.max(1e-3, this.giveTime));
+      let tension = this.giveFloor + (1 - this.giveFloor) * k;
+      const pel = this._byName.pelvis;
+      if (pel && pel.body.translation().y < this.proneY) tension *= this.settleRelax;
+      effTone = this.tone * tension;
     }
     const T = this._tmp;
-    for (const s of this.segments) {
-      if (s === this._anchorSeg) continue;
-      s.bone.updateWorldMatrix(true, false);
-      let worldTarget = s.bone.getWorldQuaternion(T.q1);
-      if (this.useLayers && this._hasLayers) worldTarget = this._composeTarget(s.name, worldTarget);
-      s.targetQ.copy(worldTarget).multiply(s.qOff.clone().invert());
-      const q = s.body.rotation();
-      const cur = T.q2.set(q.x, q.y, q.z, q.w);
-      const err = T.q3.copy(s.targetQ).multiply(cur.clone().invert());
-      if (err.w < 0) { err.x *= -1; err.y *= -1; err.z *= -1; err.w *= -1; }
-      const angle = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
-      if (angle > 1e-3) {
+    // ═══ MUSCLE PD — per JOINT, RELATIVE, momentum-conserving ═══
+    // Drives each joint's relative rotation toward its snapshot (holdRel) with
+    // EQUAL-AND-OPPOSITE torques on parent + child. This is THE stability fix: the
+    // old per-segment PD torqued each body toward a WORLD orientation with no
+    // reaction, injecting net angular momentum that the joints converted into linear
+    // ejection — the whole skeleton flew off ("stretch to infinity"). Equal-opposite
+    // torque conserves momentum (it can't launch the body), and targeting the
+    // RELATIVE pose means the body can tumble freely as a whole while its limbs hold
+    // their shape = real muscle tension. kd is LINEAR in tone so damping stays ≥
+    // critical as stiffness rises. Torque is capped, so no single step can diverge.
+    if (effTone > 0.001) {
+      const pQ = T.q1, cQ = T.q2, curRel = T.q3, err = T.qA;
+      for (const L of this._joints) {
+        const stiff = L.c.stiffMul ?? 1;
+        const kp = this.muscleKp * effTone * stiff;
+        if (kp <= 0 || !L.holdRel) continue;
+        const a = L.p.body.rotation(), b = L.c.body.rotation();
+        pQ.set(a.x, a.y, a.z, a.w); cQ.set(b.x, b.y, b.z, b.w);
+        curRel.copy(pQ).invert().multiply(cQ);            // child in parent frame
+        pQ.set(a.x, a.y, a.z, a.w);                         // pQ was inverted above; restore
+        err.copy(L.holdRel).multiply(curRel.invert());     // holdRel · curRel⁻¹
+        if (err.w < 0) { err.x *= -1; err.y *= -1; err.z *= -1; err.w *= -1; }
+        const angle = 2 * Math.acos(Math.min(1, Math.abs(err.w)));
+        if (angle < 1e-3) continue;
         const s3 = Math.sqrt(Math.max(1e-9, 1 - err.w * err.w));
-        const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3);
-        const av = s.body.angvel();
-        const kp = 42 * effTone * (s.stiffMul ?? 1), kd = 6 * Math.sqrt(Math.max(0.1, effTone));
-        const torque = axis.multiplyScalar(kp * angle)
-          .sub(T.v2.set(av.x, av.y, av.z).multiplyScalar(kd));
-        const k = s.inertia * dt;
-        s.body.applyTorqueImpulse({ x: torque.x * k, y: torque.y * k, z: torque.z * k }, true);
+        const axis = T.v1.set(err.x / s3, err.y / s3, err.z / s3).applyQuaternion(pQ);
+        const wp = L.p.body.angvel(), wc = L.c.body.angvel();
+        const relW = (wc.x - wp.x) * axis.x + (wc.y - wp.y) * axis.y + (wc.z - wp.z) * axis.z;
+        const kd = this.muscleKd * effTone * stiff;
+        let mag = kp * Math.min(angle, 1.2) - kd * relW;
+        if (mag > this.muscleMaxTorque) mag = this.muscleMaxTorque;
+        else if (mag < -this.muscleMaxTorque) mag = -this.muscleMaxTorque;
+        const Ir = (L.c.inertia * L.p.inertia) / (L.c.inertia + L.p.inertia);
+        const k = Ir * dt * mag;
+        L.c.body.applyTorqueImpulse({ x: axis.x * k, y: axis.y * k, z: axis.z * k }, true);
+        L.p.body.applyTorqueImpulse({ x: -axis.x * k, y: -axis.y * k, z: -axis.z * k }, true);
       }
     }
     // ligaments / soft ROM — the spine/shoulder/hip/neck are SPHERICAL joints and
