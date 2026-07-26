@@ -75,6 +75,10 @@ export function createCharacterController(world, {
   // amp = bob height (m), phase = phase offset in cycles. Dial vs the footstep graph.
   if (typeof window !== "undefined" && !window.__bobTune) window.__bobTune = { amp: 0.07, floor: 0.13, swing: 0.35 };
   const _bobDEF = { amp: 0.07, floor: 0.13, swing: 0.35 };   // auto-sync: amp=bob height, floor=planted-foot height, swing=lift range
+  // momentum / weight: how fast horizontal velocity chases the target (m/s²). accel =
+  // spin-up, decel = coast-down, turn = facing turn rate. Higher = snappier, lower = weightier.
+  if (typeof window !== "undefined" && !window.__moveTune) window.__moveTune = { accel: 22, decel: 16, turn: 8 };
+  const _moveDEF = { accel: 22, decel: 16, turn: 8 };
 
   let state = "anim";          // anim | ragdoll | getup | stagger | vault
   let getupTimer = 0, staggerTimer = 0;
@@ -119,37 +123,43 @@ export function createCharacterController(world, {
       if (wv.lengthSq() > 1) wv.normalize();
       body.velocity.set(wv.x * flySpd, wv.y * flySpd, wv.z * flySpd);
     } else {
-      body.velocity.x = _wish.x * spd;
-      body.velocity.z = _wish.z * spd;
+      // MOMENTUM / WEIGHT: chase the target velocity with a capped rate instead of
+      // snapping to it — he spins up and coasts down instead of starting/stopping on a
+      // dime. accel while there's input, decel (slower) while coasting.
+      const mt = (typeof window !== "undefined" && window.__moveTune) || _moveDEF;
+      const tvx = _wish.x * spd, tvz = _wish.z * spd;
+      const rate = (_wish.lengthSq() > 0.01 ? mt.accel : mt.decel) * dt;
+      body.velocity.x += Math.max(-rate, Math.min(rate, tvx - body.velocity.x));
+      body.velocity.z += Math.max(-rate, Math.min(rate, tvz - body.velocity.z));
       // vertical: OWN it (ran BEFORE the physics step so the capsule never drives DOWN
-      // into the floor — that down-then-clamp each frame was the up/down jitter).
-      // planted → velocity.y = 0; airborne → our gravity; grounded + Space → jump.
+      // into the floor). planted → velocity.y = 0; airborne → our gravity; grounded + Space → jump.
       const gY = probeGround(entity.position.x, entity.position.z, entity.position.y);
-      const near = gY != null && entity.position.y <= gY + 0.3;   // step band (matches groundClamp) — small ups/downs stay grounded + ease
+      const near = gY != null && entity.position.y <= gY + 0.3;   // step band (matches groundClamp)
       if (near && input.pressed("Space")) { body.velocity.y = jumpSpeed; grounded = false; }
       else if (near && body.velocity.y <= 0) { body.velocity.y = 0; grounded = true; }
       else { body.velocity.y -= GRAVITY * dt; grounded = false; }
     }
 
-    // face the way he's moving
+    // face movement INTENT (not the ramping velocity, which is noisy at low speed)
+    const mt2 = (typeof window !== "undefined" && window.__moveTune) || _moveDEF;
     if (_wish.lengthSq() > 0.01) {
-      const want = Math.atan2(body.velocity.x, body.velocity.z);
+      const want = Math.atan2(_wish.x, _wish.z);
       let d = want - entity.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
-      entity.rotation.y += d * Math.min(1, dt * 9);
+      entity.rotation.y += d * Math.min(1, mt2.turn * dt);
     }
 
-    // animation state machine. Only play the jump/fall pose when he's ACTUALLY jumping
-    // (rising) or falling from a real height — NOT when stepping off a small ledge/block
-    // (that briefly reads "not grounded" and used to snap him into the flailing jump pose).
+    // animation state machine — driven by ACTUAL speed (not input) so his legs keep
+    // moving as he coasts to a stop (no foot-sliding), and the walk clip scales to speed.
     if (grounded) airT = 0; else airT += dt;
     const gA = probeGround(entity.position.x, entity.position.z, entity.position.y);
     const heightAbove = gA != null ? entity.position.y - gA : 99;
     const airborne = body.velocity.y > 2.0 || (airT > 0.14 && heightAbove > 0.5);
-    const moving = Math.hypot(ix, iz);
+    const inMove = Math.hypot(ix, iz);                                   // input intent (for the wall brace)
+    const spd01 = Math.hypot(body.velocity.x, body.velocity.z);          // actual ground speed
     if (airborne) animator.play("jump", { fade: 0.1, once: true });
-    else if (wallW > 0.4 && actualHSpeed < 1.2 && moving > 0.15) animator.play("idle", { fade: 0.2 });   // braced + STUCK on a wall → push (not while sliding along it)
-    else if (moving > 0.15 && running) animator.play("run", { fade: 0.15 });
-    else if (moving > 0.15) animator.play("walk", { fade: 0.18, speed: Math.min(1.4, moving) });
+    else if (wallW > 0.4 && actualHSpeed < 1.2 && inMove > 0.15) animator.play("idle", { fade: 0.2 });   // braced + stuck on a wall
+    else if (spd01 > walkSpeed * 1.25) animator.play("run", { fade: 0.2, speed: Math.min(1.3, spd01 / runSpeed + 0.3) });
+    else if (spd01 > 0.5) animator.play("walk", { fade: 0.2, speed: Math.max(0.6, Math.min(1.5, spd01 / walkSpeed)) });
     else animator.play("idle", { fade: 0.3 });
   }
 

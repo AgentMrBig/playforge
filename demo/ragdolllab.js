@@ -268,6 +268,11 @@ function updateHUD() {
   };
   mkSlider("tone", 0, 4, TONE0, 0.05, (v) => { const r = getRag(); if (r) r.tone = v; });
   mkSlider("assist", 0, 1, 0.85, 0.05, (v) => { const r = getRag(); if (r) r.assist = v; });
+  // movement weight (momentum): accel = spin-up, decel = coast-down, turn = facing rate
+  const MT = window.__moveTune = window.__moveTune || { accel: 22, decel: 16, turn: 8 };
+  mkSlider("accel", 5, 50, MT.accel, 1, (v) => { MT.accel = v; });
+  mkSlider("decel", 5, 50, MT.decel, 1, (v) => { MT.decel = v; });
+  mkSlider("turn", 3, 20, MT.turn, 0.5, (v) => { MT.turn = v; });
   panel.append(grp, timeRow, sld);
   document.body.appendChild(panel);
 })();
