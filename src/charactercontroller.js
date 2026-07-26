@@ -69,7 +69,7 @@ export function createCharacterController(world, {
   // fight — the roll-our-own move, same lesson as the car's raycast suspension.
   body.flying = true;
   const GRAVITY = 20;
-  let grounded = true, freeFly = false, airT = 0;
+  let grounded = true, freeFly = false, airT = 0, smoothVisY = null;
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
@@ -161,18 +161,22 @@ export function createCharacterController(world, {
     if (gY == null) { grounded = false; body.onGround = false; return; }
     grounded = entity.position.y <= gY + 0.3 && body.velocity.y <= 0.02;
     if (grounded) {
-      // Ease the body toward the surface SLOWLY + continuously (both up and down) so
-      // climbing/descending steps is a smooth ramp, NOT a pop per step. The foot IK
-      // keeps each foot planted during the lag, so the LEGS visibly do the work
-      // (bend/extend) while the pelvis glides. Tiny gaps snap.
-      const dy = gY - entity.position.y;
-      const ny = Math.abs(dy) < 0.006 ? gY : entity.position.y + dy * (1 - Math.exp(-7 * dt));
-      entity.position.y = ny;
-      body.rb.setTranslation({ x: px, y: ny + height / 2, z: pz }, true);
-      body.rb.setNextKinematicTranslation({ x: px, y: ny + height / 2, z: pz });
+      // PHYSICS: snap the capsule exactly onto the surface (no float, no sink).
+      entity.position.y = gY;
+      body.rb.setTranslation({ x: px, y: gY + height / 2, z: pz }, true);
+      body.rb.setNextKinematicTranslation({ x: px, y: gY + height / 2, z: pz });
       body._lastSynced.copy(entity.position);
       if (body.velocity.y < 0) body.velocity.y = 0;
-      if (body._ipCurr) { body._ipCurr.y = ny; if (body._ipPrev) body._ipPrev.y = ny; }   // pin visual Y (no jitter)
+      // VISUAL: ease the rendered body toward the physics height so steps ramp SMOOTHLY
+      // — this also absorbs Rapier's autostep, which pops the capsule up a step in ONE
+      // frame (that was the "pops going up stairs"). The foot IK plants the feet on the
+      // real surface during the lag, so the LEGS bend/extend to do the work.
+      if (smoothVisY == null) smoothVisY = gY;
+      smoothVisY += (gY - smoothVisY) * (1 - Math.exp(-9 * dt));
+      if (Math.abs(gY - smoothVisY) < 0.006) smoothVisY = gY;
+      if (body._ipCurr) { body._ipCurr.y = smoothVisY; if (body._ipPrev) body._ipPrev.y = smoothVisY; }
+    } else {
+      smoothVisY = entity.position.y;   // airborne (jump/fall): visual tracks physics exactly
     }
     body.onGround = grounded;
   }
