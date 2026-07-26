@@ -250,6 +250,8 @@ function frame() {
     if (steps === MAX_SUBSTEPS) acc = 0;
   }
   renderFrame();
+  engine.input.endFrame();   // zero pointer deltas each frame (own loop, no engine reset)
+                             // — without this OrbitRig re-applies stale mouse deltas (camera "on overdrive")
 }
 requestAnimationFrame(frame);
 function fitViewport() {

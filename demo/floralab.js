@@ -7,7 +7,7 @@
 //
 // Same lab methodology as garage / ragdoll / map. Own fixed-step loop.
 import {
-  Engine, World, Physics, initRapier, Car, FloraField, makeGrassSprig, THREE,
+  Engine, World, Physics, initRapier, Car, FloraField, makeGrassSprig, loadVehicle, THREE,
 } from "../src/index.js";
 import RAPIER from "@dimforge/rapier3d-compat";
 
@@ -89,6 +89,11 @@ initRapier().then(() => {
   phys.addHeightfield(-FIELD, -FIELD, FIELD * 2, groundH, { n: 96, friction: 1.0 });
   car = new Car(phys.world, RAPIER, { pos: [0, groundH(0, 0) + 2, 0] });
   scene.add(car.mesh);
+  // Synty muscle car instead of the placeholder box (non-blocking)
+  loadVehicle("models/fabpack/SK_veh_Muscle_01.fbx", {
+    targetLength: 4.6, textureDir: "models/fabpack", textureFlipY: true,
+    textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" },
+  }).then((rig) => car.attachModel(rig)).catch((e) => console.warn("muscle load failed:", e.message));
   phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
   phys._post.push(() => car.snapshotCurr());
   setStatus("drive (WASD / autopilot) or fly (F) through the grass — it bends + springs back");

@@ -17,8 +17,16 @@
 // via the phys _pre/_post hooks, same as CarVehicle.
 import {
   Engine, World, Physics, initRapier, Car, StreamedTerrain,
-  makeIslandTerrain, makeHeightmapTerrain, loadTerrarium, THREE,
+  makeIslandTerrain, makeHeightmapTerrain, loadTerrarium, loadVehicle, THREE,
 } from "../src/index.js";
+
+// swap the placeholder box for the Synty muscle car (non-blocking; box works until loaded)
+function attachMuscle(car) {
+  loadVehicle("models/fabpack/SK_veh_Muscle_01.fbx", {
+    targetLength: 4.6, textureDir: "models/fabpack", textureFlipY: true,
+    textureMap: { palette: "T_colorPalette2048.PNG", veh: "T_colorPalette2048.PNG" },
+  }).then((rig) => car.attachModel(rig)).catch((e) => console.warn("muscle load failed:", e.message));
+}
 import RAPIER from "@dimforge/rapier3d-compat";   // deduped — same singleton phys.js uses
 
 const FIXED = 1 / 60;
@@ -214,6 +222,7 @@ async function buildGen() {
   pendingTiles.length = 0;
   car = new Car(phys.world, RAPIER, { pos: [spawn.x, heightAt(spawn.x, spawn.z) + 2, spawn.z] });
   scene.add(car.mesh);
+  attachMuscle(car);
   world.spawn("terrain").add(terrain);
   phys._pre.push(() => { car.snapshotPrev(); car.setInput(carInput()); car.fixedUpdate(FIXED); });
   phys._post.push(() => car.snapshotCurr());
