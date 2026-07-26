@@ -270,52 +270,6 @@ function updateHUD() {
   document.body.appendChild(panel);
 })();
 
-// ---- BOB TIMING GRAPH — align the run/walk footfalls with the vertical bob -----
-// Cyan = left foot height, Orange = right foot height (dips = footfalls), Yellow = bob.
-// Dial "bob metres" (frequency) + "phase" so the yellow dips line up with the foot lows,
-// then tell me the numbers and I'll hard-code them.
-window.__bobDebugOn = true;
-window.__bobTune = window.__bobTune || { amp: 0.07, floor: 0.13, swing: 0.35 };   // pre-seed (controller loads async); auto-synced to feet
-(function bobGraph() {
-  const W = 340, H = 130, N = W;
-  const cvs = document.createElement("canvas"); cvs.width = W; cvs.height = H;
-  cvs.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:30;background:rgba(10,14,18,.85);border:1px solid #2c3a48;border-radius:8px";
-  document.body.appendChild(cvs);
-  const g = cvs.getContext("2d");
-  const bufL = new Array(N).fill(0), bufR = new Array(N).fill(0), bufB = new Array(N).fill(0);
-  const panel = document.createElement("div");
-  panel.style.cssText = "position:fixed;left:12px;bottom:150px;z-index:30;width:340px;font:11px/1.5 ui-monospace,monospace;color:#cfe;background:rgba(10,14,18,.85);border:1px solid #2c3a48;border-radius:8px;padding:8px 10px;box-sizing:border-box";
-  panel.innerHTML = '<div style="margin-bottom:6px"><span style="color:#5cf">■</span> footL &nbsp;<span style="color:#fa5">■</span> footR &nbsp;<span style="color:#ffd479">■</span> bob &nbsp;— align bob dips with foot lows</div>';
-  const mk = (name, min, max, val, step, key) => {
-    const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:6px";
-    const lab = document.createElement("span"); lab.textContent = name; lab.style.width = "78px"; lab.style.color = "#9fb4c4";
-    const out = document.createElement("b"); out.style.cssText = "color:#ffd479;width:44px;text-align:right"; out.textContent = (+val).toFixed(2);
-    const inp = document.createElement("input"); inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = val; inp.style.flex = "1";
-    inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); window.__bobTune[key] = +inp.value; };
-    row.append(lab, inp, out); panel.append(row);
-  };
-  mk("bob amp", 0, 0.2, window.__bobTune.amp, 0.005, "amp");        // bob height
-  mk("foot floor", 0, 0.3, window.__bobTune.floor, 0.01, "floor"); // planted-foot height (dip point)
-  mk("swing range", 0.05, 0.6, window.__bobTune.swing, 0.01, "swing"); // foot lift that = full rise
-  document.body.appendChild(panel);
-  const line = (buf, color, lo, hi) => {
-    g.strokeStyle = color; g.lineWidth = 1.5; g.beginPath();
-    for (let i = 0; i < N; i++) { const y = H - ((buf[i] - lo) / (hi - lo)) * H; i ? g.lineTo(i, y) : g.moveTo(i, y); }
-    g.stroke();
-  };
-  function draw() {
-    requestAnimationFrame(draw);
-    const d = window.__bobDebug;
-    if (d) { bufL.push(d.footL); bufL.shift(); bufR.push(d.footR); bufR.shift(); bufB.push(d.bob); bufB.shift(); }
-    g.clearRect(0, 0, W, H);
-    g.strokeStyle = "#243240"; g.lineWidth = 1; g.beginPath(); g.moveTo(0, H * 0.5); g.lineTo(W, H * 0.5); g.stroke();
-    line(bufL, "#5cf", -0.05, 0.55);      // foot heights (0 = planted, up = swing)
-    line(bufR, "#fa5", -0.05, 0.55);
-    line(bufB, "#ffd479", -0.18, 0.05);   // bob (0 = neutral, dips negative at footfall)
-  }
-  draw();
-})();
-
 // ---- headless verification handle ------------------------------------------
 window.__lab = {
   engine, world, phys, get ch() { return ch; }, get rag() { return ch && ch.rag; }, get state() { return state(); },
