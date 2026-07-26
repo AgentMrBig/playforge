@@ -16,8 +16,8 @@ import RAPIER from "@dimforge/rapier3d-compat";
 // fling grass clippings + dirt clods backward — the peel-out effect for a grass
 // world (black skid marks + white tyre smoke would look wrong here). Pooled. -----
 class GrassKickup {
-  constructor(scene) {
-    this.scene = scene; this.parts = []; this.pool = []; this._cd = 0;
+  constructor(scene, groundAt = null) {
+    this.scene = scene; this.groundAt = groundAt; this.parts = []; this.pool = []; this._cd = 0;
     this.grassGeo = new THREE.PlaneGeometry(0.06, 0.18);
     this.dirtGeo = new THREE.TetrahedronGeometry(0.05);
     this.grassMat = new THREE.MeshStandardMaterial({ color: 0x4d7a38, roughness: 1, side: THREE.DoubleSide });
@@ -31,7 +31,7 @@ class GrassKickup {
     m.visible = true; m.scale.setScalar(0.6 + Math.random() * 0.9);
     m.position.set(x, y, z);
     m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
-    m.userData = { vx, vy, vz, spin: (Math.random() - 0.5) * 22, life: 0.7 + Math.random() * 0.7 };
+    m.userData = { vx, vy, vz, spin: (Math.random() - 0.5) * 22, life: 0.45 + Math.random() * 0.5 };
     this.parts.push(m);
   }
   update(dt, car) {
@@ -44,16 +44,19 @@ class GrassKickup {
       for (const w of car.wheels) {
         if (!w.driven || !w.grounded || w.detached || w.cx == null) continue;
         for (let i = 0, n = 1 + (intensity * 4 | 0); i < n; i++)
-          this._spawn(w.cx, (w.cy || 0) + 0.05, w.cz,
-            -v.x * 0.15 + (Math.random() - 0.5) * 3, 2 + Math.random() * 3.5,
-            -v.z * 0.15 + (Math.random() - 0.5) * 3, Math.random() < 0.7);
+          // rooster tail: fling mostly BACKWARD (opposite travel) + low, so it
+          // arcs behind the wheel and lands fast instead of hovering above it
+          this._spawn(w.cx, (w.cy || 0) + 0.03, w.cz,
+            -v.x * 0.4 + (Math.random() - 0.5) * 2.5, 0.8 + Math.random() * 1.8,
+            -v.z * 0.4 + (Math.random() - 0.5) * 2.5, Math.random() < 0.7);
       }
     }
     for (let i = this.parts.length - 1; i >= 0; i--) {
       const m = this.parts[i], u = m.userData;
-      u.vy -= 18 * dt; m.position.x += u.vx * dt; m.position.y += u.vy * dt; m.position.z += u.vz * dt;
+      u.vy -= 24 * dt; m.position.x += u.vx * dt; m.position.y += u.vy * dt; m.position.z += u.vz * dt;
       m.rotation.x += u.spin * dt; m.rotation.z += u.spin * 0.7 * dt;
-      if (m.position.y < 0.02) { m.position.y = 0.02; u.vy = 0; u.vx *= 0.6; u.vz *= 0.6; }
+      const gy = (this.groundAt ? this.groundAt(m.position.x, m.position.z) : 0) + 0.02;
+      if (m.position.y < gy) { m.position.y = gy; u.vy = 0; u.vx *= 0.6; u.vz *= 0.6; }   // rest on the terrain, not y=0
       if ((u.life -= dt) <= 0) { m.visible = false; this.parts.splice(i, 1); this.pool.push(m); }
     }
   }
@@ -87,7 +90,7 @@ const phys = new Physics({ gravity: -20 });
 
 // procedural engine audio + grass/dirt peel-out FX
 const audio = new VehicleAudio({ hp: 450 });
-const kickup = new GrassKickup(scene);
+const kickup = new GrassKickup(scene, groundH);
 const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); removeEventListener("touchstart", startAudio); };
 addEventListener("keydown", startAudio); addEventListener("mousedown", startAudio); addEventListener("touchstart", startAudio);
 
