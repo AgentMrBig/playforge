@@ -70,13 +70,17 @@ export function createCharacterController(world, {
   // fight — the roll-our-own move, same lesson as the car's raycast suspension.
   body.flying = true;
   const GRAVITY = 20;
-  let grounded = true, freeFly = false, airT = 0, smoothVisY = null, bobPhase = 0;
+  let grounded = true, freeFly = false, airT = 0, smoothVisY = null, bobPhase = 0, lastBob = 0;
+  // live-tunable gait bob (console/sliders): div = metres per bob cycle (lower = faster),
+  // amp = bob height (m), phase = phase offset in cycles. Dial vs the footstep graph.
+  if (typeof window !== "undefined" && !window.__bobTune) window.__bobTune = { div: 1.46, amp: 0.07, phase: 0 };
+  const _bobDEF = { div: 1.46, amp: 0.07, phase: 0 };   // 1.46m ≈ one dip per footfall at the measured run cadence
 
   let state = "anim";          // anim | ragdoll | getup | stagger
   let getupTimer = 0, staggerTimer = 0;
   let rag = null, animator = null, bones = null, visual = null, footIK = null;
 
-  const _f = new THREE.Vector3(), _rt = new THREE.Vector3(), _wish = new THREE.Vector3(), _look = new THREE.Vector3();
+  const _f = new THREE.Vector3(), _rt = new THREE.Vector3(), _wish = new THREE.Vector3(), _look = new THREE.Vector3(), _dbg = new THREE.Vector3();
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
   // ── locomotion (camera-relative walk/run/jump, optional fly) ──
@@ -180,13 +184,14 @@ export function createCharacterController(world, {
       // above flattens the clip's bob. Add it back: a stride-synced sinusoid (one cycle per
       // ~1.8m step, dip at footfall), amplitude scaling with speed. Feet stay planted (foot
       // IK) so the legs compress/extend to make the bob = a real gait, not a floating slide.
+      const bt = (typeof window !== "undefined" && window.__bobTune) || _bobDEF;
       const hsp = Math.hypot(body.velocity.x, body.velocity.z);
-      bobPhase += (hsp * dt / 4.6) * Math.PI * 2;    // one bob per ~4.6m → matches the anim clip cadence
+      bobPhase += (hsp * dt / Math.max(0.5, bt.div)) * Math.PI * 2;   // one bob per bt.div metres
       // DIP-ONLY bob (range [-amp, 0]): the body sinks on each step and returns to the
       // ground-pin, but NEVER rises above it — so a near-straight leg never has to
-      // over-extend and the planted foot stays on the ground (feet were lifting on the
-      // up-phase of a symmetric bob).
-      const bob = (Math.cos(bobPhase) - 1) * 0.5 * 0.07 * Math.min(1, hsp / runSpeed);
+      // over-extend and the planted foot stays on the ground.
+      const bob = (Math.cos(bobPhase + (bt.phase || 0) * Math.PI * 2) - 1) * 0.5 * bt.amp * Math.min(1, hsp / runSpeed);
+      lastBob = bob;
       if (body._ipCurr) { body._ipCurr.y = smoothVisY + bob; if (body._ipPrev) body._ipPrev.y = smoothVisY + bob; }
     } else {
       smoothVisY = entity.position.y;   // airborne (jump/fall): visual tracks physics exactly
@@ -295,6 +300,16 @@ export function createCharacterController(world, {
         footIK.update(body.onGround && sp <= 0.6, body.onGround && sp > 0.6);
       }
       updateWallTouch(dt);                             // hands come up onto a wall he walks into
+      // debug (lab only): expose foot heights + the bob value so a graph can show timing
+      if (typeof window !== "undefined" && window.__bobDebugOn && visual) {
+        const fl = limbChain(visual, "footL"), fr = limbChain(visual, "footR");
+        window.__bobDebug = {
+          bob: lastBob,
+          footL: fl ? fl.eff.getWorldPosition(_dbg).y - entity.position.y : 0,
+          footR: fr ? fr.eff.getWorldPosition(_dbg).y - entity.position.y : 0,
+          speed: Math.hypot(body.velocity.x, body.velocity.z),
+        };
+      }
       if (rag && rag.active) rag.update();             // physics bodies → visual bones
     },
   };
