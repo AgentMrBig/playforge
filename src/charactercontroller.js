@@ -83,7 +83,7 @@ export function createCharacterController(world, {
   let state = "anim";          // anim | ragdoll | getup | stagger | vault
   let getupTimer = 0, staggerTimer = 0;
   // parkour: vault over an obstacle too tall to step (a timed procedural arc + hand plant)
-  let vaultT = 0; const vaultDur = 0.55;
+  let vaultT = 0, vaultCd = 0; const vaultDur = 0.55;
   const vaultStart = new THREE.Vector3(), vaultLand = new THREE.Vector3(), vaultTop = new THREE.Vector3();
   let rag = null, animator = null, bones = null, visual = null, footIK = null;
 
@@ -110,8 +110,11 @@ export function createCharacterController(world, {
     _wish.copy(_f).multiplyScalar(iz).addScaledVector(_rt, ix);
     if (_wish.lengthSq() > 1) _wish.normalize();
 
-    // PARKOUR: moving into (or jumping at) a vaultable ledge → vault over it
-    if ((input.pressed("Space") || _wish.lengthSq() > 0.3) && checkVault()) { startVault(); return; }
+    // PARKOUR: vault a too-tall ledge — needs a cooldown (no re-trigger spam) and either
+    // Space or actually MOVING into it at speed (not a creep/graze → no spurious "boom up").
+    if (vaultCd > 0) vaultCd -= dt;
+    const bodyHSpd = Math.hypot(body.velocity.x, body.velocity.z);
+    if (vaultCd <= 0 && (input.pressed("Space") || (_wish.lengthSq() > 0.3 && bodyHSpd > walkSpeed * 0.6)) && checkVault()) { startVault(); return; }
 
     if (fly && input.pressed("KeyG")) { freeFly = !freeFly; body.velocity.y = 0; }
     if (freeFly) {
@@ -244,7 +247,7 @@ export function createCharacterController(world, {
     const topY = probeGround(tx, tz, entity.position.y + 2.2, 0, 3.0);   // top surface just past the edge
     if (topY == null) { if (_vdbg) window.__vaultDbg = "no top d=" + d.toFixed(2); return false; }
     const h = topY - entity.position.y;
-    if (h < 0.4 || h > 1.3) { if (_vdbg) window.__vaultDbg = "h out of range " + h.toFixed(2); return false; }
+    if (h < 0.65 || h > 1.3) { if (_vdbg) window.__vaultDbg = "h out of range " + h.toFixed(2); return false; }  // < 0.65 = step/climb (not vault) so low platforms don't spuriously vault
     const lx = entity.position.x + _wfwd.x * (d + 1.1), lz = entity.position.z + _wfwd.z * (d + 1.1);
     const landY = probeGround(lx, lz, topY + 0.5, 0, 3.5);               // clear far-side landing?
     if (landY == null || landY > topY - 0.1) { if (_vdbg) window.__vaultDbg = "no land landY=" + landY; return false; }
@@ -340,7 +343,7 @@ export function createCharacterController(world, {
         body.rb.setTranslation({ x, y: y + height / 2, z }, true);
         body.rb.setNextKinematicTranslation({ x, y: y + height / 2, z });
         body._lastSynced.copy(entity.position);
-        if (t >= 1) { state = "anim"; body.setEnabled(true); body.velocity.set(0, 0, 0); smoothVisY = null; }
+        if (t >= 1) { state = "anim"; body.setEnabled(true); body.velocity.set(0, 0, 0); smoothVisY = null; vaultCd = 0.5; }
         return;
       }
       if (state === "getup") {

@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { solveTwoBone, limbChain } from "./ik.js";
 
-const _v = new THREE.Vector3(), _t = new THREE.Vector3();
+const _v = new THREE.Vector3(), _t = new THREE.Vector3(), _hip = new THREE.Vector3();
 const _anchor = new THREE.Vector3(), _fwd = new THREE.Vector3(), _pole = new THREE.Vector3();
 
 export class FootPlant {
@@ -33,6 +33,7 @@ export class FootPlant {
     this.enabled = true;
     this.releaseDist = 0.22;      // clip moved the foot this far → real step, re-plant
     this.plantBand = 0.14;        // a foot within this of the surface = STANCE (plant it); higher = SWING (leave to clip)
+    this.maxReach = 0.45;         // if a locked foot is farther than this (horiz) from its hip, re-plant — stops the leg splaying into a split
     this.locks = { footL: null, footR: null };   // world Vector3 targets
     if (typeof window !== "undefined") window.__footPlant = this;
   }
@@ -63,6 +64,12 @@ export class FootPlant {
       if (!planted) { this.locks[limb] = null; continue; } // swinging → the clip owns it (it's in the air)
       let lock = this.locks[limb];
       if (!lock) lock = this.locks[limb] = _v.clone();    // just planted → LOCK this world spot
+      // OVER-REACH GUARD: if the body outran the foot (or he turned), CLAMP the lock to
+      // max reach from the hip so the planted foot slides smoothly to the limit instead
+      // of splaying the leg into a split (or popping on a hard re-plant).
+      chain.root.getWorldPosition(_hip);
+      const dx = lock.x - _hip.x, dz = lock.z - _hip.z, r = Math.hypot(dx, dz);
+      if (r > this.maxReach) { const s = this.maxReach / r; lock.x = _hip.x + dx * s; lock.z = _hip.z + dz * s; }
       lock.y = target;                                    // keep it on the surface (slopes/steps)
       this._solveFoot(chain, lock);                       // hold the planted foot still → no slide
     }
