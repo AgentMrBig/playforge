@@ -161,8 +161,11 @@ export function createCharacterController(world, {
     const spd01 = Math.hypot(body.velocity.x, body.velocity.z);          // actual ground speed
     if (airborne) animator.play("jump", { fade: 0.1, once: true });
     else if (wallW > 0.4 && actualHSpeed < 1.2 && inMove > 0.15) animator.play("idle", { fade: 0.2 });   // braced + stuck on a wall
-    else if (spd01 > walkSpeed * 1.25) animator.play("run", { fade: 0.2, speed: Math.min(1.3, spd01 / runSpeed + 0.3) });
-    else if (spd01 > 0.5) animator.play("walk", { fade: 0.2, speed: Math.max(0.6, Math.min(1.5, spd01 / walkSpeed)) });
+    // SPEED-MATCH clip playback to ground speed so the clip's own feet don't slide
+    // (measured: walk clip 1.78 m/s, run clip 3.34 m/s at 1x). He moves much faster than
+    // the clips were built for, so play them proportionally faster.
+    else if (spd01 > 2.6) animator.play("run", { fade: 0.2, speed: Math.max(0.6, Math.min(3.0, spd01 / 3.34)) });
+    else if (spd01 > 0.4) animator.play("walk", { fade: 0.2, speed: Math.max(0.6, Math.min(3.0, spd01 / 1.78)) });
     else animator.play("idle", { fade: 0.3 });
   }
 

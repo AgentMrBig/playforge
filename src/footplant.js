@@ -60,18 +60,20 @@ export class FootPlant {
       const surf = this._groundY(_v.x, _v.z, _v.y);
       if (surf == null) { this.locks[limb] = null; continue; }
       const target = surf + this.footOffset;             // ankle height so the sole sits on the surface
-      const planted = _v.y - target < this.plantBand;    // foot is down → stance
-      if (!planted) { this.locks[limb] = null; continue; } // swinging → the clip owns it (it's in the air)
+      // FOOT LOCK (standing + moving): a planted foot is pinned in world space so it can't
+      // slide; it releases the moment the clip lifts it to swing. Now that clip playback is
+      // speed-matched to ground speed, the feet lift on time so the lock releases cleanly
+      // (no drag) — the lock just cancels the small residual slide. Over-reach-clamped so
+      // an outrun foot slides to the reach limit instead of splaying into a split.
+      const planted = _v.y - target < this.plantBand;    // foot down → stance
+      if (!planted) { this.locks[limb] = null; continue; } // swinging → clip owns it
       let lock = this.locks[limb];
-      if (!lock) lock = this.locks[limb] = _v.clone();    // just planted → LOCK this world spot
-      // OVER-REACH GUARD: if the body outran the foot (or he turned), CLAMP the lock to
-      // max reach from the hip so the planted foot slides smoothly to the limit instead
-      // of splaying the leg into a split (or popping on a hard re-plant).
+      if (!lock) lock = this.locks[limb] = _v.clone();
       chain.root.getWorldPosition(_hip);
       const dx = lock.x - _hip.x, dz = lock.z - _hip.z, r = Math.hypot(dx, dz);
       if (r > this.maxReach) { const s = this.maxReach / r; lock.x = _hip.x + dx * s; lock.z = _hip.z + dz * s; }
-      lock.y = target;                                    // keep it on the surface (slopes/steps)
-      this._solveFoot(chain, lock);                       // hold the planted foot still → no slide
+      lock.y = target;
+      this._solveFoot(chain, lock);
     }
   }
 
