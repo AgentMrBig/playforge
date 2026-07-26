@@ -59,7 +59,9 @@ const BONES = [
   // torso rigidity so the trunk holds shape
   ["pelvis", "shoulderL"], ["pelvis", "shoulderR"],
 ];
-for (const [a, b] of BONES) v.addStick(J[a], J[b], 1);
+// cross-braces get lower stiffness so the torso loop isn't over-constrained (jitter)
+const BRACE = new Set(["shoulderL>shoulderR", "hipL>hipR", "pelvis>shoulderL", "pelvis>shoulderR"]);
+for (const [a, b] of BONES) v.addStick(J[a], J[b], BRACE.has(a + ">" + b) ? 0.6 : 1);
 
 // active-ragdoll pose DRIVES (parent → child). dir = target unit direction in facing
 // frame; the STAND pose = each bone's current rest direction. Poses just swap these dirs.
@@ -74,25 +76,34 @@ for (const [a, b] of DRIVEDEFS) DR[a + ">" + b] = v.addDrive(J[a], J[b], dir(a, 
 const STAND = {};
 for (const k in DR) STAND[k] = DR[k].dir.clone();   // remember the stand pose
 
-// ── render meshes: a sphere per joint + a cylinder per bone (shared geo) ──
-const skin = new THREE.MeshStandardMaterial({ color: 0xdfe8f0, roughness: 0.6, metalness: 0.05 });
-const jointMesh = {};
-for (const k in J) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(J[k].r, 12, 10), skin);
-  m.castShadow = true; scene.add(m); jointMesh[k] = m;
+// ── render: a chunky "Fall-Guys" body — fat rounded capsule limbs + a bean torso +
+// big round head/hands/feet, driven by the Verlet joints. Bone lengths are fixed
+// (distance constraints), so each capsule is built once at its length and just moved. ──
+const skin = new THREE.MeshStandardMaterial({ color: 0xff8a3d, roughness: 0.55, metalness: 0.02 });
+const dark = new THREE.MeshStandardMaterial({ color: 0x3a4a63, roughness: 0.7 });   // "shorts"/feet accent
+// per-bone tube radius (null = internal brace, not drawn); torso is a fat bean
+const TUBE = { "chest>pelvis": 0.20, "head>chest": 0.07, "shoulderL>elbowL": 0.085, "elbowL>handL": 0.075, "shoulderR>elbowR": 0.085, "elbowR>handR": 0.075, "hipL>kneeL": 0.14, "kneeL>footL": 0.115, "hipR>kneeR": 0.14, "kneeR>footR": 0.115 };
+const _up = new THREE.Vector3(0, 1, 0), _d = new THREE.Vector3(), _mid = new THREE.Vector3();
+const tubes = [];
+for (const [a, b] of BONES) {
+  const r = TUBE[a + ">" + b]; if (r == null) continue;    // skip braces
+  const len = J[a].p.distanceTo(J[b].p);
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 5, 12), a === "kneeL" || a === "kneeR" ? dark : skin);
+  m.castShadow = true; scene.add(m); tubes.push({ a, b, m, half: len / 2 });
 }
-const boneGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 8);
-boneGeo.translate(0, 0.5, 0);   // origin at base so we scale y = length
-const boneMesh = BONES.map(() => { const m = new THREE.Mesh(boneGeo, skin); m.castShadow = true; scene.add(m); return m; });
-const _up = new THREE.Vector3(0, 1, 0), _d = new THREE.Vector3(), _q = new THREE.Quaternion();
+// rounded blobs: head, hands, feet
+const blobMesh = {};
+const BLOB = { head: [0.17, skin], handL: [0.1, skin], handR: [0.1, skin], footL: [0.11, dark], footR: [0.11, dark] };
+for (const k in BLOB) { const m = new THREE.Mesh(new THREE.SphereGeometry(BLOB[k][0], 16, 12), BLOB[k][1]); m.castShadow = true; scene.add(m); blobMesh[k] = m; }
 function render() {
-  for (const k in J) jointMesh[k].position.copy(J[k].p);
-  for (let i = 0; i < BONES.length; i++) {
-    const a = J[BONES[i][0]].p, b = J[BONES[i][1]].p, m = boneMesh[i];
+  for (const t of tubes) {
+    const a = J[t.a].p, b = J[t.b].p;
     _d.subVectors(b, a); const len = _d.length() || 1e-4;
-    m.position.copy(a); m.quaternion.setFromUnitVectors(_up, _d.divideScalar(len));
-    m.scale.set(1, len, 1);
+    _mid.addVectors(a, b).multiplyScalar(0.5); t.m.position.copy(_mid);
+    t.m.quaternion.setFromUnitVectors(_up, _d.divideScalar(len));
+    t.m.scale.set(1, len / (t.half * 2), 1);               // stretch cylinder part to live length
   }
+  for (const k in blobMesh) blobMesh[k].position.copy(J[k].p);
   renderer.render(scene, camera);
 }
 
@@ -100,12 +111,14 @@ function render() {
 let drive = 1, flopped = false, facing = 1;
 function balanceAssist() {
   if (drive <= 0) return;
-  // keep the hips over the mid-foot base (invisible upright cheat), scaled by drive
+  // keep the hips over the mid-foot base (invisible upright cheat), scaled by drive.
+  // move prev too (half) so it doesn't inject a velocity spike = jitter.
   const midX = (J.footL.p.x + J.footR.p.x) * 0.5;
-  J.pelvis.p.x += (midX - J.pelvis.p.x) * 0.10 * drive;
-  // gentle stand height so he doesn't sag
-  const standY = 0.98, sag = standY - J.pelvis.p.y;
-  if (sag > 0) J.pelvis.p.y += sag * 0.08 * drive;
+  const dx = (midX - J.pelvis.p.x) * 0.08 * drive;
+  J.pelvis.p.x += dx; J.pelvis.o.x += dx * 0.5;
+  // firm stand-height hold (the "cheat" balance) so the legs don't sag under gravity
+  const sag = 0.98 - J.pelvis.p.y;
+  if (sag > 0) { const dy = sag * 0.25 * drive; J.pelvis.p.y += dy; J.pelvis.o.y += dy * 0.5; }
 }
 
 // ── input: mouse drag a limb (grab nearest point, throw punches) + keys ──

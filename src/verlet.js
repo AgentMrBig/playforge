@@ -16,7 +16,8 @@ import * as THREE from "three";
  * controlled fighter, 0 = full flop. Drop it in a struck region for a hit reaction.
  */
 export class Verlet {
-  constructor({ gravity = -22, damping = 0.04, iterations = 10, planar = true, groundFriction = 0.35 } = {}) {
+  constructor({ gravity = -22, damping = 0.08, iterations = 10, planar = true, groundFriction = 0.35, driveK = 0.34 } = {}) {
+    this.driveK = driveK;   // pose-drive strength per step (lower = smoother, softer hold)
     this.g = gravity; this.damp = damping; this.iters = iterations; this.planar = planar; this.groundFriction = groundFriction;
     this.points = [];   // { p, o, pinned, r, invM }
     this.sticks = [];    // { a, b, len, stiff }
@@ -43,16 +44,18 @@ export class Verlet {
       pt.o.copy(pt.p);
       pt.p.x += vx; pt.p.y += vy + gdt2; pt.p.z += vz;
     }
-    // ── active-ragdoll POSE DRIVE (per-drive strength = global × drive.k) ──
+    // ── active-ragdoll POSE DRIVE ── pull each child toward its pose target, but move
+    // its PREV point halfway too so the pull doesn't inject a big velocity spike (that
+    // over-shoot + the stiff constraint network fighting back was the jitter). Gentle k.
     for (const d of this.drives) {
-      const k = 0.5 * driveStrength * (d.k ?? 1);
+      const k = this.driveK * driveStrength * (d.k ?? 1);
       if (k <= 0 || d.child.pinned) continue;
-      const tx = d.parent.p.x + d.dir.x * facing * d.len;
-      const ty = d.parent.p.y + d.dir.y * d.len;
-      const tz = d.parent.p.z + d.dir.z * d.len;
-      d.child.p.x += (tx - d.child.p.x) * k;
-      d.child.p.y += (ty - d.child.p.y) * k;
-      d.child.p.z += (tz - d.child.p.z) * k;
+      const c = d.child.p, o = d.child.o;
+      const dx = (d.parent.p.x + d.dir.x * facing * d.len - c.x) * k;
+      const dy = (d.parent.p.y + d.dir.y * d.len - c.y) * k;
+      const dz = (d.parent.p.z + d.dir.z * d.len - c.z) * k;
+      c.x += dx; c.y += dy; c.z += dz;
+      o.x += dx * 0.5; o.y += dy * 0.5; o.z += dz * 0.5;   // damp injected velocity → smooth
     }
     // ── satisfy constraints (relaxation) + ground + planar ──
     for (let it = 0; it < this.iters; it++) {
