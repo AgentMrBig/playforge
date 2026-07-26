@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 /**
  * flora.js — procedural, GPU-instanced flora with DATA-DRIVEN motion.
@@ -70,9 +71,16 @@ export function makeGrassSprig({ blades = 5, height = 0.5, width = 0.045, curve 
 export class FloraField {
   constructor(scene, {
     geometry, max = 40000, colorA = 0x4c8a45, colorB = 0x81a24a, baseColor = 0xffffff,
+    palette = null,          // array of hex colors → per-instance pick (flowers); else lerp colorA→B
+    vertexColors = false,    // use the geometry's baked colors (trees/bushes: trunk brown, leaves green);
+                             //   instanceColor then only lightly varies brightness so the bake shows
+    bendScale = 1,           // how much wind+disturbers move this type (grass 1, trees ~0.15 = stiff)
+    doubleSide = true,
   } = {}) {
     this.max = max;
     this.count = 0;
+    this.palette = palette ? palette.map((c) => new THREE.Color(c)) : null;
+    this.vertexColors = vertexColors;
     this._disturbers = [];
     this.wind = { dir: new THREE.Vector2(1, 0.3).normalize(), strength: 0.0, gust: 0.5 };
 
@@ -92,10 +100,12 @@ export class FloraField {
       // disturber A = (x,y,z, radius) · B = (vx, vz, strength, _)
       uDistA: { value: Array.from({ length: MAX_DIST }, () => new THREE.Vector4()) },
       uDistB: { value: Array.from({ length: MAX_DIST }, () => new THREE.Vector4()) },
+      uBendScale: { value: bendScale },
     };
 
     const mat = new THREE.MeshStandardMaterial({
-      color: baseColor, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, vertexColors: false,
+      color: baseColor, roughness: 0.95, metalness: 0,
+      side: doubleSide ? THREE.DoubleSide : THREE.FrontSide, vertexColors,
     });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.uniforms);
@@ -104,6 +114,7 @@ export class FloraField {
           attribute float aScale; attribute float aYaw; attribute float aBendWeight;
           uniform float uTime; uniform vec2 uWindDir; uniform float uWindStr; uniform float uGust;
           uniform int uDistCount; uniform vec4 uDistA[${MAX_DIST}]; uniform vec4 uDistB[${MAX_DIST}];
+          uniform float uBendScale;
           mat2 rot2(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }`)
         .replace("#include <begin_vertex>", `#include <begin_vertex>
           // per-instance size + facing (instanceMatrix carries translation only)
@@ -131,7 +142,7 @@ export class FloraField {
               bend += push * (f * B.z);
             }
           }
-          transformed.xz += bend * aBendWeight;`);
+          transformed.xz += bend * uBendScale * aBendWeight;`);
     };
     this.material = mat;
 
@@ -159,7 +170,11 @@ export class FloraField {
       this.mesh.setMatrixAt(w, this._m);
       sc.array[w] = p.scale ?? 1;
       yw.array[w] = p.yaw ?? 0;
-      this._ct.copy(this._cA).lerp(this._cB, p.tint ?? Math.random());
+      // per-instance color: baked (trees/bushes → light brightness variation so the
+      // trunk/leaf bake shows), palette pick (flowers), or colorA→B lerp (grass)
+      if (this.vertexColors) { const g = 0.82 + Math.random() * 0.3; this._ct.setRGB(g, g, g); }
+      else if (this.palette) this._ct.copy(this.palette[(Math.random() * this.palette.length) | 0]);
+      else this._ct.copy(this._cA).lerp(this._cB, p.tint ?? Math.random());
       this.mesh.setColorAt(w, this._ct);
       w++;
     }
@@ -194,4 +209,88 @@ export class FloraField {
   update(dt) { this.uniforms.uTime.value += dt; }
 
   dispose() { this.mesh.parent?.remove(this.mesh); this.geo.dispose(); this.material.dispose(); }
+}
+
+// ── more flora niches. All carry aBendWeight (0=root → 1=tip) + uv so the shared
+// FloraField bend shader animates them the same way. Trees/bushes bake per-vertex
+// colors (trunk brown, leaves green) → FloraField({ vertexColors:true }). Flowers
+// carry no color (FloraField({ palette:[...] }) tints the bloom per instance). ──
+
+/** tag a positioned sub-geometry with a flat color + a y-based bend weight
+ *  (rigid up to 20% height, then eases to full sway at the top). */
+function _tag(g0, height, rgb) {
+  // de-index so every part is non-indexed — mergeGeometries needs all parts the
+  // same (Cylinder/Cone are indexed, Icosahedron is not; mixing them fails).
+  const geo = g0.index ? g0.toNonIndexed() : g0;
+  const pos = geo.attributes.position, n = pos.count;
+  const col = new Float32Array(n * 3), bw = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (rgb) { col[i * 3] = rgb[0]; col[i * 3 + 1] = rgb[1]; col[i * 3 + 2] = rgb[2]; }
+    bw[i] = Math.max(0, Math.min(1, (pos.getY(i) / height - 0.2) / 0.8));
+  }
+  if (rgb) geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  geo.setAttribute("aBendWeight", new THREE.BufferAttribute(bw, 1));
+  if (!geo.attributes.uv) geo.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(n * 2), 2));
+  return geo;
+}
+
+/** FLOWER: thin stem + a radiating bloom. No baked color — FloraField palette
+ *  tints the whole flower per instance (stylized). */
+export function makeFlower({ stemH = 0.32, petals = 6, bloom = 0.12, seed = 1 } = {}) {
+  let s = seed * 2246 + 13; const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  const P = [], N = [], U = [], BW = [], I = []; let v = 0;
+  const vert = (x, y, z, bw) => { P.push(x, y, z); N.push(0, 1, 0); U.push(0, bw); BW.push(bw); return v++; };
+  const sw = 0.012;
+  for (const [ax, az] of [[1, 0], [0, 1]]) {                 // stem: 2 crossed quads
+    const dx = ax * sw, dz = az * sw;
+    const a = vert(-dx, 0, -dz, 0), b = vert(dx, 0, dz, 0), c = vert(-dx, stemH, -dz, 0.6), d = vert(dx, stemH, dz, 0.6);
+    I.push(a, c, b, b, c, d);
+  }
+  const ctr = vert(0, stemH, 0, 1);                          // bloom: petal fan
+  for (let p = 0; p < petals; p++) {
+    const a0 = (p / petals) * 6.2832, a1 = ((p + 1) / petals) * 6.2832, r = bloom * (0.8 + rnd() * 0.4), up = bloom * 0.4;
+    const p0 = vert(Math.cos(a0) * r, stemH + up, Math.sin(a0) * r, 1);
+    const p1 = vert(Math.cos(a1) * r, stemH + up, Math.sin(a1) * r, 1);
+    I.push(ctr, p0, p1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(N, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(U, 2));
+  g.setAttribute("aBendWeight", new THREE.Float32BufferAttribute(BW, 1));
+  g.setIndex(I);
+  return g;
+}
+
+/** BUSH: a few overlapping low-poly leaf blobs (green via FloraField colorA→B). */
+export function makeBush({ size = 0.7 } = {}) {
+  const blobs = [[0, size * 0.45, 0, size * 0.45], [size * 0.28, size * 0.35, 0.1, size * 0.32], [-size * 0.22, size * 0.4, -0.15, size * 0.3]];
+  const parts = blobs.map(([x, y, z, r]) => { const b = new THREE.IcosahedronGeometry(r, 0); b.translate(x, y, z); return _tag(b, size, null); });
+  return mergeGeometries(parts, false);
+}
+
+/** PINE: tapered trunk + stacked cone crown (tall, narrow). Baked colors. */
+export function makePineTree({ height = 6, trunkR = 0.12 } = {}) {
+  const parts = [];
+  const trunk = new THREE.CylinderGeometry(trunkR * 0.6, trunkR, height, 6); trunk.translate(0, height / 2, 0);
+  parts.push(_tag(trunk, height, [0.34, 0.25, 0.16]));
+  const layers = 4;
+  for (let k = 0; k < layers; k++) {
+    const t = k / (layers - 1);
+    const cone = new THREE.ConeGeometry(trunkR * (5.5 - t * 4), height * 0.3, 7);
+    cone.translate(0, height * (0.35 + t * 0.6), 0);
+    parts.push(_tag(cone, height, [0.13 + t * 0.05, 0.32 + t * 0.04, 0.15]));
+  }
+  return mergeGeometries(parts, false);
+}
+
+/** OAK: thick trunk + a rounded low-poly canopy. Baked colors. */
+export function makeOakTree({ height = 5, trunkR = 0.17 } = {}) {
+  const parts = [];
+  const trunk = new THREE.CylinderGeometry(trunkR * 0.7, trunkR, height * 0.55, 6); trunk.translate(0, height * 0.275, 0);
+  parts.push(_tag(trunk, height, [0.36, 0.26, 0.16]));
+  const canopy = [[0, height * 0.72, 0, height * 0.34], [height * 0.2, height * 0.62, 0.12, height * 0.24],
+    [-height * 0.18, height * 0.66, -0.13, height * 0.23], [0, height * 0.88, 0, height * 0.2]];
+  for (const [x, y, z, r] of canopy) { const b = new THREE.IcosahedronGeometry(r, 0); b.translate(x, y, z); parts.push(_tag(b, height, [0.2, 0.38, 0.18])); }
+  return mergeGeometries(parts, false);
 }

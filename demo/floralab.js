@@ -7,7 +7,8 @@
 //
 // Same lab methodology as garage / ragdoll / map. Own fixed-step loop.
 import {
-  Engine, World, Physics, initRapier, Car, FloraField, makeGrassSprig, loadVehicle, THREE,
+  Engine, World, Physics, initRapier, Car, FloraField, loadVehicle, THREE,
+  makeGrassSprig, makeFlower, makeBush, makePineTree, makeOakTree,
 } from "../src/index.js";
 import { VehicleAudio } from "../src/vehicleaudio.js";
 import RAPIER from "@dimforge/rapier3d-compat";
@@ -94,16 +95,32 @@ const kickup = new GrassKickup(scene, groundH);
 const startAudio = () => { audio.start(); removeEventListener("keydown", startAudio); removeEventListener("mousedown", startAudio); removeEventListener("touchstart", startAudio); };
 addEventListener("keydown", startAudio); addEventListener("mousedown", startAudio); addEventListener("touchstart", startAudio);
 
-// ---- flora field ------------------------------------------------------------
+// ---- flora ecosystem: grass · flowers · bushes · pines · oaks ---------------
 const MAX_GRASS = +(qs.get("max") || 60000);
-const field = new FloraField(scene, { geometry: makeGrassSprig({ blades: 5, height: 0.55 }), max: MAX_GRASS });
-// scatter in RANDOM order across the field so the density slider thins uniformly
-field.scatter(MAX_GRASS, () => {
-  const x = (Math.random() * 2 - 1) * FIELD, z = (Math.random() * 2 - 1) * FIELD;
-  return { x, y: groundH(x, z), z, scale: 0.7 + Math.random() * 0.7, yaw: Math.random() * 6.28, tint: Math.random() };
+const rand = (a, b) => a + Math.random() * (b - a);
+const spot = () => { const x = rand(-FIELD, FIELD), z = rand(-FIELD, FIELD); return { x, y: groundH(x, z), z, yaw: rand(0, 6.28) }; };
+
+const grass = new FloraField(scene, { geometry: makeGrassSprig({ blades: 5, height: 0.55 }), max: MAX_GRASS });
+grass.scatter(MAX_GRASS, () => ({ ...spot(), scale: rand(0.7, 1.4), tint: Math.random() }));
+grass.setDensity(0.6);
+
+const flowers = new FloraField(scene, {                               // palette-tinted blooms
+  geometry: makeFlower(), max: 6000,
+  palette: [0xe2524a, 0xf2c53d, 0x9b59b6, 0xffffff, 0xe98fb3, 0xf08a3c],
 });
-field.setDensity(0.6);
-field.setWind({ dir: [1, 0.4], strength: 0.25, gust: 0.6 });
+flowers.scatter(6000, () => ({ ...spot(), scale: rand(0.7, 1.3) }));
+
+const bushes = new FloraField(scene, { geometry: makeBush({ size: 0.75 }), max: 1200, colorA: 0x3a6b31, colorB: 0x5f8f43, bendScale: 0.45, doubleSide: false });
+bushes.scatter(1200, () => ({ ...spot(), scale: rand(0.7, 1.5) }));
+
+const pines = new FloraField(scene, { geometry: makePineTree({ height: 7 }), max: 400, vertexColors: true, bendScale: 0.1, doubleSide: false });
+pines.scatter(400, () => ({ ...spot(), scale: rand(0.7, 1.5) }));
+
+const oaks = new FloraField(scene, { geometry: makeOakTree({ height: 5.5 }), max: 300, vertexColors: true, bendScale: 0.12, doubleSide: false });
+oaks.scatter(300, () => ({ ...spot(), scale: rand(0.8, 1.4) }));
+
+const fields = [grass, flowers, bushes, pines, oaks];
+for (const f of fields) f.setWind({ dir: [1, 0.4], strength: 0.25, gust: 0.6 });
 
 // ---- car (drive through the grass) + a WASD/auto driver ---------------------
 let car = null;
@@ -190,7 +207,7 @@ function feedDisturbers() {
     d.push({ x: t.x, y: t.y, z: t.z, radius: 4.5, strength: 0.9, vx: v.x * 0.05, vz: v.z * 0.05 });
   }
   if (freeCam.on) d.push({ x: freeCam.pos.x, y: freeCam.pos.y, z: freeCam.pos.z, radius: 4, strength: 0.7, vx: 0, vz: 0 });
-  field.setDisturbers(d);
+  for (const f of fields) f.setDisturbers(d);
 }
 
 // ---- loop -------------------------------------------------------------------
@@ -208,7 +225,7 @@ function frame() {
     kickup.update(dt, car);       // grass/dirt flung by spinning/sliding wheels
   }
   feedDisturbers();
-  field.update(dt);
+  for (const f of fields) f.update(dt);
   updateCamera(dt);
   world._update(dt, engine);
   updateHUD();
@@ -225,7 +242,8 @@ function updateHUD() {
   const spd = car ? Math.hypot(car.body.linvel().x, car.body.linvel().z) * 3.6 : 0;
   const line = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   el.innerHTML = line("mode", freeCam.on ? "FREE-FLY" : "drive") + line("fps", fps.toFixed(0))
-    + line("grass rendered", field.mesh.count) + line("of max", field.count) + line("car", spd.toFixed(0) + " km/h");
+    + line("grass", grass.mesh.count) + line("flowers", flowers.count) + line("bushes", bushes.count)
+    + line("trees", pines.count + oaks.count) + line("car", spd.toFixed(0) + " km/h");
 }
 (function ui() {
   const css = document.createElement("style");
@@ -244,9 +262,9 @@ function updateHUD() {
     lab.append(s, b); const inp = document.createElement("input"); inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = val;
     inp.oninput = () => { b.textContent = (+inp.value).toFixed(2); on(+inp.value); }; wrap.append(lab, inp); sld.append(wrap);
   };
-  mk("density", 0, 1, 0.6, 0.02, (v) => field.setDensity(v));
-  mk("wind", 0, 1.2, 0.25, 0.02, (v) => field.setWind({ strength: v }));
+  mk("grass density", 0, 1, 0.6, 0.02, (v) => { grass.setDensity(v); flowers.setDensity(v); });
+  mk("wind", 0, 1.2, 0.25, 0.02, (v) => { for (const f of fields) f.setWind({ strength: v }); });
   panel.append(sld); document.body.append(panel);
 })();
 
-window.__flora = { engine, world, field, get car() { return car; }, feedDisturbers, audio, kickup };
+window.__flora = { engine, world, fields, grass, flowers, bushes, pines, oaks, get car() { return car; }, feedDisturbers, audio, kickup };
