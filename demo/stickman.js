@@ -123,20 +123,34 @@ function balanceAssist() {
 
 // ── input: mouse drag a limb (grab nearest point, throw punches) + keys ──
 const _ray = new THREE.Raycaster(), _pt = new THREE.Vector2(), _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), _hit = new THREE.Vector3();
-let grabbed = null;
+let grabbed = null, grabPrevX = 0, grabPrevY = 0, grabVX = 0, grabVY = 0;
 function pointerXY(e) {
   const r = canvas.getBoundingClientRect();
   _pt.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-  _ray.setFromCamera(_pt, camera); _ray.ray.intersectPlane(_plane, _hit);
+  _ray.setFromCamera(_pt, camera); if (!_ray.ray.intersectPlane(_plane, _hit)) return null;
   return _hit;
 }
 canvas.addEventListener("pointerdown", (e) => {
-  const w = pointerXY(e); let best = null, bd = 0.45;
+  const w = pointerXY(e); if (!w) return;
+  let best = null, bd = 0.5;
   for (const k in J) { const d = J[k].p.distanceTo(w); if (d < bd) { bd = d; best = J[k]; } }
-  grabbed = best; canvas.setPointerCapture?.(e.pointerId);
+  if (!best) return;
+  grabbed = best; v.setPinned(best, true);                 // PIN at the cursor (no momentum injection)
+  grabPrevX = best.p.x; grabPrevY = best.p.y; grabVX = grabVY = 0;
+  canvas.setPointerCapture?.(e.pointerId);
 });
-addEventListener("pointermove", (e) => { if (grabbed) { const w = pointerXY(e); grabbed.p.copy(w); grabbed.p.z = 0; } });
-addEventListener("pointerup", () => { grabbed = null; });
+addEventListener("pointermove", (e) => {
+  if (!grabbed) return; const w = pointerXY(e); if (!w) return;
+  grabbed.p.set(w.x, w.y, 0); grabbed.o.set(w.x, w.y, 0);   // held: sit at cursor, zero velocity
+});
+addEventListener("pointerup", () => {
+  if (!grabbed) return;
+  v.setPinned(grabbed, false);
+  // THROW with the recent drag velocity, clamped so a flick can't launch it 1000x
+  const M = 0.22, cx = Math.max(-M, Math.min(M, grabVX)), cy = Math.max(-M, Math.min(M, grabVY));
+  grabbed.o.set(grabbed.p.x - cx, grabbed.p.y - cy, 0);
+  grabbed = null;
+});
 addEventListener("keydown", (e) => {
   if (e.code === "KeyF") { flopped = !flopped; }
   if (e.code === "KeyR") reset();
@@ -153,10 +167,13 @@ function reset() {
 
 // ── fixed-timestep loop ──
 function simStep(dt) {                                     // one fixed step (also driven headlessly)
+  if (grabbed) {                                          // track drag velocity for a controlled throw on release
+    grabVX = grabbed.p.x - grabPrevX; grabVY = grabbed.p.y - grabPrevY;
+    grabPrevX = grabbed.p.x; grabPrevY = grabbed.p.y;
+  }
   drive += ((flopped ? 0 : 1) - drive) * Math.min(1, 6 * dt);   // smooth flop/recover
   balanceAssist();
-  v.step(dt, { driveStrength: drive, facing });
-  if (grabbed) { grabbed.o.copy(grabbed.p); }             // held point has no inertia while dragged
+  v.step(dt, { driveStrength: drive, facing });           // grabbed point is pinned → not integrated/pushed
 }
 let last = performance.now() / 1000, acc = 0;
 function frame() {

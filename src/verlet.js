@@ -25,9 +25,11 @@ export class Verlet {
   }
 
   addPoint(x, y, z = 0, { pinned = false, r = 0.06, mass = 1 } = {}) {
-    const pt = { p: new THREE.Vector3(x, y, z), o: new THREE.Vector3(x, y, z), pinned, r, invM: pinned ? 0 : 1 / mass };
+    const pt = { p: new THREE.Vector3(x, y, z), o: new THREE.Vector3(x, y, z), pinned, r, mass, invM: pinned ? 0 : 1 / mass };
     this.points.push(pt); return pt;
   }
+  /** pin/unpin a point (grab): pinned → invMass 0 (not integrated, not pushed by constraints) */
+  setPinned(pt, on) { pt.pinned = on; pt.invM = on ? 0 : 1 / pt.mass; }
   /** rigid bone: keeps |a-b| at its initial length */
   addStick(a, b, stiff = 1) { const len = a.p.distanceTo(b.p); const s = { a, b, len, stiff }; this.sticks.push(s); return s; }
   /** active-ragdoll drive: each step pull `child` toward parent + dir(local)*len.
